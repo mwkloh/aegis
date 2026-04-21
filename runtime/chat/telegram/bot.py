@@ -136,6 +136,8 @@ def build_dispatcher(
     scheduler_store: ScheduledJobStore | None = None,
     skill_registry: SkillRegistry | None = None,
     extra_command_help: dict[str, str] | None = None,
+    heartbeat_path: Path | None = None,
+    health_store: ScheduledJobStore | None = None,
 ) -> Dispatcher:
     """Assemble a `Dispatcher` wired with both read and write slashes.
 
@@ -165,6 +167,8 @@ def build_dispatcher(
         vault_indexer=vault_indexer,
         vault_tier2=vault_tier2,
         vault_state=vault_state,
+        heartbeat_path=heartbeat_path,
+        health_store=health_store,
     )
     write = build_write_handlers(
         workspace,
@@ -796,6 +800,7 @@ def build_scheduler(
     registry: SkillRegistry | None = None,
     subprocess_runner: SubprocessRunner | None = None,
     delivery_chat_id: int | None = None,
+    heartbeat_path: Path | None = None,
 ) -> tuple[SchedulerEngine, ScheduledJobStore] | None:
     """Assemble the scheduler stack. Returns `None` when disabled.
 
@@ -867,6 +872,7 @@ def build_scheduler(
         clock=system_clock,
         sleeper=system_sleeper,
         is_busy=lambda _job: long_runner.registry.any_in_flight(),
+        heartbeat_path=heartbeat_path,
     )
     return engine, store
 
@@ -977,6 +983,7 @@ def build_application(  # noqa: PLR0915 - top-level assembly seam; each step is 
     if _CATALOG_DIR.is_dir():
         skill_registry = SkillRegistry.from_directory(_CATALOG_DIR)
 
+    heartbeat_path = cfg.storage.workspace / "scheduler.heartbeat"
     scheduler_stack = build_scheduler(
         cfg,
         long_runner=long_runner,
@@ -984,6 +991,7 @@ def build_application(  # noqa: PLR0915 - top-level assembly seam; each step is 
         bot=_DeferredBot(),
         events=events,
         registry=skill_registry,
+        heartbeat_path=heartbeat_path,
     )
     if scheduler_stack is not None:
         scheduler_engine, scheduler_store = scheduler_stack
@@ -1016,6 +1024,8 @@ def build_application(  # noqa: PLR0915 - top-level assembly seam; each step is 
             scheduler_store=scheduler_store,
             skill_registry=skill_registry,
             extra_command_help=extra_help,
+            heartbeat_path=heartbeat_path,
+            health_store=scheduler_store,
         )
     if chat_pipeline is None:
         chat_pipeline = build_chat_pipeline(cfg, events=events, vault_loader=vault_loader)

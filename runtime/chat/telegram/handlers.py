@@ -236,6 +236,7 @@ DEFAULT_COMMAND_HELP: dict[str, str] = {
         f"Tail today's last N structural events "
         f"(default {DEFAULT_LOG_LINES}, max {MAX_LOG_LINES})."
     ),
+    "/health": "Scheduler heartbeat + job roster.",
 }
 
 
@@ -392,6 +393,54 @@ def vault_handler(
     return _handle
 
 
+_HEALTH_STALE_SECONDS = 120.0
+
+
+def health_handler(
+    heartbeat_path: Path,
+    store: ScheduledJobStore,
+    *,
+    clock: Clock | None = None,
+) -> Handler:
+    """`/health` — scheduler heartbeat + job roster."""
+    _clock: Clock = clock if clock is not None else _default_clock
+
+    def _handle(_msg: IncomingMessage, _cmd: ParsedCommand) -> str:
+        now = _clock()
+        if not heartbeat_path.exists():
+            return "Scheduler has not ticked yet (no heartbeat file)."
+
+        mtime = heartbeat_path.stat().st_mtime
+        last_tick = datetime.fromtimestamp(mtime, tz=UTC)
+        age_seconds = (now - last_tick).total_seconds()
+
+        if age_seconds > _HEALTH_STALE_SECONDS:
+            status = "STALE"
+            status_note = f"  ⚠️ Last tick was {round(age_seconds)}s ago — scheduler may have stopped."
+        else:
+            status = "OK"
+            status_note = ""
+
+        jobs = store.list_all()
+        job_lines: list[str] = []
+        for job in jobs:
+            last_status = job.last_status if job.last_status is not None else "never"
+            last_run = (
+                job.last_run_at.strftime("%Y-%m-%dT%H:%MZ")
+                if job.last_run_at is not None
+                else "—"
+            )
+            job_lines.append(f"• {job.id}  {job.skill}  {last_status}  {last_run}")
+
+        header = f"Health: {status}  (last tick {round(age_seconds)}s ago)"
+        if status_note:
+            header += "\n" + status_note
+        roster = f"\nJobs ({len(jobs)}):\n" + "\n".join(job_lines) if jobs else f"\nJobs (0): none"
+        return header + roster
+
+    return _handle
+
+
 def build_read_only_handlers(
     workspace: Path,
     *,
@@ -405,6 +454,8 @@ def build_read_only_handlers(
     vault_indexer: VaultIndexer | None = None,
     vault_tier2: Tier2Store | None = None,
     vault_state: VaultState | None = None,
+    heartbeat_path: Path | None = None,
+    health_store: ScheduledJobStore | None = None,
 ) -> dict[str, Handler]:
     """Map slash → handler for every read-only Phase 7 command.
 
@@ -440,6 +491,12 @@ def build_read_only_handlers(
             indexer=vault_indexer,
             tier2=vault_tier2,
             state=vault_state if vault_state is not None else VaultState(),
+        )
+    if heartbeat_path is not None and health_store is not None:
+        handlers["/health"] = health_handler(
+            heartbeat_path,
+            health_store,
+            clock=clock,
         )
     return handlers
 

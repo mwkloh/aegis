@@ -30,6 +30,7 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 
 from runtime.events.stream import EventStream, EventType
 from runtime.scheduler.cron import next_run
@@ -70,6 +71,7 @@ class SchedulerEngine:
         is_busy: BusyCheck | None = None,
         tick_interval: float = _DEFAULT_TICK_SECONDS,
         stale_threshold_seconds: float = _DEFAULT_STALE_SECONDS,
+        heartbeat_path: Path | None = None,
     ) -> None:
         self._store = store
         self._events = events
@@ -79,6 +81,7 @@ class SchedulerEngine:
         self._is_busy = is_busy if is_busy is not None else (lambda _job: False)
         self._tick_interval = tick_interval
         self._stale_threshold = stale_threshold_seconds
+        self._heartbeat_path = heartbeat_path
 
     # --- public API ------------------------------------------------------
 
@@ -96,6 +99,8 @@ class SchedulerEngine:
             EventType.SCHEDULER_TICK,
             {"jobs_considered": len(jobs)},
         )
+        if self._heartbeat_path is not None:
+            self._heartbeat_path.touch()
         for job in jobs:
             if job.paused:
                 continue

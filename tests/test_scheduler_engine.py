@@ -430,6 +430,57 @@ async def test_stale_check_uses_last_run_when_present(
     assert [j.id for j in calls] == [job.id]
 
 
+# --- heartbeat file -------------------------------------------------------
+
+
+async def test_run_once_touches_heartbeat_file(
+    store: ScheduledJobStore, events: EventStream, tmp_path: Path
+) -> None:
+    """run_once() touches the heartbeat file when heartbeat_path is set."""
+    hb = tmp_path / "test.heartbeat"
+    clock = _FixedClock(datetime(2026, 4, 20, 7, 0, tzinfo=UTC))
+    engine = SchedulerEngine(
+        store=store,
+        events=events,
+        invoker=_make_invoker([]),
+        clock=clock,
+        sleeper=_noop_sleep,
+        heartbeat_path=hb,
+    )
+
+    assert not hb.exists()
+    await engine.run_once()
+    assert hb.exists()
+
+    # Second tick updates the mtime (touch again)
+    mtime_1 = hb.stat().st_mtime
+    import time as _time
+    _time.sleep(0.01)  # ensure measurable mtime diff
+    await engine.run_once()
+    assert hb.stat().st_mtime >= mtime_1
+
+
+async def test_run_once_no_heartbeat_when_path_none(
+    store: ScheduledJobStore, events: EventStream, tmp_path: Path
+) -> None:
+    """run_once() does NOT create any heartbeat file when heartbeat_path=None."""
+    clock = _FixedClock(datetime(2026, 4, 20, 7, 0, tzinfo=UTC))
+    engine = SchedulerEngine(
+        store=store,
+        events=events,
+        invoker=_make_invoker([]),
+        clock=clock,
+        sleeper=_noop_sleep,
+        # heartbeat_path not passed — default is None
+    )
+    before = set(tmp_path.iterdir())
+    await engine.run_once()
+    # No new files created in tmp_path (beyond store db and events dir)
+    after = set(tmp_path.iterdir())
+    new_files = {p for p in after - before if p.suffix == ".heartbeat"}
+    assert not new_files
+
+
 # --- EventType members exist ---------------------------------------------
 
 
