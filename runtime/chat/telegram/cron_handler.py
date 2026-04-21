@@ -226,6 +226,8 @@ def _run(
     job = store.get(job_id)
     if job is None:
         return f"Unknown job: {job_id}."
+    if job.paused:
+        return f"{job_id} is paused — resume it first with /cron resume."
     fire_now_fn(job_id)
     return f"{job_id} queued for immediate run (fires on next tick, ≤60s)."
 

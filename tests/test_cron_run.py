@@ -109,6 +109,24 @@ def test_run_no_fire_fn_returns_stub(store: ScheduledJobStore) -> None:
     assert "not yet implemented" in reply
 
 
+def test_run_paused_job_returns_rejection(tmp_path: Path) -> None:
+    """Paused job: handler rejects with message, fire_now_fn not called."""
+    store = ScheduledJobStore(tmp_path / "jobs.db")
+    # Add a job then pause it
+    job = store.add("0 * * * *", "morning-brief", (), created_by=1, now=datetime(2024, 1, 1, tzinfo=UTC))
+    store.set_paused(job.id, paused=True)
+
+    fired: list[str] = []
+    handler = cron_handler(store=store, clock=lambda: datetime(2024, 1, 1, tzinfo=UTC), fire_now_fn=fired.append)
+
+    msg = IncomingMessage(chat_id=1, user_id=1, text=f"/cron run {job.id}")
+    cmd = ParsedCommand(name="/cron", args=("run", job.id))
+    reply = handler(msg, cmd)
+
+    assert "paused" in reply.lower()
+    assert fired == []  # fire_now_fn must NOT have been called
+
+
 # ---------------------------------------------------------------------------
 # Engine tests
 # ---------------------------------------------------------------------------
