@@ -8,6 +8,7 @@ Covers:
 """
 from __future__ import annotations
 
+import os
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -40,7 +41,7 @@ def _fake_cmd() -> ParsedCommand:
 
 def _call(handler, hb: Path, store: ScheduledJobStore, *, now: datetime) -> str:
     """Invoke the handler with a fixed clock."""
-    h = health_handler(hb, store, clock=lambda: now)
+    h = handler(hb, store, clock=lambda: now)
     return h(_fake_msg(), _fake_cmd())
 
 
@@ -65,7 +66,6 @@ def test_health_ok_recent_tick(hb: Path, store: ScheduledJobStore) -> None:
     hb.touch()
     # Backdate mtime by 10s so age_seconds ≈ 10
     mtime = time.time() - 10
-    import os
     os.utime(hb, (mtime, mtime))
     now = datetime.fromtimestamp(mtime + 10, tz=UTC)
     reply = _call(health_handler, hb, store, now=now)
@@ -77,7 +77,6 @@ def test_health_stale(hb: Path, store: ScheduledJobStore) -> None:
     """Heartbeat file >120s old → Health: STALE."""
     hb.touch()
     mtime = time.time() - 200
-    import os
     os.utime(hb, (mtime, mtime))
     now = datetime.fromtimestamp(mtime + 200, tz=UTC)
     reply = _call(health_handler, hb, store, now=now)
@@ -99,7 +98,6 @@ def test_health_job_roster(hb: Path, store: ScheduledJobStore) -> None:
 
     hb.touch()
     mtime = time.time() - 5
-    import os
     os.utime(hb, (mtime, mtime))
     now = datetime.fromtimestamp(mtime + 5, tz=UTC)
     reply = _call(health_handler, hb, store, now=now)
@@ -119,7 +117,6 @@ def test_health_job_with_last_run(hb: Path, store: ScheduledJobStore) -> None:
 
     hb.touch()
     mtime = time.time() - 5
-    import os
     os.utime(hb, (mtime, mtime))
     now = datetime.fromtimestamp(mtime + 5, tz=UTC)
     reply = _call(health_handler, hb, store, now=now)
