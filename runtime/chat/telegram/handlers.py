@@ -407,10 +407,10 @@ def health_handler(
 
     def _handle(_msg: IncomingMessage, _cmd: ParsedCommand) -> str:
         now = _clock()
-        if not heartbeat_path.exists():
+        try:
+            mtime = heartbeat_path.stat().st_mtime
+        except FileNotFoundError:
             return "Scheduler has not ticked yet (no heartbeat file)."
-
-        mtime = heartbeat_path.stat().st_mtime
         last_tick = datetime.fromtimestamp(mtime, tz=UTC)
         age_seconds = (now - last_tick).total_seconds()
 

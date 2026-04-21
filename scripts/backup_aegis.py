@@ -52,6 +52,9 @@ def main() -> int:
     print(f"[{_ts()}]   dest   : {dest}/")
 
     # --- Ensure destination directory exists ---
+    # NOTE: if dest is on an external volume (e.g. /Volumes/...) that is NOT
+    # mounted, mkdir will silently create the path on the boot volume instead.
+    # Verify the volume is mounted before running this script.
     dest.mkdir(parents=True, exist_ok=True)
     print(f"[{_ts()}] Destination directory ensured: {dest}")
 
