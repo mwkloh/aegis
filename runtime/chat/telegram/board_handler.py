@@ -34,12 +34,14 @@ class _Replyable(Protocol):
 
 
 class _EngineLike(Protocol):
-    panelist_count: int
+    @property
+    def panelist_count(self) -> int: ...
     async def run(self, question: str) -> BoardResult: ...
 
 
 class _WriterLike(Protocol):
-    output_dir: Any
+    @property
+    def output_dir(self) -> Any: ...
     def write(self, result: BoardResult) -> Any: ...
 
 

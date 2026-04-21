@@ -943,7 +943,7 @@ def build_board_stack(
     )
 
 
-def build_application(  # noqa: PLR0915 - top-level assembly seam; each step is one statement
+def build_application(  # noqa: PLR0912, PLR0915 - top-level assembly seam; each step is one statement
     cfg: AegisConfig,
     *,
     dispatcher: Dispatcher | None = None,
