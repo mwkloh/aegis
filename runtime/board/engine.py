@@ -6,13 +6,16 @@ can never fail the whole board.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
+import secrets
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from runtime.board.config import BoardConfig
-from runtime.model_router.clients.base import ModelClient
+from runtime.model_router.clients.base import ChatMessage, ChatRequest, ChatResponse, ModelClient
 
 logger = logging.getLogger(__name__)
 
@@ -82,3 +85,103 @@ class BoardEngine:
             raise BoardConfigError(
                 f"unknown provider(s) {sorted(unknown)}; known: {sorted(known)}"
             )
+
+    async def run(self, question: str) -> BoardResult:
+        created_at = self._clock()
+        board_id = "BOARD-" + secrets.token_hex(2)
+        tasks = [
+            self._call_panelist(panelist, client, question)
+            for panelist, client in self._panelist_clients
+        ]
+        responses: tuple[PanelistResponse, ...] = tuple(
+            await asyncio.gather(*tasks)
+        ) if tasks else ()
+        synthesis = await self._maybe_synthesise(question, responses)
+        return BoardResult(
+            board_id=board_id,
+            question=question,
+            created_at=created_at,
+            panelist_responses=responses,
+            synthesis=synthesis,
+        )
+
+    async def _call_panelist(
+        self, panelist: object, client: ModelClient, question: str
+    ) -> PanelistResponse:
+        # `panelist` is typed as object because engine.py must not
+        # import PanelistConfig at module scope (circular with board
+        # __init__); we re-read attributes duck-typed.
+        name = getattr(panelist, "name")
+        model = getattr(panelist, "model")
+        provider = getattr(panelist, "provider")
+        persona = getattr(panelist, "persona")
+        max_tokens = getattr(panelist, "max_tokens")
+        timeout = getattr(self, "_timeout_override", None) or self._config.panelist_timeout_s
+        request = ChatRequest(
+            model=model,
+            messages=[
+                ChatMessage(role="system", content=persona),
+                ChatMessage(role="user", content=question),
+            ],
+            max_tokens=max_tokens,
+            temperature=0.7,
+        )
+        started = time.perf_counter()
+        try:
+            response: ChatResponse = await asyncio.wait_for(
+                client.chat(request), timeout=timeout
+            )
+        except asyncio.TimeoutError:
+            latency_ms = int((time.perf_counter() - started) * 1000)
+            logger.warning(
+                "board.panelist.timeout",
+                extra={"panelist_name": name, "model": model, "latency_ms": latency_ms},
+            )
+            return PanelistResponse(
+                name=name, model=model, provider=provider,
+                response="", latency_ms=latency_ms, error="timeout",
+            )
+        except Exception:
+            latency_ms = int((time.perf_counter() - started) * 1000)
+            logger.exception(
+                "board.panelist.client_error",
+                extra={"panelist_name": name, "model": model},
+            )
+            return PanelistResponse(
+                name=name, model=model, provider=provider,
+                response="", latency_ms=latency_ms, error="client_error",
+            )
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        return PanelistResponse(
+            name=name, model=model, provider=provider,
+            response=response.content, latency_ms=latency_ms, error=None,
+        )
+
+    async def _maybe_synthesise(
+        self, question: str, responses: tuple[PanelistResponse, ...]
+    ) -> str | None:
+        if self._synth_client is None or self._config.synthesis is None:
+            return None
+        successful = [r for r in responses if r.error is None]
+        if not successful:
+            return None
+        blocks = [f"# {r.name}\n{r.response}" for r in successful]
+        user_prompt = (
+            f"Question: {question}\n\n"
+            f"Panelist perspectives:\n\n" + "\n\n---\n\n".join(blocks)
+        )
+        request = ChatRequest(
+            model=self._config.synthesis.model,
+            messages=[
+                ChatMessage(role="system", content=self._config.synthesis.persona),
+                ChatMessage(role="user", content=user_prompt),
+            ],
+            max_tokens=self._config.synthesis.max_tokens,
+            temperature=0.3,
+        )
+        try:
+            response = await self._synth_client.chat(request)
+        except Exception:
+            logger.exception("board.synthesis.failed")
+            return None
+        return response.content
