@@ -128,3 +128,30 @@ class TestServeImportError:
             result = serve.main()
 
         assert result == 2
+
+    def test_returns_2_when_build_application_is_none(self, tmp_path: Path) -> None:
+        """main() returns 2 when build_application is None (optional dep absent)."""
+        cfg = _cfg(tmp_path)
+        import runtime.serve as serve  # noqa: PLC0415
+        with (
+            patch.object(serve, "get_config", return_value=cfg),
+            patch.object(serve, "build_application", None),
+        ):
+            result = serve.main()
+        assert result == 2
+
+
+class TestServeKeyboardInterrupt:
+    def test_returns_0_on_keyboard_interrupt(self, tmp_path: Path) -> None:
+        """main() returns 0 when the user interrupts with Ctrl-C."""
+        cfg = _cfg(tmp_path)
+        mock_app = MagicMock()
+        mock_app.run_polling.side_effect = KeyboardInterrupt
+        mock_build = MagicMock(return_value=mock_app)
+        import runtime.serve as serve  # noqa: PLC0415
+        with (
+            patch.object(serve, "get_config", return_value=cfg),
+            patch.object(serve, "build_application", mock_build),
+        ):
+            result = serve.main()
+        assert result == 0

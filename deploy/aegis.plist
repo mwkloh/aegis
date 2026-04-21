@@ -11,6 +11,12 @@
          __AEGIS_ROOT__         → absolute path to config root
                                   e.g. /Users/alice/.aegis  (default)
 
+       IMPORTANT — TELEGRAM_BOT_TOKEN:
+         launchd does NOT inherit your shell environment, so exporting
+         TELEGRAM_BOT_TOKEN in ~/.zshrc or ~/.bash_profile has NO effect.
+         You MUST place it in __AEGIS_ROOT__/.env (e.g. ~/.aegis/.env):
+           echo 'TELEGRAM_BOT_TOKEN=1234567890:AAF...' >> ~/.aegis/.env
+
     2. Copy to ~/Library/LaunchAgents/:
          cp deploy/aegis.plist ~/Library/LaunchAgents/io.aegis.bot.plist
 
@@ -56,9 +62,15 @@
     <string>__AEGIS_ROOT__</string>
   </dict>
 
-  <!-- Restart automatically on crash or clean exit -->
+  <!-- Restart on crash but NOT on a clean misconfiguration exit (exit 1/2).
+       ThrottleInterval prevents a rapid restart loop if the bot fails early. -->
   <key>KeepAlive</key>
-  <true/>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
 
   <!-- Start when the agent is loaded (at login) -->
   <key>RunAtLoad</key>
