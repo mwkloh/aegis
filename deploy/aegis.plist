@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  macOS launchd plist for the AEGIS Telegram bot.
+
+  Install:
+    1. Replace every __PLACEHOLDER__ with real paths:
+         __AEGIS_PROJECT_DIR__  → absolute path to your git checkout
+                                  e.g. /Users/alice/projects/aegis
+         __AEGIS_ROOT__         → absolute path to config root
+                                  e.g. /Users/alice/.aegis  (default)
+
+    2. Copy to ~/Library/LaunchAgents/:
+         cp deploy/aegis.plist ~/Library/LaunchAgents/io.aegis.bot.plist
+
+    3. Create the log directory (if it does not already exist):
+         mkdir -p __AEGIS_ROOT__/logs
+
+    4. Load the agent:
+         launchctl load ~/Library/LaunchAgents/io.aegis.bot.plist
+
+  The agent starts automatically on login and restarts on crash (KeepAlive).
+
+  To stop:
+    launchctl unload ~/Library/LaunchAgents/io.aegis.bot.plist
+
+  To view logs:
+    tail -f __AEGIS_ROOT__/logs/aegis.stdout.log
+    tail -f __AEGIS_ROOT__/logs/aegis.stderr.log
+-->
+<plist version="1.0">
+<dict>
+
+  <!-- Unique service identifier -->
+  <key>Label</key>
+  <string>io.aegis.bot</string>
+
+  <!-- Command to run — uses the project venv's python -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>__AEGIS_PROJECT_DIR__/.venv/bin/python</string>
+    <string>-m</string>
+    <string>runtime.serve</string>
+  </array>
+
+  <!-- Working directory must be the project root so `python -m` resolves -->
+  <key>WorkingDirectory</key>
+  <string>__AEGIS_PROJECT_DIR__</string>
+
+  <!-- Environment variables passed to the process -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- Config root — override if you keep ~/.aegis somewhere else -->
+    <key>AEGIS_ROOT</key>
+    <string>__AEGIS_ROOT__</string>
+  </dict>
+
+  <!-- Restart automatically on crash or clean exit -->
+  <key>KeepAlive</key>
+  <true/>
+
+  <!-- Start when the agent is loaded (at login) -->
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- Redirect stdout/stderr to rolling log files -->
+  <key>StandardOutPath</key>
+  <string>__AEGIS_ROOT__/logs/aegis.stdout.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>__AEGIS_ROOT__/logs/aegis.stderr.log</string>
+
+</dict>
+</plist>
