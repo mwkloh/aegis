@@ -7,6 +7,11 @@
   This is a one-shot scheduled job (NOT a daemon). It runs rsync to mirror
   $AEGIS_ROOT/workspace/ to AEGIS_BACKUP_DEST once per day at 03:00 local time.
 
+  NOTE: launchd StartCalendarInterval fires at LOCAL time, unlike the AEGIS
+  scheduler cron expressions which are interpreted as UTC. NZ is UTC+12 (+13 NZDT),
+  so 03:00 local = 15:00 UTC (or 14:00 UTC in summer). Adjust Hour/Minute below
+  if you need to align with your UTC-anchored monitoring.
+
   Install:
     1. Replace every __PLACEHOLDER__ with real paths:
          __AEGIS_PROJECT_DIR__  → absolute path to your git checkout

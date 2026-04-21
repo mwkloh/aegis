@@ -12,7 +12,7 @@ $AEGIS_BACKUP_DEST. The destination directory is created if it does not exist.
 
 Exit codes:
     0 — success
-    1 — missing AEGIS_BACKUP_DEST env var, or rsync returned non-zero
+    1 — missing AEGIS_BACKUP_DEST, source directory missing, or rsync returned non-zero
 """
 from __future__ import annotations
 
@@ -43,6 +43,10 @@ def main() -> int:
     source = aegis_root / "workspace"
     dest = Path(backup_dest_raw).expanduser()
 
+    if not source.is_dir():
+        print(f"[{_ts()}] ERROR: source directory does not exist: {source}")
+        return 1
+
     print(f"[{_ts()}] Starting AEGIS workspace backup")
     print(f"[{_ts()}]   source : {source}/")
     print(f"[{_ts()}]   dest   : {dest}/")
@@ -60,10 +64,11 @@ def main() -> int:
     if result.stdout:
         print(result.stdout, end="")
 
+    if result.stderr:
+        print(result.stderr, end="")
+
     if result.returncode != 0:
         print(f"[{_ts()}] ERROR: rsync failed with exit code {result.returncode}")
-        if result.stderr:
-            print(result.stderr, end="")
         return 1
 
     print(

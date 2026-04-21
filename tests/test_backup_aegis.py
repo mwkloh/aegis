@@ -2,15 +2,17 @@
 
 Covers:
 * Exit 1 when AEGIS_BACKUP_DEST is unset.
+* Exit 1 when source workspace directory does not exist.
 * Returns 0 on a successful rsync run (subprocess mocked).
 * Returns 1 when rsync exits non-zero.
 * The rsync command includes the --delete flag.
 """
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -23,6 +25,19 @@ def test_main_exits_1_when_backup_dest_unset(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("AEGIS_BACKUP_DEST", raising=False)
+    result = main()
+    assert result == 1
+
+
+def test_main_exits_1_when_source_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # aegis_sandbox (autouse conftest fixture) creates workspace — remove it
+    aegis_root = tmp_path / "aegis"
+    shutil.rmtree(aegis_root / "workspace")
+    backup_dest = tmp_path / "backups"
+    # AEGIS_ROOT is already set by aegis_sandbox; only need AEGIS_BACKUP_DEST
+    monkeypatch.setenv("AEGIS_BACKUP_DEST", str(backup_dest))
     result = main()
     assert result == 1
 
