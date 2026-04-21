@@ -77,3 +77,37 @@ def test_board_result_holds_tuple_of_responses() -> None:
     )
     assert result.board_id == "BOARD-abcd"
     assert result.panelist_responses == responses
+
+
+def test_engine_rejects_unknown_provider() -> None:
+    cfg = BoardConfig(panelists=[_panelist("A", provider="nope")])
+    factory: Any = lambda provider, model: _FakeClient()  # noqa: E731
+    with pytest.raises(BoardConfigError) as exc_info:
+        BoardEngine(cfg, client_factory=factory, known_providers=frozenset({"ollama"}))
+    assert "nope" in str(exc_info.value)
+
+
+def test_engine_accepts_known_panelist_and_synthesis_providers() -> None:
+    cfg = BoardConfig(
+        panelists=[_panelist("A", provider="ollama")],
+        synthesis=SynthesisConfig(model="m", provider="openrouter"),
+    )
+    engine = BoardEngine(
+        cfg,
+        client_factory=lambda provider, model: _FakeClient(),
+        known_providers=frozenset({"ollama", "openrouter"}),
+    )
+    assert engine.panelist_count == 1
+
+
+def test_engine_rejects_unknown_synthesis_provider() -> None:
+    cfg = BoardConfig(
+        panelists=[_panelist("A", provider="ollama")],
+        synthesis=SynthesisConfig(model="m", provider="mystery"),
+    )
+    with pytest.raises(BoardConfigError):
+        BoardEngine(
+            cfg,
+            client_factory=lambda provider, model: _FakeClient(),
+            known_providers=frozenset({"ollama"}),
+        )
