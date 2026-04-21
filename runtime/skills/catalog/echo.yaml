@@ -15,3 +15,11 @@ args_schema:
   required:
     - message
 requires_tier1: false
+tools:
+  - name: echo
+    argv_template:
+      - python
+      - -m
+      - runtime.skills.scripts.echo
+    timeout_ms: 5000
+    allow_net: false

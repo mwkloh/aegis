@@ -21,7 +21,8 @@ def test_loads_echo_descriptor() -> None:
     assert "echo" in echo.intents
     assert "ping" in echo.intents
     assert echo.requires_tier1 is False
-    assert echo.tools == []
+    assert len(echo.tools) == 1
+    assert echo.tools[0].argv_template[:3] == ["python", "-m", "runtime.skills.scripts.echo"]
 
 
 def test_for_intent_resolves_to_descriptor() -> None:

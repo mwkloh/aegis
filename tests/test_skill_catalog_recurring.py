@@ -89,6 +89,19 @@ def test_reflection_sweep_descriptor() -> None:
     assert tool.allow_net is False
 
 
+def test_echo_descriptor() -> None:
+    registry = SkillRegistry.from_directory(CATALOG)
+    desc = registry.get("echo")
+    assert desc is not None, "echo.yaml missing from catalog"
+    assert desc.tool == "echo"
+    assert len(desc.tools) == 1
+    tool = desc.tools[0]
+    assert tool.argv_template[:3] == ["python", "-m", "runtime.skills.scripts.echo"]
+    # No placeholders — scheduler appends positional args from the job's args tuple.
+    assert tool.placeholders() == set()
+    assert tool.allow_net is False
+
+
 def test_system_job_skills_all_resolvable() -> None:
     """Every SYSTEM_JOBS.skill loads from the catalog (D3a/b/c/d all done).
     Catches typos in ``seed.SYSTEM_JOBS``.
