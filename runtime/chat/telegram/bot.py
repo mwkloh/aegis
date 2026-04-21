@@ -929,11 +929,15 @@ def build_board_stack(
             return OpenRouterClient(cfg)
         raise ValueError(f"unknown provider {provider!r}")
 
-    engine = BoardEngine(
-        board_cfg,
-        client_factory=_factory,
-        known_providers=frozenset({"ollama", "openrouter"}),
-    )
+    try:
+        engine = BoardEngine(
+            board_cfg,
+            client_factory=_factory,
+            known_providers=frozenset({"ollama", "openrouter"}),
+        )
+    except OpenRouterConfigError:
+        logger.info("board.disabled", extra={"reason": "openrouter_config"})
+        return None
     writer = BoardWriter(output_dir=board_cfg.output_dir)
     return BoardRunner(
         engine=engine,

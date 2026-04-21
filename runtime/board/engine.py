@@ -176,8 +176,14 @@ class BoardEngine:
             max_tokens=self._config.synthesis.max_tokens,
             temperature=0.3,
         )
+        timeout = getattr(self, "_timeout_override", None) or self._config.panelist_timeout_s
         try:
-            response = await self._synth_client.chat(request)
+            response = await asyncio.wait_for(
+                self._synth_client.chat(request), timeout=timeout
+            )
+        except TimeoutError:
+            logger.warning("board.synthesis.timeout", extra={"timeout_s": timeout})
+            return None
         except Exception:
             logger.exception("board.synthesis.failed")
             return None

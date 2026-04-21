@@ -242,3 +242,19 @@ async def test_run_synthesis_failure_is_graceful() -> None:
     result = await engine.run("q?")
     assert result.synthesis is None
     assert result.panelist_responses[0].error is None
+
+
+async def test_run_synthesis_timeout_is_graceful() -> None:
+    clients = {
+        "ok": _FakeClient(content="ok"),
+        "synth": _FakeClient(content="x", delay=1.0),
+    }
+    cfg = BoardConfig(
+        panelists=[_panelist("A", provider="ollama", model="ok")],
+        synthesis=SynthesisConfig(model="synth", provider="openrouter"),
+    )
+    engine = _engine(cfg, clients)
+    engine._timeout_override = 0.05  # type: ignore[attr-defined]
+    result = await engine.run("q?")
+    assert result.synthesis is None
+    assert result.panelist_responses[0].error is None
