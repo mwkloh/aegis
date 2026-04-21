@@ -138,6 +138,7 @@ def build_dispatcher(
     extra_command_help: dict[str, str] | None = None,
     heartbeat_path: Path | None = None,
     health_store: ScheduledJobStore | None = None,
+    fire_now_fn: Callable[[str], None] | None = None,
 ) -> Dispatcher:
     """Assemble a `Dispatcher` wired with both read and write slashes.
 
@@ -176,6 +177,7 @@ def build_dispatcher(
         events=events,
         scheduler_store=scheduler_store,
         skill_registry=skill_registry,
+        fire_now_fn=fire_now_fn,
     )
     merged: dict[str, Any] = {**read_only, **write}
     # /help is a pure lookup so it goes in last, closed over the
@@ -996,6 +998,8 @@ def build_application(  # noqa: PLR0915 - top-level assembly seam; each step is 
     if scheduler_stack is not None:
         scheduler_engine, scheduler_store = scheduler_stack
 
+    fire_now_fn = scheduler_engine.queue_immediate if scheduler_engine is not None else None
+
     if dispatcher is None:
         authorizer = Authorizer(tuple(cfg.telegram.user_allowlist))
         # Teach /help about slashes handled outside the sync dispatcher
@@ -1026,6 +1030,7 @@ def build_application(  # noqa: PLR0915 - top-level assembly seam; each step is 
             extra_command_help=extra_help,
             heartbeat_path=heartbeat_path,
             health_store=scheduler_store,
+            fire_now_fn=fire_now_fn,
         )
     if chat_pipeline is None:
         chat_pipeline = build_chat_pipeline(cfg, events=events, vault_loader=vault_loader)

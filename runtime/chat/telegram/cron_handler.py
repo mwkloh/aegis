@@ -21,6 +21,7 @@ and testable without asyncio.
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime
 
 from runtime.chat.telegram.dispatch import Handler, IncomingMessage, ParsedCommand
@@ -44,6 +45,7 @@ def cron_handler(
     store: ScheduledJobStore,
     clock: Clock,
     registry: SkillRegistry | None = None,
+    fire_now_fn: Callable[[str], None] | None = None,
 ) -> Handler:
     """Factory for the dispatcher. Closes over store + clock deps.
 
@@ -73,10 +75,7 @@ def cron_handler(
         if sub == "resume":
             return _set_paused(store, tail, paused=False)
         if sub == "run":
-            return (
-                "/cron run is not yet implemented — deferred until the "
-                "engine exposes an immediate-fire seam."
-            )
+            return _run(store, tail, fire_now_fn=fire_now_fn)
         return _USAGE
 
     return _handle
@@ -208,6 +207,27 @@ def _normalize_job_id(raw: str) -> str:
     if trimmed.lower().startswith("job-"):
         return "JOB-" + trimmed.split("-", 1)[1].lower()
     return trimmed
+
+
+def _run(
+    store: ScheduledJobStore,
+    tail: tuple[str, ...],
+    *,
+    fire_now_fn: Callable[[str], None] | None,
+) -> str:
+    if not tail:
+        return _USAGE
+    if fire_now_fn is None:
+        return (
+            "/cron run is not yet implemented — deferred until the "
+            "engine exposes an immediate-fire seam."
+        )
+    job_id = _normalize_job_id(tail[0])
+    job = store.get(job_id)
+    if job is None:
+        return f"Unknown job: {job_id}."
+    fire_now_fn(job_id)
+    return f"{job_id} queued for immediate run (fires on next tick, ≤60s)."
 
 
 __all__ = ["cron_handler"]

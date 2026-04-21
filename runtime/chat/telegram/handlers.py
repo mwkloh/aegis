@@ -593,6 +593,7 @@ def build_write_handlers(
     events: EventStream | None = None,
     scheduler_store: ScheduledJobStore | None = None,
     skill_registry: SkillRegistry | None = None,
+    fire_now_fn: Callable[[str], None] | None = None,
 ) -> dict[str, Handler]:
     """Map slash → handler for the human-verdict + scheduler write commands.
 
@@ -618,7 +619,8 @@ def build_write_handlers(
     }
     if scheduler_store is not None:
         handlers["/cron"] = cron_handler(
-            store=scheduler_store, clock=_clock, registry=skill_registry
+            store=scheduler_store, clock=_clock, registry=skill_registry,
+            fire_now_fn=fire_now_fn,
         )
     return handlers
 

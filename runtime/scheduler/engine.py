@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -82,8 +83,13 @@ class SchedulerEngine:
         self._tick_interval = tick_interval
         self._stale_threshold = stale_threshold_seconds
         self._heartbeat_path = heartbeat_path
+        self._immediate_queue: deque[str] = deque()
 
     # --- public API ------------------------------------------------------
+
+    def queue_immediate(self, job_id: str) -> None:
+        """Enqueue job_id for fire on the next run_once() pass."""
+        self._immediate_queue.append(job_id)
 
     async def run(self) -> None:
         """Forever loop. Returns on `CancelledError`."""
@@ -101,6 +107,11 @@ class SchedulerEngine:
         )
         if self._heartbeat_path is not None:
             self._heartbeat_path.touch()
+        while self._immediate_queue:
+            imm_id = self._immediate_queue.popleft()
+            imm_job = self._store.get(imm_id)
+            if imm_job is not None and not imm_job.paused:
+                await self._invoke(imm_job, now=now)
         for job in jobs:
             if job.paused:
                 continue

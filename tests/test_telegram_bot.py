@@ -1395,6 +1395,9 @@ def test_build_application_spawns_scheduler_task(
     run_called: list[bool] = []
 
     class _StubEngine:
+        def queue_immediate(self, job_id: str) -> None:
+            pass
+
         async def run(self) -> None:
             run_called.append(True)
             # Let the event loop progress but don't block forever.
@@ -1456,6 +1459,9 @@ async def test_build_application_post_init_starts_scheduler(
     class _StubEngine:
         def __init__(self) -> None:
             self.ran = False
+
+        def queue_immediate(self, job_id: str) -> None:
+            pass
 
         async def run(self) -> None:
             self.ran = True
