@@ -638,6 +638,7 @@ __all__ = [
     "logs_handler",
     "pending_handler",
     "proposal_handler",
+    "health_handler",
     "recall_handler",
     "reject_handler",
     "status_handler",
