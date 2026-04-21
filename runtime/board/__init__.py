@@ -46,7 +46,14 @@ def __getattr__(name: str) -> object:
         from runtime.board import config as _config  # noqa: PLC0415
 
         return getattr(_config, name)
-    if name in {"BoardConfigError", "BoardEngine", "BoardResult", "ClientFactory", "PanelistResponse"}:
+    _ENGINE_EXPORTS = {
+        "BoardConfigError",
+        "BoardEngine",
+        "BoardResult",
+        "ClientFactory",
+        "PanelistResponse",
+    }
+    if name in _ENGINE_EXPORTS:
         from runtime.board import engine as _engine  # noqa: PLC0415
 
         return getattr(_engine, name)

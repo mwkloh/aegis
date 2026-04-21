@@ -11,7 +11,6 @@ from pathlib import Path
 
 from runtime.board.engine import BoardResult
 
-
 _SLUG_PATTERN = re.compile(r"[^a-z0-9]+")
 _MAX_SLUG_CHARS = 60
 _SLUG_WORDS = 6

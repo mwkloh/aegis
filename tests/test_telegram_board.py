@@ -4,11 +4,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
 
 import pytest
 
-from runtime.board.config import BoardConfig, PanelistConfig
 from runtime.board.engine import BoardResult, PanelistResponse
 from runtime.board.writer import BoardWriter
 from runtime.chat.telegram.board_handler import BoardRunner
@@ -52,7 +50,11 @@ class _StubEngine:
         return self.result
 
 
-def _result(*, synthesis: str | None = "synth text", error_names: tuple[str, ...] = ()) -> BoardResult:
+def _result(
+    *,
+    synthesis: str | None = "synth text",
+    error_names: tuple[str, ...] = (),
+) -> BoardResult:
     responses = tuple(
         PanelistResponse(
             name=name,
@@ -123,7 +125,8 @@ async def test_successful_run_edits_message_with_summary_and_path(tmp_path: Path
     final = reply.edits[-1]
     assert "BOARD-a3f2" in final
     assert "2 panelists" in final
-    assert "Analyst" in final and "Strategist" in final
+    assert "Analyst" in final
+    assert "Strategist" in final
     assert "bottom line." in final
     assert "Full board →" in final
     assert str(tmp_path) in final

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 from datetime import UTC, datetime
 from typing import Any
 
@@ -60,7 +61,7 @@ def test_panelist_response_is_frozen_dataclass() -> None:
     r = PanelistResponse(
         name="a", model="m", provider="p", response="x", latency_ms=0, error=None
     )
-    with pytest.raises(Exception):
+    with pytest.raises(dataclasses.FrozenInstanceError):
         r.name = "b"  # type: ignore[misc]
 
 
@@ -210,8 +211,10 @@ async def test_run_calls_synthesis_with_panelist_texts_when_configured() -> None
     assert result.synthesis == "synthesised bottom line"
     synth_call = clients["synth"].calls[0]
     user_msg = synth_call.messages[-1].content
-    assert "A" in user_msg and "B" in user_msg
-    assert "perspective 1" in user_msg and "perspective 2" in user_msg
+    assert "A" in user_msg
+    assert "B" in user_msg
+    assert "perspective 1" in user_msg
+    assert "perspective 2" in user_msg
 
 
 async def test_run_synthesis_skipped_when_all_panelists_failed() -> None:

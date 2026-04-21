@@ -14,7 +14,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from runtime.board.config import BoardConfig
+from runtime.board.config import BoardConfig, PanelistConfig
 from runtime.model_router.clients.base import ChatMessage, ChatRequest, ChatResponse, ModelClient
 
 logger = logging.getLogger(__name__)
@@ -61,7 +61,7 @@ class BoardEngine:
         self._factory = client_factory
         self._clock = clock if clock is not None else (lambda: datetime.now(UTC))
         self._validate_providers(known_providers)
-        self._panelist_clients: list[tuple[object, ModelClient]] = [
+        self._panelist_clients: list[tuple[PanelistConfig, ModelClient]] = [
             (p, client_factory(p.provider, p.model)) for p in config.panelists
         ]
         self._synth_client: ModelClient | None = (
@@ -106,16 +106,13 @@ class BoardEngine:
         )
 
     async def _call_panelist(
-        self, panelist: object, client: ModelClient, question: str
+        self, panelist: PanelistConfig, client: ModelClient, question: str
     ) -> PanelistResponse:
-        # `panelist` is typed as object because engine.py must not
-        # import PanelistConfig at module scope (circular with board
-        # __init__); we re-read attributes duck-typed.
-        name = getattr(panelist, "name")
-        model = getattr(panelist, "model")
-        provider = getattr(panelist, "provider")
-        persona = getattr(panelist, "persona")
-        max_tokens = getattr(panelist, "max_tokens")
+        name = panelist.name
+        model = panelist.model
+        provider = panelist.provider
+        persona = panelist.persona
+        max_tokens = panelist.max_tokens
         timeout = getattr(self, "_timeout_override", None) or self._config.panelist_timeout_s
         request = ChatRequest(
             model=model,
@@ -131,7 +128,7 @@ class BoardEngine:
             response: ChatResponse = await asyncio.wait_for(
                 client.chat(request), timeout=timeout
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             latency_ms = int((time.perf_counter() - started) * 1000)
             logger.warning(
                 "board.panelist.timeout",

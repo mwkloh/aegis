@@ -6,9 +6,9 @@ from typing import Any
 
 import pytest
 
+from runtime.chat.telegram.auth import Authorizer
 from runtime.chat.telegram.bot import route_command
 from runtime.chat.telegram.dispatch import Dispatcher
-from runtime.chat.telegram.auth import Authorizer
 
 pytestmark = pytest.mark.unit
 
