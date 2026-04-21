@@ -1,0 +1,56 @@
+# AEGIS — Quantized Model Configuration (Gemma-4B)
+
+# This configuration file defines safe, local-first runtime settings
+# for the AEGIS Reflection Agent using a quantized Gemma-4B model.
+#
+# DESIGN PRINCIPLES:
+# - Deterministic, conservative behavior
+# - Short-context friendliness
+# - Low hallucination risk
+# - CPU/GPU portable (llama.cpp / Ollama / vLLM compatible)
+#
+# This file is INTENDED TO BE READ BY HUMANS AND RUNTIME WRAPPERS.
+# It does NOT grant the model execution or mutation authority.
+
+---
+
+model:
+  name: gemma-4b-instruct
+  format: gguf
+  quantization: Q4_K_M          # Balanced quality/speed for 4B
+
+runtime:
+  context_length: 4096          # Hard cap; reflection must stay concise
+  max_output_tokens: 800        # Prevent verbose pattern generation
+
+sampling:
+  temperature: 0.25             # Low creativity, high reliability
+  top_p: 0.9
+  top_k: 40
+  repetition_penalty: 1.1
+
+safety:
+  allow_tool_calls: false       # Reflection agent is read-only
+  allow_code_execution: false
+  allow_memory_writes: false
+  allow_network_access: false
+
+reflection_constraints:
+  max_events_per_run: 50        # Bound reasoning scope
+  max_patterns_per_run: 3       # Prevent overfitting
+  max_proposals_per_run: 2      # Prefer fewer, higher-quality suggestions
+
+abort_conditions:
+  - insufficient_evidence       # Stop if events cannot be confidently clustered
+  - schema_violation            # Stop if output cannot be validated
+  - excessive_uncertainty       # Stop if ambiguity is high
+
+logging:
+  log_level: info
+  log_outputs: true
+  audit_tag: reflection_run
+
+notes:
+  - This config is optimized for Gemma-4B quantized execution.
+  - Frontier models may be substituted ONLY in the improvement plane.
+  - Runtime execution must remain local-model sufficient.

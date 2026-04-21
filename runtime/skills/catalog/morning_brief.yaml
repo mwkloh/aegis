@@ -1,0 +1,34 @@
+id: morning_brief
+version: 0.1.0
+description: >-
+  Daily brief — motivational quote, NZ weather (MetOcean), GitHub Trending,
+  Hacker News top 5, TechCrunch AI, and NZ news. Writes Markdown to
+  <vault_root>/Daily/YYYY/MM/DD-daily-news.md and returns the full Markdown.
+  Requires METSERVICE_API_KEY in environment for the weather section; other
+  sections degrade to inline warnings on failure.
+intents:
+  - morning_brief
+  - daily_brief
+tool: morning_brief
+args_schema:
+  type: object
+  properties:
+    vault_root:
+      type: string
+      minLength: 1
+      maxLength: 512
+      description: Absolute path to the Obsidian vault root.
+  required:
+    - vault_root
+  additionalProperties: false
+requires_tier1: false
+tools:
+  - name: morning_brief
+    argv_template:
+      - python
+      - -m
+      - runtime.skills.scripts.morning_brief
+      - --vault-root
+      - "{vault_root}"
+    timeout_ms: 90000
+    allow_net: true

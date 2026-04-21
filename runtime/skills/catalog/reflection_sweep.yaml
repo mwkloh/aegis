@@ -1,0 +1,22 @@
+id: reflection_sweep
+version: 0.1.0
+description: >-
+  Daily reflection sweep — reads today's session events, runs deterministic
+  detectors, drafts proposals via the reflection model, and appends both to
+  <workspace>/reflection/{PATTERNS,PROPOSALS}.md. Uses --quiet so progress
+  lines go to stderr, keeping stdout empty for silent-success on exit 0.
+intents: []
+tool: reflection_sweep
+args_schema:
+  type: object
+  additionalProperties: false
+requires_tier1: false
+tools:
+  - name: reflection_sweep
+    argv_template:
+      - python
+      - -m
+      - runtime.reflection.cli
+      - --quiet
+    timeout_ms: 120000
+    allow_net: false

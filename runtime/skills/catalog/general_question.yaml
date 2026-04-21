@@ -1,0 +1,16 @@
+id: ask_question
+version: 0.1.0
+description: Answer an open-ended question using a Tier 1 frontier model via OpenRouter.
+intents:
+  - ask_question
+tool: respond
+args_schema:
+  type: object
+  properties:
+    message:
+      type: string
+      minLength: 1
+      maxLength: 8192
+  required:
+    - message
+requires_tier1: true

@@ -1,0 +1,16 @@
+id: ask_time
+version: 0.1.0
+description: Answer "what time is it in ...?" using local zoneinfo. No network.
+intents:
+  - ask_time
+tool: time
+args_schema:
+  type: object
+  properties:
+    query:
+      type: string
+      minLength: 1
+      maxLength: 256
+  required:
+    - query
+requires_tier1: false

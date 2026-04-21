@@ -1,0 +1,20 @@
+id: vault_reindex
+version: 0.1.0
+description: >-
+  Full Obsidian-vault reindex across all configured VaultSources. Silent on
+  success (empty stdout). Embedder selection mirrors chat pipeline — try
+  bge-m3, fall back to FakeEmbedder.
+intents: []
+tool: vault_reindex
+args_schema:
+  type: object
+  additionalProperties: false
+requires_tier1: false
+tools:
+  - name: vault_reindex
+    argv_template:
+      - python
+      - -m
+      - runtime.skills.scripts.vault_reindex
+    timeout_ms: 300000
+    allow_net: false

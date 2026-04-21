@@ -1,0 +1,21 @@
+id: tier2_compress
+version: 0.1.0
+description: >-
+  Tier-2 SQLite maintenance — VACUUM reclaims pages freed by vault pruning
+  and episodic deletions; ANALYZE refreshes query planner stats. Silent on
+  success. Scheduled before vault_reindex so a freshly pruned corpus leaves
+  the DB compact.
+intents: []
+tool: tier2_compress
+args_schema:
+  type: object
+  additionalProperties: false
+requires_tier1: false
+tools:
+  - name: tier2_compress
+    argv_template:
+      - python
+      - -m
+      - runtime.skills.scripts.tier2_compress
+    timeout_ms: 120000
+    allow_net: false

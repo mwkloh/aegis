@@ -1,0 +1,32 @@
+target-version = "py311"
+line-length = 100
+extend-exclude = ["runtime/harness/openharness", ".venv", "build", "dist"]
+
+[lint]
+select = [
+  "E",    # pycodestyle errors
+  "W",    # pycodestyle warnings
+  "F",    # pyflakes
+  "I",    # isort
+  "B",    # bugbear
+  "UP",   # pyupgrade
+  "S",    # bandit-style security
+  "ASYNC",
+  "RUF",  # ruff-specific
+  "SIM",  # simplify
+  "PT",   # pytest style
+  "TID",  # tidy-imports
+  "PL",   # pylint subset
+]
+ignore = [
+  "PLR0913",  # too many arguments — pydantic models trip this
+  "S101",     # assert used (pytest)
+]
+
+[lint.per-file-ignores]
+# subprocess use (S603/S607) is intentional infrastructure in tests + scripts
+"tests/**" = ["S101", "S105", "S106", "S108", "PLR2004", "S603", "S607"]
+"scripts/**" = ["S603", "S607"]
+
+[lint.isort]
+known-first-party = ["runtime", "memory", "scripts"]

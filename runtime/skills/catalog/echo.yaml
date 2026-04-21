@@ -1,0 +1,17 @@
+id: echo
+version: 0.1.0
+description: >-
+  Trivial echo skill — proves the runtime → intent → skill → harness → tool
+  pipeline. Returns the user's message verbatim.
+intents:
+  - echo
+  - ping
+tool: echo
+args_schema:
+  type: object
+  properties:
+    message:
+      type: string
+  required:
+    - message
+requires_tier1: false

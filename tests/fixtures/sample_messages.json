@@ -1,0 +1,6 @@
+{
+  "echo_basic": "echo hello",
+  "echo_caps": "ECHO World",
+  "ping_plain": "ping",
+  "unknown": "good morning"
+}
