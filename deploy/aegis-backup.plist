@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  macOS launchd plist for the AEGIS nightly workspace backup.
+
+  This is a one-shot scheduled job (NOT a daemon). It runs rsync to mirror
+  $AEGIS_ROOT/workspace/ to AEGIS_BACKUP_DEST once per day at 03:00 local time.
+
+  Install:
+    1. Replace every __PLACEHOLDER__ with real paths:
+         __AEGIS_PROJECT_DIR__  → absolute path to your git checkout
+                                  e.g. /Users/alice/projects/aegis
+         __AEGIS_ROOT__         → absolute path to config root
+                                  e.g. /Users/alice/.aegis  (default)
+         __AEGIS_BACKUP_DEST__  → absolute path to backup destination
+                                  e.g. /Volumes/ExternalDrive/aegis-backup
+                                  or   /Users/alice/Backups/aegis
+
+    2. Copy to ~/Library/LaunchAgents/:
+         cp deploy/aegis-backup.plist ~/Library/LaunchAgents/io.aegis.backup.plist
+
+    3. Create the log directory (if it does not already exist):
+         mkdir -p __AEGIS_ROOT__/logs
+
+    4. Load the agent:
+         launchctl load ~/Library/LaunchAgents/io.aegis.backup.plist
+
+  The job fires automatically at 03:00 each day. It is NOT a KeepAlive daemon.
+
+  To run immediately (for testing):
+    launchctl start io.aegis.backup
+
+  To unload:
+    launchctl unload ~/Library/LaunchAgents/io.aegis.backup.plist
+
+  To view logs:
+    tail -f __AEGIS_ROOT__/logs/aegis-backup.stdout.log
+    tail -f __AEGIS_ROOT__/logs/aegis-backup.stderr.log
+-->
+<plist version="1.0">
+<dict>
+
+  <!-- Unique service identifier -->
+  <key>Label</key>
+  <string>io.aegis.backup</string>
+
+  <!-- Command to run — uses the project venv's python -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>__AEGIS_PROJECT_DIR__/.venv/bin/python</string>
+    <string>-m</string>
+    <string>scripts.backup_aegis</string>
+  </array>
+
+  <!-- Working directory must be the project root so `python -m` resolves -->
+  <key>WorkingDirectory</key>
+  <string>__AEGIS_PROJECT_DIR__</string>
+
+  <!-- Environment variables passed to the process -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- Config root — override if you keep ~/.aegis somewhere else -->
+    <key>AEGIS_ROOT</key>
+    <string>__AEGIS_ROOT__</string>
+    <!-- Backup destination — set to an external drive path or ~/Backups/aegis -->
+    <key>AEGIS_BACKUP_DEST</key>
+    <string>__AEGIS_BACKUP_DEST__</string>
+  </dict>
+
+  <!-- Run daily at 03:00 local time (one-shot, not a daemon) -->
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>3</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+
+  <!-- Redirect stdout/stderr to log files (launchd captures these) -->
+  <key>StandardOutPath</key>
+  <string>__AEGIS_ROOT__/logs/aegis-backup.stdout.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>__AEGIS_ROOT__/logs/aegis-backup.stderr.log</string>
+
+</dict>
+</plist>
