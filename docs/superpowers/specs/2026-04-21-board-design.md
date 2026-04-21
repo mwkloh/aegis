@@ -1,7 +1,7 @@
 # `/board` Multi-Panelist Board Feature — Design Spec
 
 **Date:** 2026-04-21  
-**Status:** Approved  
+**Status:** Implemented  
 **Use cases:** Research, brainstorming, decision-making
 
 ---

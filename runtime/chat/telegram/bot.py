@@ -198,6 +198,7 @@ async def route_command(
     *,
     dispatcher: Dispatcher,
     long_runner: LongRunningRunner | None = None,
+    board_runner: Any | None = None,
     restart_fn: Callable[[], None] | None = None,
 ) -> None:
     """Map an incoming slash Update → Dispatcher → reply_text(s).
@@ -237,6 +238,26 @@ async def route_command(
             dispatcher=dispatcher,
             long_runner=long_runner,
             restart_fn=restart_fn,
+        )
+        return
+
+    if (
+        board_runner is not None
+        and parsed is not None
+        and parsed.name in board_runner.commands
+    ):
+        decision = dispatcher.authorizer.check(chat_id)
+        if not decision:
+            await _reply(message, "unauthorized")
+            logger.info(
+                "telegram.board.denied",
+                extra={"command": parsed.name, "chat_id": chat_id},
+            )
+            return
+        await board_runner.run(chat_id=chat_id, cmd=parsed, message=message)
+        logger.info(
+            "telegram.board.dispatched",
+            extra={"command": parsed.name, "chat_id": chat_id},
         )
         return
 
@@ -879,7 +900,54 @@ def build_scheduler(
     return engine, store
 
 
-def build_application(  # noqa: PLR0915 - top-level assembly seam; each step is one statement
+def build_board_stack(
+    cfg: AegisConfig,
+    *,
+    registry: InFlightRegistry,
+) -> Any | None:
+    """Assemble `BoardRunner` from config, or return `None` when no panelists.
+
+    Builds a production `ClientFactory` that maps `"ollama"` → `OllamaClient`
+    and `"openrouter"` → `OpenRouterClient`. Returns `None` when
+    `cfg.board.panelists` is empty so `/board` gets a clear
+    "not configured" reply via `BoardRunner` only when panelists are
+    present — otherwise we skip construction entirely and the slash
+    falls through to the sync dispatcher's `unknown_command`.
+    """
+    from runtime.board import BoardEngine, BoardWriter  # noqa: PLC0415
+    from runtime.board.config import BoardConfig  # noqa: PLC0415
+    from runtime.chat.telegram.board_handler import BoardRunner  # noqa: PLC0415
+
+    board_cfg: BoardConfig = cfg.board
+    if not board_cfg.panelists:
+        return None
+
+    def _factory(provider: str, model: str) -> ModelClient:
+        if provider == "ollama":
+            return OllamaClient(cfg)
+        if provider == "openrouter":
+            return OpenRouterClient(cfg)
+        raise ValueError(f"unknown provider {provider!r}")
+
+    try:
+        engine = BoardEngine(
+            board_cfg,
+            client_factory=_factory,
+            known_providers=frozenset({"ollama", "openrouter"}),
+        )
+    except OpenRouterConfigError:
+        logger.info("board.disabled", extra={"reason": "openrouter_config"})
+        return None
+    writer = BoardWriter(output_dir=board_cfg.output_dir)
+    return BoardRunner(
+        engine=engine,
+        writer=writer,
+        registry=registry,
+        excerpt_chars=board_cfg.excerpt_chars,
+    )
+
+
+def build_application(  # noqa: PLR0912, PLR0915 - top-level assembly seam; each step is one statement
     cfg: AegisConfig,
     *,
     dispatcher: Dispatcher | None = None,
@@ -950,6 +1018,7 @@ def build_application(  # noqa: PLR0915 - top-level assembly seam; each step is 
             cfg.storage.workspace,
             vault_root=cfg.vault_indexing.vault_root,
         )
+    board_runner = build_board_stack(cfg, registry=long_runner.registry)
     if skill_arg_resolver is None:
         skill_arg_resolver = build_skill_arg_resolver(cfg)
 
@@ -1007,6 +1076,8 @@ def build_application(  # noqa: PLR0915 - top-level assembly seam; each step is 
         # shared DEFAULT_COMMAND_HELP via help_descriptions_for, so
         # they stay identical to the in-dispatcher help.
         extra_help_commands = {*long_runner.commands, "/restart"}
+        if board_runner is not None:
+            extra_help_commands.add("/board")
         extra_help = {
             k: v
             for k, v in help_descriptions_for(extra_help_commands).items()
@@ -1087,7 +1158,11 @@ def build_application(  # noqa: PLR0915 - top-level assembly seam; each step is 
 
     async def _on_command(update: Any, context: Any) -> None:
         await route_command(
-            update, context, dispatcher=dispatcher, long_runner=long_runner
+            update,
+            context,
+            dispatcher=dispatcher,
+            long_runner=long_runner,
+            board_runner=board_runner,
         )
 
     async def _on_chat(update: Any, context: Any) -> None:
@@ -1111,6 +1186,7 @@ __all__ = [
     "AsyncioSubprocessRunner",
     "SkillArgResolver",
     "build_application",
+    "build_board_stack",
     "build_chat_pipeline",
     "build_dispatcher",
     "build_intent_router",

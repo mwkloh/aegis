@@ -231,6 +231,7 @@ DEFAULT_COMMAND_HELP: dict[str, str] = {
         "Scheduler: /cron add \"<cron>\" <skill> [args...] | list | rm <id> "
         "| pause <id> | resume <id>."
     ),
+    "/board": "Fan a question out to configured panelists and save the full board to a file.",
     "/restart": "Restart the bot process (refused while a command is in flight).",
     "/logs": (
         f"Tail today's last N structural events "
