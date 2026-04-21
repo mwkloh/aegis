@@ -177,3 +177,56 @@ def test_vault_indexing_ignores_placeholder_string(aegis_sandbox: Path) -> None:
     reset_config()
     cfg = get_config()
     assert cfg.vault_indexing.is_enabled() is False
+
+
+def test_config_defaults_board_to_empty(aegis_sandbox: Path) -> None:
+    reset_config()
+    cfg = get_config()
+    assert cfg.board.panelists == []
+    assert cfg.board.synthesis is None
+
+
+def test_config_reads_board_from_json(aegis_sandbox: Path) -> None:
+    config_path = aegis_sandbox / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "board": {
+                    "panelists": [
+                        {
+                            "name": "Analyst",
+                            "model": "minimax/minimax-m2.7",
+                            "provider": "openrouter",
+                            "persona": "Be rigorous.",
+                        }
+                    ],
+                    "synthesis": {
+                        "model": "minimax/minimax-m2.7",
+                        "provider": "openrouter",
+                    },
+                    "output_dir": "~/obsidian/Boards",
+                    "excerpt_chars": 400,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    reset_config()
+    cfg = get_config()
+    assert len(cfg.board.panelists) == 1
+    assert cfg.board.panelists[0].name == "Analyst"
+    assert cfg.board.synthesis is not None
+    assert cfg.board.synthesis.model == "minimax/minimax-m2.7"
+    assert "~" not in str(cfg.board.output_dir)
+    assert cfg.board.excerpt_chars == 400
+
+
+def test_config_ignores_malformed_board(aegis_sandbox: Path) -> None:
+    config_path = aegis_sandbox / "config.json"
+    config_path.write_text(
+        json.dumps({"board": "not-a-dict"}),
+        encoding="utf-8",
+    )
+    reset_config()
+    cfg = get_config()
+    assert cfg.board.panelists == []

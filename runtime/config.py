@@ -14,6 +14,8 @@ from typing import Any
 from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from runtime.board.config import BoardConfig
+
 
 def _aegis_root() -> Path:
     return Path(os.environ.get("AEGIS_ROOT", str(Path.home() / ".aegis"))).expanduser()
@@ -122,6 +124,7 @@ class AegisConfig(BaseModel):
     telegram: TelegramConfig = Field(default_factory=TelegramConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
     vault_indexing: VaultIndexingConfig = Field(default_factory=VaultIndexingConfig)
+    board: BoardConfig = Field(default_factory=BoardConfig)
 
     @field_validator("aegis_home", "aegis_root")
     @classmethod
@@ -209,12 +212,14 @@ def _coerce(env: dict[str, str], cfg: dict[str, Any]) -> dict[str, Any]:
         bot_token=env.get("TELEGRAM_BOT_TOKEN"),
         user_allowlist=allow,
     )
+    board = _coerce_board(cfg.get("board"))
     return {
         "models": models,
         "providers": providers,
         "telegram": telegram,
         "storage": StorageConfig(),
         "vault_indexing": _coerce_vault_indexing(cfg.get("vaultIndexing")),
+        "board": board,
     }
 
 
@@ -267,6 +272,21 @@ def _coerce_vault_indexing(raw: Any) -> VaultIndexingConfig:
         sources=tuple(sources),
         reindex_interval_hours=interval_int,
     )
+
+
+def _coerce_board(raw: Any) -> BoardConfig:
+    """Build a `BoardConfig` from `config.json` → `board`.
+
+    Missing / non-dict → default (empty panelists, no synthesis).
+    Invalid panelist entries raise at `BoardConfig(**...)` — operator
+    should fix the config rather than silently lose a panelist.
+    """
+    if not isinstance(raw, dict):
+        return BoardConfig()
+    try:
+        return BoardConfig.model_validate(raw)
+    except Exception:
+        return BoardConfig()
 
 
 @lru_cache(maxsize=1)
