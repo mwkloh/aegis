@@ -13,11 +13,13 @@ from .contract import ToolIntent, ToolResult
 from .tools import echo, respond, time_tool
 
 # Tool registry. Keep small and explicit — no dynamic discovery in Plane 1.
-_TOOLS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
+DEFAULT_TOOLS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "echo": echo,
     "respond": respond,
     "time": time_tool,
 }
+
+__all__ = ["DEFAULT_TOOLS", "HarnessAdapter"]
 
 
 class HarnessAdapter:
@@ -27,7 +29,7 @@ class HarnessAdapter:
         self,
         tools: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] | None = None,
     ) -> None:
-        self._tools = tools if tools is not None else _TOOLS
+        self._tools = tools if tools is not None else DEFAULT_TOOLS
 
     def execute(self, intent: ToolIntent) -> ToolResult:
         fn = self._tools.get(intent.tool)

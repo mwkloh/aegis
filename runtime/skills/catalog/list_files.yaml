@@ -1,0 +1,19 @@
+id: list_files
+version: 0.1.0
+description: List files and directories at a local path.
+intents:
+  - list_files
+  - browse_directory
+tool: files_list
+args_schema:
+  type: object
+  properties:
+    path:
+      type: string
+      minLength: 1
+      maxLength: 512
+    recursive:
+      type: boolean
+  required:
+    - path
+requires_tier1: true

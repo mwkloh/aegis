@@ -1,0 +1,17 @@
+id: file_info
+version: 0.1.0
+description: Get metadata (size, dates, type) for a local file or directory.
+intents:
+  - file_info
+  - file_metadata
+tool: files_stat
+args_schema:
+  type: object
+  properties:
+    path:
+      type: string
+      minLength: 1
+      maxLength: 512
+  required:
+    - path
+requires_tier1: true

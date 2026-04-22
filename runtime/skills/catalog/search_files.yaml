@@ -1,0 +1,28 @@
+id: search_files
+version: 0.1.0
+description: Search for files matching a glob pattern within a local directory.
+intents:
+  - search_files
+  - find_files
+tool: files_search
+args_schema:
+  type: object
+  properties:
+    directory:
+      type: string
+      minLength: 1
+      maxLength: 512
+    pattern:
+      type: string
+      minLength: 1
+      maxLength: 256
+    kind:
+      type: string
+      enum:
+        - file
+        - directory
+        - any
+  required:
+    - directory
+    - pattern
+requires_tier1: true

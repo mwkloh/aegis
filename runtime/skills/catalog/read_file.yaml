@@ -1,0 +1,17 @@
+id: read_file
+version: 0.1.0
+description: Read the text content of a local file.
+intents:
+  - read_file
+  - open_file
+tool: files_read
+args_schema:
+  type: object
+  properties:
+    path:
+      type: string
+      minLength: 1
+      maxLength: 512
+  required:
+    - path
+requires_tier1: true

@@ -157,7 +157,17 @@ def build_pipeline(config: AegisConfig | None = None) -> Pipeline:
         )
 
     runner = SkillRunner(tier1=tier1)
-    harness = HarnessAdapter()
+
+    from runtime.files.client import FilesClient  # noqa: PLC0415
+    from runtime.harness import DEFAULT_TOOLS  # noqa: PLC0415
+    from runtime.harness.tools.files_tool import make_files_tools  # noqa: PLC0415
+
+    try:
+        _files_client = FilesClient(cfg.files.allowed_roots)
+        _file_tools = make_files_tools(_files_client)
+    except ValueError:
+        _file_tools = {}
+    harness = HarnessAdapter(tools={**DEFAULT_TOOLS, **_file_tools})
     return Pipeline(registry, classifier, runner, harness, events)
 
 
