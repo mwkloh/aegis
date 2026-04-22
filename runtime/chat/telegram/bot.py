@@ -350,6 +350,7 @@ async def route_chat(
     intent_router: IntentRouter | None = None,
     long_runner: LongRunningRunner | None = None,
     skill_arg_resolver: SkillArgResolver | None = None,
+    harness_dispatcher: Any | None = None,
 ) -> None:
     """Handle non-slash conversational messages.
 
@@ -438,6 +439,17 @@ async def route_chat(
                 "telegram.chat.intent_dispatched",
                 extra={"chat_id": chat_id, "skill_id": hit.id},
             )
+            return
+
+    # HarnessDispatcher intercept: tool-use intents bypass ChatPipeline entirely.
+    if harness_dispatcher is not None and text:
+        from runtime.chat.telegram.harness_dispatcher import DispatchOutcome  # noqa: PLC0415
+        outcome = await harness_dispatcher.dispatch(
+            chat_id=chat_id,
+            user_text=text,
+            message=message,
+        )
+        if outcome != DispatchOutcome.PASS:
             return
 
     # Hybrid indicator: header ChatAction + inline placeholder bubble.

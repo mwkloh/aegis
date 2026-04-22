@@ -306,3 +306,41 @@ async def test_synthesis_failure_falls_back_to_raw() -> None:
     assert outcome == DispatchOutcome.FIRED
     assert len(message.replies) == 1
     assert len(message.replies[0]) <= 3500
+
+
+# ---------------------------------------------------------------------------
+# route_chat integration
+# ---------------------------------------------------------------------------
+
+
+async def test_route_chat_dispatcher_fires_before_pipeline() -> None:
+    """When dispatcher returns FIRED, the pipeline is never called."""
+    from types import SimpleNamespace
+
+    from runtime.chat.telegram.bot import route_chat
+
+    pipeline_called = False
+
+    class _FakePipeline:
+        async def turn(self, chat_id: str, text: str) -> str:
+            nonlocal pipeline_called
+            pipeline_called = True
+            return "pipeline reply"
+
+    dispatcher = _make_dispatcher(classifier=_StubClassifier("list_files", 0.9))
+    message = _FakeMessage(text="list my downloads folder")
+    update = SimpleNamespace(
+        effective_chat=SimpleNamespace(id=123),
+        effective_user=SimpleNamespace(id=123),
+        effective_message=message,
+    )
+
+    await route_chat(
+        update,
+        None,
+        pipeline=_FakePipeline(),
+        harness_dispatcher=dispatcher,
+    )
+
+    assert not pipeline_called
+    assert len(message.replies) == 1
