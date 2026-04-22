@@ -37,3 +37,11 @@ def test_harness_traps_exception_from_tool() -> None:
     result = HarnessAdapter().execute(intent)
     assert result.status == "error"
     assert "TypeError" in (result.error or "")
+
+
+def test_has_tool_returns_true_for_registered() -> None:
+    assert HarnessAdapter().has_tool("echo") is True
+
+
+def test_has_tool_returns_false_for_unknown() -> None:
+    assert HarnessAdapter().has_tool("nonexistent") is False

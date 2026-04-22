@@ -43,3 +43,6 @@ class HarnessAdapter:
         except Exception as exc:
             return ToolResult(status="error", error=f"{type(exc).__name__}: {exc}")
         return ToolResult(status="ok", payload=payload)
+
+    def has_tool(self, name: str) -> bool:
+        return name in self._tools
