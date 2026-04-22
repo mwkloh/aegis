@@ -117,6 +117,29 @@ class StorageConfig(BaseModel):
         return Path(v).expanduser()
 
 
+class FilesConfig(BaseModel):
+    """Sandboxed filesystem access config for /files and file harness tools."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    allowed_roots: list[Path] = Field(
+        default_factory=lambda: [
+            Path.home() / "Documents",
+            Path.home() / "Downloads",
+            Path.home() / "Desktop",
+            Path.home() / "Development",
+            Path.home() / "data",
+        ]
+    )
+
+    @field_validator("allowed_roots", mode="before")
+    @classmethod
+    def _expand_roots(cls, v: object) -> list[Path]:
+        if not isinstance(v, list):
+            return []
+        return [Path(str(r)).expanduser() for r in v if isinstance(r, str) and r.strip()]
+
+
 class AegisConfig(BaseModel):
     """Top-level config object — the only thing runtime code should import."""
 
@@ -128,6 +151,7 @@ class AegisConfig(BaseModel):
     storage: StorageConfig = Field(default_factory=StorageConfig)
     vault_indexing: VaultIndexingConfig = Field(default_factory=VaultIndexingConfig)
     board: BoardConfig = Field(default_factory=BoardConfig)
+    files: FilesConfig = Field(default_factory=FilesConfig)
 
     @field_validator("aegis_home", "aegis_root")
     @classmethod
@@ -223,6 +247,7 @@ def _coerce(env: dict[str, str], cfg: dict[str, Any]) -> dict[str, Any]:
         "storage": StorageConfig(),
         "vault_indexing": _coerce_vault_indexing(cfg.get("vaultIndexing")),
         "board": board,
+        "files": _coerce_files(cfg.get("files")),
     }
 
 
@@ -302,6 +327,22 @@ def _coerce_board(raw: Any, env: dict[str, str]) -> BoardConfig:
     except Exception:
         logger.warning("config.board.invalid", exc_info=True)
         return BoardConfig()
+
+
+def _coerce_files(raw: Any) -> FilesConfig:
+    """Build a `FilesConfig` from `config.json` → `files`.
+
+    Missing / non-dict → default (5 standard macOS dirs).
+    """
+    if not isinstance(raw, dict):
+        return FilesConfig()
+    roots_raw = raw.get("allowed_roots") or raw.get("allowedRoots")
+    if isinstance(roots_raw, list):
+        try:
+            return FilesConfig(allowed_roots=roots_raw)
+        except (ValueError, TypeError):
+            pass
+    return FilesConfig()
 
 
 @lru_cache(maxsize=1)
