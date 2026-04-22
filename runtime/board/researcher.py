@@ -64,9 +64,9 @@ class BraveSearchClient:
                 raise BraveSearchError("timeout") from exc
             except httpx.HTTPError as exc:
                 raise BraveSearchError(f"http error: {exc}") from exc
-        if resp.status_code >= 400:
-            raise BraveSearchError(f"api error: {resp.status_code}")
-        data = resp.json()
+            if resp.status_code >= 400:
+                raise BraveSearchError(f"api error {resp.status_code}: {resp.text[:200]}")
+            data = resp.json()
         results: list[SearchResult] = []
         for item in data.get("web", {}).get("results", []):
             results.append(

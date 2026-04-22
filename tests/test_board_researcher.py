@@ -54,7 +54,7 @@ async def test_client_parses_200_into_search_results() -> None:
 async def test_client_raises_on_401() -> None:
     respx.get(_BRAVE_URL).mock(return_value=httpx.Response(401, json={"error": "bad key"}))
     client = BraveSearchClient("bad-key", top_k=5, timeout_s=5.0)
-    with pytest.raises(BraveSearchError):
+    with pytest.raises(BraveSearchError, match="401"):
         await client.search("anything")
 
 
