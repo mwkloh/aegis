@@ -74,7 +74,8 @@ class BoardRunner:
     async def run(
         self, *, chat_id: int, cmd: ParsedCommand, message: _Replyable
     ) -> None:
-        args = list(cmd.args)
+        # Telegram autocorrect turns -- into — (em dash); normalise before flag check.
+        args = [a.replace("—", "--") for a in cmd.args]
         research_mode = "--research" in args
         if research_mode:
             args.remove("--research")

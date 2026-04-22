@@ -335,3 +335,22 @@ async def test_research_flag_not_passed_to_engine(tmp_path: Path) -> None:
     )
     assert len(engine.calls) == 1
     assert "--research" not in engine.calls[0]
+
+
+async def test_em_dash_research_flag_is_normalised(tmp_path: Path) -> None:
+    """Telegram autocorrect converts -- to — (em dash); both must trigger research mode."""
+    engine = _StubEngine(result=_result())
+    writer = BoardWriter(output_dir=tmp_path)
+    researcher = _StubResearcher(ctx=_make_research_ctx())
+    runner = BoardRunner(
+        engine=engine, writer=writer, registry=InFlightRegistry(), researcher=researcher
+    )
+    msg = _FakeReplyable()
+    await runner.run(
+        chat_id=1,
+        cmd=ParsedCommand(name="/board", args=("—research", "agentic", "platforms")),
+        message=msg,
+    )
+    assert len(engine.calls) == 1
+    assert "—research" not in engine.calls[0]
+    assert "agentic platforms" in engine.calls[0]
