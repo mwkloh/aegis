@@ -113,7 +113,10 @@ class BoardRunner:
                 result = await self._engine.run(question)
             except Exception:
                 logger.exception("telegram.board.engine_failed", extra={"chat_id": chat_id})
-                await sent.edit_text("/board internal error")
+                error_body = "/board internal error"
+                if research_note:
+                    error_body = research_note + "\n\n" + error_body
+                await sent.edit_text(error_body)
                 return
             path_or_none = self._try_write(result, chat_id=chat_id)
             body = self._format(result, path_or_none)
