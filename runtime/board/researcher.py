@@ -8,8 +8,11 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
+from typing import Final
 
 import httpx
+
+_HTTP_ERROR_MIN: Final[int] = 400
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +94,7 @@ class BraveSearchClient:
                 raise BraveSearchError("timeout") from exc
             except httpx.HTTPError as exc:
                 raise BraveSearchError(f"http error: {exc}") from exc
-            if resp.status_code >= 400:
+            if resp.status_code >= _HTTP_ERROR_MIN:
                 raise BraveSearchError(f"api error {resp.status_code}: {resp.text[:200]}")
             data = resp.json()
         results: list[SearchResult] = []
