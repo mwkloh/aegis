@@ -212,7 +212,7 @@ def _coerce(env: dict[str, str], cfg: dict[str, Any]) -> dict[str, Any]:
         bot_token=env.get("TELEGRAM_BOT_TOKEN"),
         user_allowlist=allow,
     )
-    board = _coerce_board(cfg.get("board"))
+    board = _coerce_board(cfg.get("board"), env)
     return {
         "models": models,
         "providers": providers,
@@ -274,17 +274,27 @@ def _coerce_vault_indexing(raw: Any) -> VaultIndexingConfig:
     )
 
 
-def _coerce_board(raw: Any) -> BoardConfig:
-    """Build a `BoardConfig` from `config.json` → `board`.
+def _coerce_board(raw: Any, env: dict[str, str]) -> BoardConfig:
+    """Build a `BoardConfig` from `config.json` → `board` + env.
 
-    Missing / non-dict → default (empty panelists, no synthesis).
-    Invalid panelist entries raise at `BoardConfig(**...)` — operator
-    should fix the config rather than silently lose a panelist.
+    Reads BRAVE_SEARCH_API_KEY from env and injects it into the research
+    block (overriding the ${VAR} placeholder). Key absent → research=None.
+    Missing / non-dict raw → default (empty panelists, no research).
     """
     if not isinstance(raw, dict):
         return BoardConfig()
+    board_raw = dict(raw)
+    research_raw = board_raw.get("research")
+    brave_key = env.get("BRAVE_SEARCH_API_KEY")
+    if isinstance(research_raw, dict):
+        if brave_key:
+            research_copy = dict(research_raw)
+            research_copy["brave_api_key"] = brave_key
+            board_raw["research"] = research_copy
+        else:
+            board_raw.pop("research", None)
     try:
-        return BoardConfig.model_validate(raw)
+        return BoardConfig.model_validate(board_raw)
     except Exception:
         return BoardConfig()
 
