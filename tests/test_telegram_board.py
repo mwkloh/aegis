@@ -337,8 +337,9 @@ async def test_research_flag_not_passed_to_engine(tmp_path: Path) -> None:
     assert "--research" not in engine.calls[0]
 
 
-async def test_em_dash_research_flag_is_normalised(tmp_path: Path) -> None:
-    """Telegram autocorrect converts -- to — (em dash); both must trigger research mode."""
+@pytest.mark.parametrize("flag", ["—research", "-research"])
+async def test_research_flag_variants_are_normalised(tmp_path: Path, flag: str) -> None:
+    """Telegram autocorrect (em dash) and single-hyphen variant both trigger research mode."""
     engine = _StubEngine(result=_result())
     writer = BoardWriter(output_dir=tmp_path)
     researcher = _StubResearcher(ctx=_make_research_ctx())
@@ -348,9 +349,9 @@ async def test_em_dash_research_flag_is_normalised(tmp_path: Path) -> None:
     msg = _FakeReplyable()
     await runner.run(
         chat_id=1,
-        cmd=ParsedCommand(name="/board", args=("—research", "agentic", "platforms")),
+        cmd=ParsedCommand(name="/board", args=(flag, "agentic", "platforms")),
         message=msg,
     )
     assert len(engine.calls) == 1
-    assert "—research" not in engine.calls[0]
+    assert flag not in engine.calls[0]
     assert "agentic platforms" in engine.calls[0]
