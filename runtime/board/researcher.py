@@ -35,7 +35,34 @@ class ResearchContext:
 
 
 class BoardResearcher:
-    """Stub — full implementation comes in Task 3."""
+    """Fetch Brave Search snippets and format them for prompt injection."""
+
+    def __init__(self, client: BraveSearchClient) -> None:
+        self._client = client
+
+    async def fetch(self, question: str) -> ResearchContext | None:
+        started = time.perf_counter()
+        try:
+            results = await self._client.search(question)
+        except BraveSearchError:
+            logger.warning("board.researcher.fetch_failed", exc_info=True)
+            return None
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        return ResearchContext(
+            query=question,
+            results=tuple(results),
+            elapsed_ms=elapsed_ms,
+        )
+
+    @staticmethod
+    def format_context(ctx: ResearchContext) -> str:
+        lines = ["[Research context — Brave Search]"]
+        for i, r in enumerate(ctx.results, 1):
+            lines.append(f"{i}. {r.title}")
+            lines.append(f"   {r.url}")
+            lines.append(f"   {r.description}")
+        lines.append("---")
+        return "\n".join(lines)
 
 
 class BraveSearchClient:
@@ -77,3 +104,12 @@ class BraveSearchClient:
                 )
             )
         return results
+
+
+__all__ = [
+    "BoardResearcher",
+    "BraveSearchClient",
+    "BraveSearchError",
+    "ResearchContext",
+    "SearchResult",
+]

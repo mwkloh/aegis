@@ -83,3 +83,59 @@ async def test_client_returns_empty_list_when_no_results() -> None:
     client = BraveSearchClient("BSA-test", top_k=5, timeout_s=5.0)
     results = await client.search("obscure query")
     assert results == []
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_researcher_fetch_returns_context_on_success() -> None:
+    respx.get(_BRAVE_URL).mock(return_value=httpx.Response(200, json=_SAMPLE_RESPONSE))
+    client = BraveSearchClient("BSA-test", top_k=5, timeout_s=5.0)
+    researcher = BoardResearcher(client)
+    ctx = await researcher.fetch("local LLMs")
+    assert ctx is not None
+    assert ctx.query == "local LLMs"
+    assert len(ctx.results) == 2
+    assert ctx.elapsed_ms >= 0
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_researcher_fetch_returns_none_on_api_failure() -> None:
+    respx.get(_BRAVE_URL).mock(return_value=httpx.Response(500, json={}))
+    client = BraveSearchClient("BSA-test", top_k=5, timeout_s=5.0)
+    researcher = BoardResearcher(client)
+    ctx = await researcher.fetch("anything")
+    assert ctx is None
+
+
+def test_format_context_produces_numbered_block() -> None:
+    ctx = ResearchContext(
+        query="local LLMs",
+        results=(
+            SearchResult(
+                title="Local LLMs in 2025",
+                url="https://example.com/llms",
+                description="A roundup.",
+            ),
+        ),
+        elapsed_ms=42,
+    )
+    researcher = BoardResearcher(BraveSearchClient("k"))
+    text = researcher.format_context(ctx)
+    assert "[Research context — Brave Search]" in text
+    assert "1. Local LLMs in 2025" in text
+    assert "https://example.com/llms" in text
+    assert "A roundup." in text
+    assert "---" in text
+
+
+def test_format_context_handles_multiple_results() -> None:
+    results = tuple(
+        SearchResult(title=f"T{i}", url=f"https://u{i}.com", description=f"D{i}")
+        for i in range(5)
+    )
+    ctx = ResearchContext(query="q", results=results, elapsed_ms=0)
+    researcher = BoardResearcher(BraveSearchClient("k"))
+    text = researcher.format_context(ctx)
+    for i in range(5):
+        assert f"{i + 1}. T{i}" in text
