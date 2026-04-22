@@ -139,6 +139,7 @@ def build_dispatcher(
     heartbeat_path: Path | None = None,
     health_store: ScheduledJobStore | None = None,
     fire_now_fn: Callable[[str], None] | None = None,
+    files_client: object | None = None,
 ) -> Dispatcher:
     """Assemble a `Dispatcher` wired with both read and write slashes.
 
@@ -170,6 +171,7 @@ def build_dispatcher(
         vault_state=vault_state,
         heartbeat_path=heartbeat_path,
         health_store=health_store,
+        files_client=files_client,
     )
     write = build_write_handlers(
         workspace,
@@ -1029,6 +1031,12 @@ def build_application(  # noqa: PLR0912, PLR0915 - top-level assembly seam; each
             vault_root=cfg.vault_indexing.vault_root,
         )
     board_runner = build_board_stack(cfg, registry=long_runner.registry)
+    from runtime.files.client import FilesClient  # noqa: PLC0415
+    try:
+        files_client: object | None = FilesClient(cfg.files.allowed_roots)
+    except ValueError:
+        logger.warning("files.disabled", extra={"reason": "no_allowed_roots"})
+        files_client = None
     if skill_arg_resolver is None:
         skill_arg_resolver = build_skill_arg_resolver(cfg)
 
@@ -1112,6 +1120,7 @@ def build_application(  # noqa: PLR0912, PLR0915 - top-level assembly seam; each
             heartbeat_path=heartbeat_path,
             health_store=scheduler_store,
             fire_now_fn=fire_now_fn,
+            files_client=files_client,
         )
     if chat_pipeline is None:
         chat_pipeline = build_chat_pipeline(cfg, events=events, vault_loader=vault_loader)

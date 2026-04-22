@@ -22,6 +22,7 @@ from runtime.chat.memory.recall import VaultBodyLoader
 from runtime.chat.memory.tier2 import ColdRef, Tier2Store
 from runtime.chat.memory.vault_indexer import ReindexResult, VaultIndexer
 from runtime.chat.telegram.cron_handler import cron_handler
+from runtime.chat.telegram.files_handler import files_handler
 from runtime.skills import SkillRegistry
 from runtime.chat.telegram.dispatch import Handler, IncomingMessage, ParsedCommand
 from runtime.chat.telegram.formatters import (
@@ -232,6 +233,10 @@ DEFAULT_COMMAND_HELP: dict[str, str] = {
         "| pause <id> | resume <id>."
     ),
     "/board": "Fan a question out to configured panelists and save the full board to a file. Use -research to pre-fetch Brave Search context before fan-out.",
+    "/files": (
+        "Filesystem access: ls [-r], read, stat, find, mv, cp, rm [--confirm], mkdir, open. "
+        "Paths sandboxed to config files.allowed_roots."
+    ),
     "/restart": "Restart the bot process (refused while a command is in flight).",
     "/logs": (
         f"Tail today's last N structural events "
@@ -457,6 +462,7 @@ def build_read_only_handlers(
     vault_state: VaultState | None = None,
     heartbeat_path: Path | None = None,
     health_store: ScheduledJobStore | None = None,
+    files_client: object | None = None,   # FilesClient | None — avoid circular import
 ) -> dict[str, Handler]:
     """Map slash → handler for every read-only Phase 7 command.
 
@@ -499,6 +505,8 @@ def build_read_only_handlers(
             health_store,
             clock=clock,
         )
+    if files_client is not None:
+        handlers["/files"] = files_handler(client=files_client)  # type: ignore[arg-type]
     return handlers
 
 
