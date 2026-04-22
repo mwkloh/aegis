@@ -167,6 +167,7 @@ def build_pipeline(config: AegisConfig | None = None) -> Pipeline:
         _file_tools = make_files_tools(_files_client)
     except ValueError:
         _file_tools = {}
+    # file tools namespaced with "files_" so no collision risk with builtins
     harness = HarnessAdapter(tools={**DEFAULT_TOOLS, **_file_tools})
     return Pipeline(registry, classifier, runner, harness, events)
 

@@ -1,6 +1,7 @@
 """Harness tool callables for read-only filesystem access."""
 from __future__ import annotations
 
+import functools
 from collections.abc import Callable
 from typing import Any
 
@@ -15,6 +16,7 @@ def make_files_tools(
     """Return the four read-only harness callables closed over `client`."""
 
     def _wrap(fn: Callable[[dict[str, Any]], dict[str, Any]]) -> Callable[[dict[str, Any]], dict[str, Any]]:
+        @functools.wraps(fn)
         def wrapper(args: dict[str, Any]) -> dict[str, Any]:
             try:
                 return fn(args)

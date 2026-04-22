@@ -80,7 +80,7 @@ def test_files_read_truncates_long_content(tools: dict, stub: _StubClient) -> No
     stub.content = "x" * 5000
     result = tools["files_read"]({"path": "/x/doc.txt"})
     assert "truncated" in result["result"]
-    assert len(result["result"]) < 5000
+    assert len(result["result"]) <= 3514  # 3500 chars + len("… (truncated)")
 
 
 def test_files_stat_returns_key_value(tools: dict) -> None:
@@ -110,6 +110,12 @@ def test_file_too_big_raises_runtime_error(tools: dict, stub: _StubClient) -> No
     stub.raise_on_next = FileTooBig("too big")
     with pytest.raises(RuntimeError, match="too big"):
         tools["files_read"]({"path": "/x/huge.bin"})
+
+
+def test_oserror_raises_runtime_error(tools: dict, stub: _StubClient) -> None:
+    stub.raise_on_next = OSError("disk error")
+    with pytest.raises(RuntimeError, match="disk error"):
+        tools["files_list"]({"path": "/x"})
 
 
 def test_make_files_tools_returns_four_callables(tools: dict) -> None:
