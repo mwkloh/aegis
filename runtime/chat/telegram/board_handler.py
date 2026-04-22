@@ -48,7 +48,7 @@ class _EngineLike(Protocol):
 class _WriterLike(Protocol):
     @property
     def output_dir(self) -> Any: ...
-    def write(self, result: BoardResult) -> Any: ...
+    def write(self, result: BoardResult, *, research_context: Any = None) -> Any: ...
 
 
 class BoardRunner:
@@ -102,9 +102,10 @@ class BoardRunner:
             f"Running board ({self._engine.panelist_count} panelists{mode_suffix})..."
         )
         research_note: str | None = None
+        ctx: ResearchContext | None = None
         try:
             if research_mode and self._researcher is not None:
-                ctx: ResearchContext | None = await self._researcher.fetch(question)
+                ctx = await self._researcher.fetch(question)
                 if ctx is not None and ctx.results:
                     question = self._researcher.format_context(ctx) + "\n\n" + question
                 else:
@@ -118,7 +119,7 @@ class BoardRunner:
                     error_body = research_note + "\n\n" + error_body
                 await sent.edit_text(error_body)
                 return
-            path_or_none = self._try_write(result, chat_id=chat_id)
+            path_or_none = self._try_write(result, chat_id=chat_id, research_context=ctx)
             body = self._format(result, path_or_none)
             if research_note:
                 body = research_note + "\n\n" + body
@@ -126,9 +127,15 @@ class BoardRunner:
         finally:
             self._registry.release(chat_id)
 
-    def _try_write(self, result: BoardResult, *, chat_id: int) -> Any:
+    def _try_write(
+        self,
+        result: BoardResult,
+        *,
+        chat_id: int,
+        research_context: ResearchContext | None = None,
+    ) -> Any:
         try:
-            return self._writer.write(result)
+            return self._writer.write(result, research_context=research_context)
         except Exception:
             logger.exception("telegram.board.write_failed", extra={"chat_id": chat_id})
             return None

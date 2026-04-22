@@ -8,8 +8,12 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from runtime.board.engine import BoardResult
+
+if TYPE_CHECKING:
+    from runtime.board.researcher import ResearchContext
 
 _SLUG_PATTERN = re.compile(r"[^a-z0-9]+")
 _MAX_SLUG_CHARS = 60
@@ -27,11 +31,16 @@ class BoardWriter:
     def output_dir(self) -> Path:
         return self._output_dir
 
-    def write(self, result: BoardResult) -> Path:
+    def write(
+        self,
+        result: BoardResult,
+        *,
+        research_context: ResearchContext | None = None,
+    ) -> Path:
         self._output_dir.mkdir(parents=True, exist_ok=True)
         filename = self._filename(result)
         path = self._output_dir / filename
-        path.write_text(self._render(result), encoding="utf-8")
+        path.write_text(self._render(result, research_context), encoding="utf-8")
         return path
 
     def _filename(self, result: BoardResult) -> str:
@@ -47,9 +56,13 @@ class BoardWriter:
             slug = slug[:_MAX_SLUG_CHARS].rstrip("-")
         return slug or "board"
 
-    def _render(self, result: BoardResult) -> str:
+    def _render(
+        self,
+        result: BoardResult,
+        research_context: ResearchContext | None = None,
+    ) -> str:
         parts: list[str] = []
-        parts.append(self._frontmatter(result))
+        parts.append(self._frontmatter(result, research_context))
         parts.append("")
         parts.append(f"# Board: {result.question}")
         parts.append("")
@@ -74,11 +87,20 @@ class BoardWriter:
             parts.append("")
         return "\n".join(parts)
 
-    def _frontmatter(self, result: BoardResult) -> str:
+    def _frontmatter(
+        self,
+        result: BoardResult,
+        research_context: ResearchContext | None = None,
+    ) -> str:
         lines = ["---"]
         lines.append(f"board_id: {result.board_id}")
         lines.append(f'question: "{self._escape_yaml(result.question)}"')
         lines.append(f"date: {result.created_at.strftime('%Y-%m-%d')}")
+        if research_context is not None and research_context.results:
+            lines.append("research_sources:")
+            for src in research_context.results:
+                lines.append(f'  - title: "{self._escape_yaml(src.title)}"')
+                lines.append(f"    url: {src.url}")
         lines.append("panelists:")
         for r in result.panelist_responses:
             lines.append(f"  - name: {r.name}")
