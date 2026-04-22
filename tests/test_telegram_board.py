@@ -299,3 +299,22 @@ async def test_board_without_research_flag_never_calls_researcher(tmp_path: Path
     )
     assert researcher.calls == []
     assert engine.calls == ["Should we migrate?"]
+
+
+async def test_research_empty_results_runs_engine_with_original_question(tmp_path: Path) -> None:
+    engine = _StubEngine(result=_result())
+    writer = BoardWriter(output_dir=tmp_path)
+    empty_ctx = ResearchContext(query="q", results=(), elapsed_ms=0)
+    researcher = _StubResearcher(ctx=empty_ctx)
+    runner = BoardRunner(
+        engine=engine, writer=writer, registry=InFlightRegistry(), researcher=researcher
+    )
+    msg = _FakeReplyable()
+    await runner.run(
+        chat_id=1,
+        cmd=ParsedCommand(name="/board", args=("--research", "local", "LLMs")),
+        message=msg,
+    )
+    assert engine.calls == ["local LLMs"]
+    final = msg.replies[0].edits[-1]
+    assert "unavailable" in final.lower()
