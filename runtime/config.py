@@ -289,13 +289,14 @@ def _coerce_board(raw: Any, env: dict[str, str]) -> BoardConfig:
     board_raw = dict(raw)
     research_raw = board_raw.get("research")
     brave_key = env.get("BRAVE_SEARCH_API_KEY")
-    if isinstance(research_raw, dict):
-        if brave_key:
-            research_copy = dict(research_raw)
-            research_copy["brave_api_key"] = brave_key
-            board_raw["research"] = research_copy
-        else:
-            board_raw.pop("research", None)
+    if brave_key:
+        # Build research block from env key; preserve any top_k/timeout_s from config
+        research_copy = dict(research_raw) if isinstance(research_raw, dict) else {}
+        research_copy["brave_api_key"] = brave_key
+        board_raw["research"] = research_copy
+    elif isinstance(research_raw, dict):
+        # research block present in config but no key in env → drop it
+        board_raw.pop("research", None)
     try:
         return BoardConfig.model_validate(board_raw)
     except Exception:

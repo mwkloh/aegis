@@ -78,3 +78,14 @@ def test_coerce_board_no_research_block_gives_none() -> None:
     raw = {"panelists": []}
     cfg = _coerce_board(raw, {})
     assert cfg.research is None
+
+
+def test_coerce_board_builds_research_from_env_key_alone_no_config_block() -> None:
+    # Key in env is sufficient — no research block needed in config.json
+    raw = {"panelists": []}
+    env = {"BRAVE_SEARCH_API_KEY": "BSA-from-env"}
+    cfg = _coerce_board(raw, env)
+    assert cfg.research is not None
+    assert cfg.research.brave_api_key == "BSA-from-env"
+    assert cfg.research.top_k == 5        # default
+    assert cfg.research.timeout_s == 10.0  # default
