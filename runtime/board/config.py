@@ -38,11 +38,20 @@ class SynthesisConfig(BaseModel):
     max_tokens: int = Field(default=512, ge=1, le=8192)
 
 
+class ResearchConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    brave_api_key: str = Field(min_length=1, repr=False)
+    top_k: int = Field(default=5, ge=1, le=10)
+    timeout_s: float = Field(default=10.0, ge=1.0, le=60.0)
+
+
 class BoardConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     panelists: list[PanelistConfig] = Field(default_factory=list)
     synthesis: SynthesisConfig | None = None
+    research: ResearchConfig | None = None
     output_dir: Path = Field(
         default_factory=lambda: Path.home() / ".aegis" / "boards"
     )
