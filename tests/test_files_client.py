@@ -102,13 +102,10 @@ def test_read_file_too_big(client: FilesClient, tmp_path: Path) -> None:
     p = tmp_path / "big.bin"
     p.write_text("x")
     import runtime.files.client as mod
-    original = mod.MAX_READ_BYTES
-    mod.MAX_READ_BYTES = 0  # every file is "too big"
-    try:
+    from unittest.mock import patch
+    with patch.object(mod, "MAX_READ_BYTES", 0):
         with pytest.raises(FileTooBig):
             client.read_file(str(p))
-    finally:
-        mod.MAX_READ_BYTES = original
 
 
 def test_read_file_denied_outside_root(client: FilesClient) -> None:

@@ -46,7 +46,7 @@ class FileInfo:
 
 
 def _glob_to_regex(pattern: str) -> re.Pattern[str]:
-    escaped = re.escape(pattern).replace(r"\*", ".*").replace(r"\?", ".")
+    escaped = re.escape(pattern).replace(r"\*", "[^/]*").replace(r"\?", "[^/]")
     return re.compile(f"^{escaped}$", re.IGNORECASE)
 
 
