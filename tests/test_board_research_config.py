@@ -34,3 +34,10 @@ def test_board_config_accepts_research_block() -> None:
     cfg = BoardConfig(research=ResearchConfig(brave_api_key="BSA-test", top_k=3))
     assert cfg.research is not None
     assert cfg.research.top_k == 3
+
+
+def test_research_config_rejects_timeout_s_out_of_range() -> None:
+    with pytest.raises(ValidationError):
+        ResearchConfig(brave_api_key="key", timeout_s=0.5)
+    with pytest.raises(ValidationError):
+        ResearchConfig(brave_api_key="key", timeout_s=61.0)
