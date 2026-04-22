@@ -9,17 +9,23 @@ reply; the runner itself never raises.
 from __future__ import annotations
 
 import logging
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from runtime.board.engine import BoardResult
 from runtime.chat.telegram.dispatch import ParsedCommand
 from runtime.chat.telegram.long_running import InFlightRegistry
 
+if TYPE_CHECKING:
+    from runtime.board.researcher import BoardResearcher, ResearchContext
+
 logger = logging.getLogger(__name__)
 
-_USAGE = "Usage: /board <question>"
+_USAGE = "Usage: /board [--research] <question>"
 _NOT_CONFIGURED = (
     "/board is not configured — add `board.panelists` to ~/.aegis/config.json."
+)
+_NOT_CONFIGURED_RESEARCH = (
+    "Research not configured — add BRAVE_SEARCH_API_KEY to ~/.aegis/.env"
 )
 _MAX_TELEGRAM_CHARS = 3500
 _SYNTHESIS_EXCERPT_CHARS = 400
@@ -57,21 +63,31 @@ class BoardRunner:
         writer: _WriterLike,
         registry: InFlightRegistry,
         excerpt_chars: int = 300,
+        researcher: BoardResearcher | None = None,
     ) -> None:
         self._engine = engine
         self._writer = writer
         self._registry = registry
         self._excerpt_chars = excerpt_chars
+        self._researcher = researcher
 
     async def run(
         self, *, chat_id: int, cmd: ParsedCommand, message: _Replyable
     ) -> None:
-        question = " ".join(cmd.args).strip()
+        args = list(cmd.args)
+        research_mode = "--research" in args
+        if research_mode:
+            args.remove("--research")
+        question = " ".join(args).strip()
+
         if not question:
             await message.reply_text(_USAGE)
             return
         if self._engine.panelist_count == 0:
             await message.reply_text(_NOT_CONFIGURED)
+            return
+        if research_mode and self._researcher is None:
+            await message.reply_text(_NOT_CONFIGURED_RESEARCH)
             return
         if not self._registry.try_acquire(chat_id, "/board"):
             current = self._registry.current(chat_id) or "another command"
@@ -80,10 +96,19 @@ class BoardRunner:
                 "Wait for it to finish before starting another."
             )
             return
+
+        mode_suffix = ", research on" if research_mode else ""
         sent = await message.reply_text(
-            f"Running board ({self._engine.panelist_count} panelists)..."
+            f"Running board ({self._engine.panelist_count} panelists{mode_suffix})..."
         )
+        research_note: str | None = None
         try:
+            if research_mode and self._researcher is not None:
+                ctx: ResearchContext | None = await self._researcher.fetch(question)
+                if ctx is not None and ctx.results:
+                    question = self._researcher.format_context(ctx) + "\n\n" + question
+                else:
+                    research_note = "[Research unavailable — proceeding without context]"
             try:
                 result = await self._engine.run(question)
             except Exception:
@@ -92,6 +117,8 @@ class BoardRunner:
                 return
             path_or_none = self._try_write(result, chat_id=chat_id)
             body = self._format(result, path_or_none)
+            if research_note:
+                body = research_note + "\n\n" + body
             await sent.edit_text(_clip(body, _MAX_TELEGRAM_CHARS))
         finally:
             self._registry.release(chat_id)
@@ -130,9 +157,6 @@ class BoardRunner:
         return "\n".join(lines).rstrip() + "\n"
 
     def _render_markdown_inline(self, result: BoardResult) -> str:
-        # Minimal inline fallback: same structure the writer produces,
-        # but built by hand here to avoid reaching back into writer
-        # internals. This only runs when the writer failed — rare.
         parts = [f"# Board: {result.question}", ""]
         if result.synthesis is not None:
             parts += ["## Synthesis", "", result.synthesis, ""]

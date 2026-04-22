@@ -201,3 +201,101 @@ async def test_excerpt_truncated_to_configured_chars(tmp_path: Path) -> None:
     final = msg.replies[0].edits[-1]
     assert "x" * 120 in final
     assert "x" * 300 not in final
+
+
+# ── research flag tests ──────────────────────────────────────────────────────
+
+from runtime.board.researcher import ResearchContext, SearchResult
+
+
+class _StubResearcher:
+    """Minimal stand-in for BoardResearcher."""
+
+    def __init__(self, ctx: ResearchContext | None) -> None:
+        self._ctx = ctx
+        self.calls: list[str] = []
+
+    async def fetch(self, question: str) -> ResearchContext | None:
+        self.calls.append(question)
+        return self._ctx
+
+    def format_context(self, ctx: ResearchContext) -> str:
+        return "[RESEARCH BLOCK]"
+
+
+def _make_research_ctx() -> ResearchContext:
+    return ResearchContext(
+        query="q",
+        results=(SearchResult(title="T", url="https://u.com", description="D"),),
+        elapsed_ms=10,
+    )
+
+
+async def test_research_flag_enriches_question_passed_to_engine(tmp_path: Path) -> None:
+    engine = _StubEngine(result=_result())
+    writer = BoardWriter(output_dir=tmp_path)
+    researcher = _StubResearcher(ctx=_make_research_ctx())
+    runner = BoardRunner(
+        engine=engine, writer=writer, registry=InFlightRegistry(), researcher=researcher
+    )
+    msg = _FakeReplyable()
+    await runner.run(
+        chat_id=1,
+        cmd=ParsedCommand(name="/board", args=("--research", "local", "LLMs")),
+        message=msg,
+    )
+    assert len(engine.calls) == 1
+    assert "[RESEARCH BLOCK]" in engine.calls[0]
+    assert "local LLMs" in engine.calls[0]
+    assert "research on" in msg.replies[0].initial_text
+
+
+async def test_research_flag_with_no_researcher_returns_not_configured(tmp_path: Path) -> None:
+    engine = _StubEngine(result=_result())
+    writer = BoardWriter(output_dir=tmp_path)
+    runner = BoardRunner(
+        engine=engine, writer=writer, registry=InFlightRegistry(), researcher=None
+    )
+    msg = _FakeReplyable()
+    await runner.run(
+        chat_id=1,
+        cmd=ParsedCommand(name="/board", args=("--research", "q")),
+        message=msg,
+    )
+    assert engine.calls == []
+    assert "BRAVE_SEARCH_API_KEY" in msg.replies[0].initial_text
+
+
+async def test_research_fetch_failure_runs_engine_with_original_question(tmp_path: Path) -> None:
+    engine = _StubEngine(result=_result())
+    writer = BoardWriter(output_dir=tmp_path)
+    researcher = _StubResearcher(ctx=None)  # simulates fetch failure
+    runner = BoardRunner(
+        engine=engine, writer=writer, registry=InFlightRegistry(), researcher=researcher
+    )
+    msg = _FakeReplyable()
+    await runner.run(
+        chat_id=1,
+        cmd=ParsedCommand(name="/board", args=("--research", "local", "LLMs")),
+        message=msg,
+    )
+    assert engine.calls == ["local LLMs"]
+    final = msg.replies[0].edits[-1]
+    assert "unavailable" in final.lower()
+
+
+async def test_board_without_research_flag_never_calls_researcher(tmp_path: Path) -> None:
+    engine = _StubEngine(result=_result())
+    writer = BoardWriter(output_dir=tmp_path)
+    researcher = _StubResearcher(ctx=_make_research_ctx())
+    runner = BoardRunner(
+        engine=engine, writer=writer, registry=InFlightRegistry(), researcher=researcher
+    )
+    msg = _FakeReplyable()
+    await runner.run(
+        chat_id=1,
+        cmd=ParsedCommand(name="/board", args=("Should", "we", "migrate?")),
+        message=msg,
+    )
+    assert researcher.calls == []
+    assert engine.calls == ["Should we migrate?"]
