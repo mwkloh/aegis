@@ -44,6 +44,17 @@ def test_coerce_files_falls_back_on_non_dict() -> None:
     assert isinstance(cfg, FilesConfig)
 
 
+def test_files_config_path_objects_are_accepted() -> None:
+    cfg = FilesConfig(allowed_roots=[Path("~/Documents")])
+    assert len(cfg.allowed_roots) == 1
+    assert cfg.allowed_roots[0].is_absolute()
+
+
+def test_coerce_files_accepts_camel_case_key() -> None:
+    cfg = _coerce_files({"allowedRoots": ["~/Documents"]})
+    assert len(cfg.allowed_roots) == 1
+
+
 def test_aegis_config_has_files_field() -> None:
     cfg = AegisConfig()
     assert hasattr(cfg, "files")
