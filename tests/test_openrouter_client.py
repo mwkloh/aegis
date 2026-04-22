@@ -13,9 +13,9 @@ import pytest
 import respx
 
 from runtime.config import AegisConfig, ProviderConfig, get_config
-from runtime.model_router.clients import ChatMessage, ChatRequest, OpenRouterClient
-from runtime.model_router.clients import openrouter_client as _orc
-from runtime.model_router.clients.openrouter_client import (
+from runtime.llm.clients import ChatMessage, ChatRequest, OpenRouterClient
+from runtime.llm.clients import openrouter_client as _orc
+from runtime.llm.clients.openrouter_client import (
     OpenRouterAuthError,
     OpenRouterConfigError,
 )
@@ -151,7 +151,7 @@ async def test_chat_strips_invalid_openrouter_prefix(
         )
 
     with (
-        caplog.at_level("WARNING", logger="runtime.model_router.clients.openrouter_client"),
+        caplog.at_level("WARNING", logger="runtime.llm.clients.openrouter_client"),
         respx.mock(assert_all_called=True) as mock,
     ):
         mock.post("https://openrouter.ai/api/v1/chat/completions").mock(

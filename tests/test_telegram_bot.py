@@ -69,7 +69,7 @@ from runtime.config import (
 from runtime.events import EventStream
 from runtime.improvement.decisions import load_decisions
 from runtime.improvement.proposal_loader import derive_imp_id
-from runtime.model_router.router import LocalReadyProbe, ModelRouter
+from runtime.llm.router import LocalReadyProbe, ModelRouter
 from runtime.scheduler import (
     ScheduledJobStore,
     SchedulerEngine,

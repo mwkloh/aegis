@@ -12,8 +12,8 @@ import pytest
 import respx
 
 from runtime.config import AegisConfig, ProviderConfig, get_config
-from runtime.model_router.clients import ChatMessage, ChatRequest, OllamaClient
-from runtime.model_router.clients.ollama_client import OllamaHostError
+from runtime.llm.clients import ChatMessage, ChatRequest, OllamaClient
+from runtime.llm.clients.ollama_client import OllamaHostError
 
 
 def _config_with_base(url: str) -> AegisConfig:

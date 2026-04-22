@@ -20,8 +20,8 @@ from runtime.intent import (
     IntentClassifier,
     ModelBackedClassifier,
 )
-from runtime.model_router.clients import InstrumentedModelClient, OllamaClient
-from runtime.model_router.clients.openrouter_client import (
+from runtime.llm.clients import InstrumentedModelClient, OllamaClient
+from runtime.llm.clients.openrouter_client import (
     OpenRouterClient,
     OpenRouterConfigError,
 )

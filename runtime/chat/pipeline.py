@@ -46,7 +46,7 @@ from runtime.chat.memory.tier1 import Tier1Loader
 from runtime.chat.memory.tier3 import Tier3Store, Turn
 from runtime.chat.reply_verdict import annotate_unverified_claim
 from runtime.events import EventStream, EventType
-from runtime.model_router.clients.base import ChatMessage, ChatRequest, ModelClient
+from runtime.llm.clients.base import ChatMessage, ChatRequest, ModelClient
 from runtime.tools.record import load_tool_calls
 
 

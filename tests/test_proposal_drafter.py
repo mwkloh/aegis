@@ -10,7 +10,7 @@ import respx
 
 from runtime.config import get_config
 from runtime.events import EventStream
-from runtime.model_router.clients import OllamaClient
+from runtime.llm.clients import OllamaClient
 from runtime.reflection.patterns import PatternRecord
 from runtime.reflection.proposals import Proposal, draft
 

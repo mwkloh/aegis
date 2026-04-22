@@ -53,7 +53,7 @@ from runtime.improvement.decisions import (
     record_decision,
 )
 from runtime.improvement.proposal_loader import load_proposals
-from runtime.model_router.router import ModelRouter
+from runtime.llm.router import ModelRouter
 from runtime.scheduler.store import ScheduledJobStore
 
 Clock = Callable[[], datetime]

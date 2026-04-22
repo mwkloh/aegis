@@ -16,8 +16,8 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from runtime.events import EventStream, EventType
-from runtime.model_router.clients import ChatMessage, ModelClient
-from runtime.model_router.structured_output import request_structured
+from runtime.llm.clients import ChatMessage, ModelClient
+from runtime.llm.structured_output import request_structured
 
 from .patterns import PatternRecord
 

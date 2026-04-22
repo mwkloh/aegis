@@ -12,7 +12,7 @@ from runtime.chat.telegram.harness_dispatcher import DispatchOutcome, HarnessDis
 from runtime.harness.adapter import HarnessAdapter
 from runtime.harness.contract import ToolIntent, ToolResult
 from runtime.intent.classifier import IntentClassification
-from runtime.model_router.clients.base import ChatResponse
+from runtime.llm.clients.base import ChatResponse
 from runtime.reasoning.skill_runner import SkillRunner
 from runtime.skills.registry import SkillDescriptor, SkillRegistry
 

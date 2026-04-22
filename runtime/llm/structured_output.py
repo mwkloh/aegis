@@ -27,7 +27,7 @@ from typing import Any, Literal
 from jsonschema import Draft202012Validator, ValidationError
 
 from runtime.events.stream import EventStream, EventType
-from runtime.model_router.clients.base import (
+from runtime.llm.clients.base import (
     ChatMessage,
     ChatRequest,
     ChatResponse,

@@ -24,13 +24,13 @@ from runtime.config import AegisConfig, get_config
 from runtime.events import EventStream, EventType
 from runtime.improvement.coding_tasks import CodingTask, load_tasks
 from runtime.improvement.decisions import Decision, latest_by_imp, load_decisions
-from runtime.model_router.clients import (
+from runtime.llm.clients import (
     InstrumentedModelClient,
     ModelClient,
     OllamaClient,
     OpenRouterClient,
 )
-from runtime.model_router.clients.openrouter_client import OpenRouterConfigError
+from runtime.llm.clients.openrouter_client import OpenRouterConfigError
 from runtime.skills import SkillRegistry
 
 from .coder import draft_for

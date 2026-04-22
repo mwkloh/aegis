@@ -10,7 +10,7 @@ from runtime.chat.memory.tier1 import Tier1Loader
 from runtime.chat.memory.tier3 import Tier3Store
 from runtime.harness.adapter import HarnessAdapter
 from runtime.harness.contract import ToolIntent, ToolResult
-from runtime.model_router.clients.base import ChatMessage, ChatRequest, ModelClient
+from runtime.llm.clients.base import ChatMessage, ChatRequest, ModelClient
 from runtime.reasoning.skill_runner import SkillRunner
 from runtime.skills.registry import SkillDescriptor, SkillRegistry
 

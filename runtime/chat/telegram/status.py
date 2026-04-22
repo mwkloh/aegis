@@ -33,7 +33,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from runtime.config import AegisConfig
 from runtime.events import EventType
-from runtime.model_router.router import ModelRouter, ModelTier
+from runtime.llm.router import ModelRouter, ModelTier
 
 _HUMAN_VERDICTS = frozenset({"approve", "reject", "defer"})
 _APPLIER_VERDICTS = frozenset(

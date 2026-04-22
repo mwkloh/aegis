@@ -37,7 +37,7 @@ from runtime.chat.pipeline import (
 )
 from runtime.chat.reply_verdict import UNVERIFIED_BANNER
 from runtime.events import EventStream
-from runtime.model_router.clients.base import (
+from runtime.llm.clients.base import (
     ChatRequest,
     ChatResponse,
 )

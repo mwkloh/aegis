@@ -17,7 +17,7 @@ from runtime.coding_harness.coder import (
 from runtime.config import get_config
 from runtime.events import EventStream
 from runtime.improvement.coding_tasks import CodingTask
-from runtime.model_router.clients import OllamaClient
+from runtime.llm.clients import OllamaClient
 
 pytestmark = pytest.mark.unit
 

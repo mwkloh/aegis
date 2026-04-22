@@ -21,7 +21,7 @@ from pathlib import Path
 
 from runtime.config import AegisConfig, get_config
 from runtime.events import EventStream, EventType
-from runtime.model_router.clients import (
+from runtime.llm.clients import (
     InstrumentedModelClient,
     ModelClient,
     OllamaClient,

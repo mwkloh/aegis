@@ -5,7 +5,7 @@ import httpx
 import pytest
 
 from runtime.harness import ToolIntent
-from runtime.model_router.clients import ChatRequest, ChatResponse
+from runtime.llm.clients import ChatRequest, ChatResponse
 from runtime.reasoning.skill_runner import SkillRunner
 from runtime.reasoning.tier1_reasoner import Tier1Reasoner, Tier1ReasonerError
 from runtime.skills import SkillDescriptor

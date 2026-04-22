@@ -11,7 +11,7 @@
 | [`skills/`](skills/) | Skill registry + YAML descriptors. **Read-only at runtime.** |
 | [`reasoning/`](reasoning/) | Tier 1 skill-scoped reasoning. Produces a tool-intent contract. |
 | [`harness/`](harness/) | Adapter over OpenHarness + tool implementations. The only path to side effects. |
-| [`model_router/`](model_router/) | Routes a request to the right model client (Ollama / OpenRouter). |
+| [`llm/`](llm/) | Model clients (Ollama / OpenRouter), tier router, and structured-output retry/escalation. |
 | [`events/`](events/) | Structured event stream. Append-only JSONL under `~/.aegis/workspace/sessions/`. |
 | [`config.py`](config.py) | Loads `~/.aegis/.env` and `~/.aegis/config.json`. The single config gateway. |
 

@@ -69,11 +69,11 @@ from runtime.chat.telegram.long_running import (
 from runtime.chat.telegram.restart import reexec_in_place
 from runtime.config import AegisConfig
 from runtime.events import EventStream
-from runtime.model_router.clients import OpenRouterClient
-from runtime.model_router.clients.base import ModelClient
-from runtime.model_router.clients.ollama_client import OllamaClient, OllamaHostError
-from runtime.model_router.clients.openrouter_client import OpenRouterConfigError
-from runtime.model_router.router import LocalReadyProbe, ModelRouter, ModelTier
+from runtime.llm.clients import OpenRouterClient
+from runtime.llm.clients.base import ModelClient
+from runtime.llm.clients.ollama_client import OllamaClient, OllamaHostError
+from runtime.llm.clients.openrouter_client import OpenRouterConfigError
+from runtime.llm.router import LocalReadyProbe, ModelRouter, ModelTier
 from runtime.scheduler import (
     JobRunner,
     ScheduledJobStore,

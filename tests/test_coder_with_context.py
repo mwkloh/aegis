@@ -26,7 +26,7 @@ from runtime.coding_harness.coder import draft_for
 from runtime.coding_harness.context import ContextBundle, FileSlice, SkillSlice
 from runtime.config import get_config
 from runtime.improvement.coding_tasks import CodingTask
-from runtime.model_router.clients import OllamaClient
+from runtime.llm.clients import OllamaClient
 
 pytestmark = pytest.mark.unit
 

@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from runtime.board.config import BoardConfig, PanelistConfig
-from runtime.model_router.clients.base import ChatMessage, ChatRequest, ChatResponse, ModelClient
+from runtime.llm.clients.base import ChatMessage, ChatRequest, ChatResponse, ModelClient
 
 logger = logging.getLogger(__name__)
 

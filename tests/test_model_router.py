@@ -24,7 +24,7 @@ from runtime.config import (
     TelegramConfig,
     VaultIndexingConfig,
 )
-from runtime.model_router.router import ModelRouter, ModelTarget, ModelTier
+from runtime.llm.router import ModelRouter, ModelTarget, ModelTier
 
 pytestmark = pytest.mark.unit
 

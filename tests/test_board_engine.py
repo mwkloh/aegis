@@ -15,7 +15,7 @@ from runtime.board.engine import (
     BoardResult,
     PanelistResponse,
 )
-from runtime.model_router.clients.base import ChatRequest, ChatResponse
+from runtime.llm.clients.base import ChatRequest, ChatResponse
 
 pytestmark = pytest.mark.unit
 

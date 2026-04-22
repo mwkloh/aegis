@@ -5,7 +5,7 @@ surface by `runtime/chat/telegram/board_handler.py`.
 
 Imports are lazy (via ``__getattr__``) to avoid a circular-import cycle:
 ``runtime.config`` → ``runtime.board.config`` (package init) →
-``runtime.board.engine`` → ``runtime.model_router`` → ``runtime.config``.
+``runtime.board.engine`` → ``runtime.llm`` → ``runtime.config``.
 Callers should import submodules directly, e.g.::
 
     from runtime.board.config import BoardConfig

@@ -16,9 +16,9 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from runtime.events.stream import EventStream
 from runtime.harness import ToolIntent
-from runtime.model_router.clients import ChatMessage
-from runtime.model_router.clients.base import ModelClient
-from runtime.model_router.structured_output import request_structured
+from runtime.llm.clients import ChatMessage
+from runtime.llm.clients.base import ModelClient
+from runtime.llm.structured_output import request_structured
 from runtime.skills import SkillDescriptor
 
 _PROMPT_PATH: Path = Path(__file__).parent / "prompts" / "tier1_skill.txt"

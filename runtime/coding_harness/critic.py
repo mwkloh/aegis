@@ -29,8 +29,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from runtime.events import EventStream, EventType
 from runtime.improvement.coding_tasks import CodingTask
-from runtime.model_router.clients import ChatMessage, ModelClient
-from runtime.model_router.structured_output import request_structured
+from runtime.llm.clients import ChatMessage, ModelClient
+from runtime.llm.structured_output import request_structured
 
 from .coder import _CODER_SCHEMA, _LLMReply, diff_touches_canon
 from .context import ContextBundle

@@ -22,7 +22,7 @@ from runtime.intent import (
     ModelBackedClassifier,
     parse_intent_json,
 )
-from runtime.model_router.clients import ChatRequest, ChatResponse
+from runtime.llm.clients import ChatRequest, ChatResponse
 
 
 class _StubClient:

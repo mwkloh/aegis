@@ -23,8 +23,8 @@ from typing import Any
 import pytest
 
 from runtime.events.stream import EventStream
-from runtime.model_router.clients.base import ChatMessage, ChatRequest, ChatResponse
-from runtime.model_router.structured_output import (
+from runtime.llm.clients.base import ChatMessage, ChatRequest, ChatResponse
+from runtime.llm.structured_output import (
     EscalationTarget,
     request_structured,
 )
