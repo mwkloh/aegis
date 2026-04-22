@@ -916,6 +916,7 @@ def build_board_stack(
     """
     from runtime.board import BoardEngine, BoardWriter  # noqa: PLC0415
     from runtime.board.config import BoardConfig  # noqa: PLC0415
+    from runtime.board.researcher import BoardResearcher, BraveSearchClient  # noqa: PLC0415
     from runtime.chat.telegram.board_handler import BoardRunner  # noqa: PLC0415
 
     board_cfg: BoardConfig = cfg.board
@@ -938,12 +939,21 @@ def build_board_stack(
     except OpenRouterConfigError:
         logger.info("board.disabled", extra={"reason": "openrouter_config"})
         return None
+    researcher: BoardResearcher | None = None
+    if board_cfg.research is not None:
+        brave_client = BraveSearchClient(
+            board_cfg.research.brave_api_key,
+            top_k=board_cfg.research.top_k,
+            timeout_s=board_cfg.research.timeout_s,
+        )
+        researcher = BoardResearcher(brave_client)
     writer = BoardWriter(output_dir=board_cfg.output_dir)
     return BoardRunner(
         engine=engine,
         writer=writer,
         registry=registry,
         excerpt_chars=board_cfg.excerpt_chars,
+        researcher=researcher,
     )
 
 
