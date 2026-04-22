@@ -677,6 +677,8 @@ def build_chat_pipeline(
     events: EventStream | None = None,
     vault_loader: VaultBodyLoader | None = None,
     local_ready: LocalReadyProbe | None = None,
+    tier1_loader: Tier1Loader | None = None,
+    tier3_store: Tier3Store | None = None,
 ) -> ChatPipeline | None:
     """Assemble a production `ChatPipeline` from config, or return `None`.
 
@@ -741,8 +743,8 @@ def build_chat_pipeline(
     except Exception:
         logger.exception("chat.pipeline.tier2_unavailable")
         return None
-    tier1 = Tier1Loader(cfg.storage.workspace)
-    tier3 = Tier3Store()
+    tier1 = tier1_loader if tier1_loader is not None else Tier1Loader(cfg.storage.workspace)
+    tier3 = tier3_store if tier3_store is not None else Tier3Store()
     recall = RecallPolicy(tier2=tier2, vault_loader=vault_loader)
     builder = ContextBuilder(tier1, tier3)
     logger.info(
@@ -762,6 +764,89 @@ def build_chat_pipeline(
         model=model,
         model_name=target.model,
         events=events,
+    )
+
+
+def build_harness_dispatcher(
+    cfg: AegisConfig,
+    *,
+    skill_registry: SkillRegistry | None,
+    tier3: Tier3Store,
+    tier1_loader: Tier1Loader,
+    files_client: object | None = None,
+) -> Any | None:
+    """Build a HarnessDispatcher or return None if any hard dependency is unavailable."""
+    from runtime.chat.telegram.harness_dispatcher import HarnessDispatcher  # noqa: PLC0415
+    from runtime.harness import DEFAULT_TOOLS  # noqa: PLC0415
+    from runtime.harness.adapter import HarnessAdapter  # noqa: PLC0415
+    from runtime.harness.tools.files_tool import make_files_tools  # noqa: PLC0415
+    from runtime.intent.classifier import ModelBackedClassifier  # noqa: PLC0415
+    from runtime.reasoning.skill_runner import SkillRunner  # noqa: PLC0415
+    from runtime.reasoning.tier1_reasoner import Tier1Reasoner  # noqa: PLC0415
+
+    if skill_registry is None or not skill_registry.all():
+        logger.warning(
+            "harness_dispatcher.disabled", extra={"reason": "empty_registry"}
+        )
+        return None
+
+    router = ModelRouter(cfg)
+    if not router.is_local_ready():
+        logger.warning(
+            "harness_dispatcher.disabled", extra={"reason": "no_ollama"}
+        )
+        return None
+
+    try:
+        ollama_client = OllamaClient(cfg)
+    except OllamaHostError:
+        logger.warning(
+            "harness_dispatcher.disabled", extra={"reason": "ollama_host"}
+        )
+        return None
+
+    try:
+        openrouter_client = OpenRouterClient(cfg)
+    except OpenRouterConfigError:
+        logger.warning(
+            "harness_dispatcher.disabled", extra={"reason": "no_openrouter"}
+        )
+        return None
+
+    _file_tools: dict = {}
+    if files_client is not None:
+        try:
+            _file_tools = make_files_tools(files_client)
+        except Exception:
+            logger.exception("harness_dispatcher.file_tools_failed")
+
+    harness = HarnessAdapter(tools={**DEFAULT_TOOLS, **_file_tools})
+
+    _file_tool_names = {"files_list", "files_read", "files_stat", "files_search"}
+    if not any(harness.has_tool(t) for t in _file_tool_names):
+        logger.warning(
+            "harness_dispatcher.disabled", extra={"reason": "no_file_tools"}
+        )
+        return None
+
+    known_intents = [intent for d in skill_registry.all() for intent in d.intents]
+    classifier = ModelBackedClassifier(
+        client=ollama_client,
+        model=cfg.models.smart_local,
+        known_intents=known_intents,
+    )
+    tier1_reasoner = Tier1Reasoner(client=openrouter_client, model=cfg.models.smart)
+    runner = SkillRunner(tier1=tier1_reasoner)
+
+    return HarnessDispatcher(
+        classifier=classifier,
+        registry=skill_registry,
+        runner=runner,
+        harness=harness,
+        synthesizer=openrouter_client,
+        tier3=tier3,
+        tier1_loader=tier1_loader,
+        synthesis_model=cfg.models.smart,
     )
 
 
@@ -1134,10 +1219,29 @@ def build_application(  # noqa: PLR0912, PLR0915 - top-level assembly seam; each
             fire_now_fn=fire_now_fn,
             files_client=files_client,
         )
+    # Build shared memory stores; dispatcher and pipeline write to the same
+    # Tier3Store so tool-use turns appear in chat history on subsequent turns.
+    _shared_tier1 = Tier1Loader(cfg.storage.workspace)
+    _shared_tier3 = Tier3Store()
+
     if chat_pipeline is None:
-        chat_pipeline = build_chat_pipeline(cfg, events=events, vault_loader=vault_loader)
+        chat_pipeline = build_chat_pipeline(
+            cfg,
+            events=events,
+            vault_loader=vault_loader,
+            tier1_loader=_shared_tier1,
+            tier3_store=_shared_tier3,
+        )
     if intent_router is None:
         intent_router = build_intent_router()
+
+    harness_dispatcher = build_harness_dispatcher(
+        cfg,
+        skill_registry=skill_registry,
+        tier3=_shared_tier3,
+        tier1_loader=_shared_tier1,
+        files_client=files_client,
+    )
 
     async def _post_init(application: Any) -> None:
         # Fire a one-shot "AEGIS online" notification to every
@@ -1205,6 +1309,7 @@ def build_application(  # noqa: PLR0912, PLR0915 - top-level assembly seam; each
             intent_router=intent_router,
             long_runner=long_runner,
             skill_arg_resolver=skill_arg_resolver,
+            harness_dispatcher=harness_dispatcher,
         )
 
     app.add_handler(MessageHandler(filters.COMMAND, _on_command))
@@ -1220,6 +1325,7 @@ __all__ = [
     "build_board_stack",
     "build_chat_pipeline",
     "build_dispatcher",
+    "build_harness_dispatcher",
     "build_intent_router",
     "build_long_running_runner",
     "build_skill_arg_resolver",
