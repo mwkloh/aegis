@@ -245,3 +245,64 @@ async def test_tier3_written_on_clarify() -> None:
     roles = [t[1] for t in tier3.turns]
     assert roles == ["user", "bot"]
     assert tier3.turns[0][2] == "show me files"
+
+
+# ---------------------------------------------------------------------------
+# FIRED path tests
+# ---------------------------------------------------------------------------
+
+
+async def test_fired_path() -> None:
+    message = _FakeMessage()
+    dispatcher = _make_dispatcher(classifier=_StubClassifier("list_files", 0.9))
+    outcome = await dispatcher.dispatch(
+        chat_id=123, user_text="list my downloads folder", message=message
+    )
+    assert outcome == DispatchOutcome.FIRED
+    assert len(message.replies) == 1
+    assert message.replies[0]  # non-empty reply
+
+
+async def test_tier3_written_on_fired() -> None:
+    tier3 = _StubTier3()
+    dispatcher = _make_dispatcher(
+        classifier=_StubClassifier("list_files", 0.9),
+        tier3=tier3,
+    )
+    await dispatcher.dispatch(
+        chat_id=999, user_text="list downloads", message=_FakeMessage()
+    )
+    assert len(tier3.turns) == 2
+    assert tier3.turns[0] == ("999", "user", "list downloads")
+    assert tier3.turns[1][1] == "bot"
+
+
+async def test_error_result_synthesized() -> None:
+    def _raise_perm(*_: object) -> dict:
+        raise PermissionError("denied")
+
+    error_harness = HarnessAdapter(tools={"files_list": _raise_perm})
+    message = _FakeMessage()
+    dispatcher = _make_dispatcher(
+        classifier=_StubClassifier("list_files", 0.9),
+        harness=error_harness,
+    )
+    outcome = await dispatcher.dispatch(
+        chat_id=123, user_text="list my downloads", message=message
+    )
+    assert outcome == DispatchOutcome.FIRED
+    assert len(message.replies) == 1
+
+
+async def test_synthesis_failure_falls_back_to_raw() -> None:
+    message = _FakeMessage()
+    dispatcher = _make_dispatcher(
+        classifier=_StubClassifier("list_files", 0.9),
+        synthesizer=_RaisingSynthesizer(),
+    )
+    outcome = await dispatcher.dispatch(
+        chat_id=123, user_text="list my downloads", message=message
+    )
+    assert outcome == DispatchOutcome.FIRED
+    assert len(message.replies) == 1
+    assert len(message.replies[0]) <= 3500
