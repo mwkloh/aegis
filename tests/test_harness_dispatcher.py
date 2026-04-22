@@ -211,3 +211,37 @@ async def test_classifier_exception_returns_pass() -> None:
     outcome = await dispatcher.dispatch(chat_id=123, user_text="list my downloads", message=message)
     assert outcome == DispatchOutcome.PASS
     assert message.replies == []
+
+
+# ---------------------------------------------------------------------------
+# CLARIFY path tests
+# ---------------------------------------------------------------------------
+
+
+async def test_clarify_path() -> None:
+    # Confidence below threshold → clarifying question
+    dispatcher = _make_dispatcher(classifier=_StubClassifier("list_files", 0.5))
+    message = _FakeMessage()
+    outcome = await dispatcher.dispatch(
+        chat_id=123, user_text="list something", message=message
+    )
+    assert outcome == DispatchOutcome.CLARIFY
+    assert len(message.replies) == 1
+    assert "folder" in message.replies[0].lower()
+
+
+async def test_tier3_written_on_clarify() -> None:
+    tier3 = _StubTier3()
+    dispatcher = _make_dispatcher(
+        classifier=_StubClassifier("list_files", 0.5),
+        tier3=tier3,
+    )
+    await dispatcher.dispatch(
+        chat_id=555, user_text="show me files", message=_FakeMessage()
+    )
+    assert len(tier3.turns) == 2
+    chat_ids = {t[0] for t in tier3.turns}
+    assert chat_ids == {"555"}
+    roles = [t[1] for t in tier3.turns]
+    assert roles == ["user", "bot"]
+    assert tier3.turns[0][2] == "show me files"
