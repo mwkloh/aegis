@@ -6,6 +6,7 @@ Pydantic validates every field at the boundary.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from functools import lru_cache
 from pathlib import Path
@@ -15,6 +16,8 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from runtime.board.config import BoardConfig
+
+logger = logging.getLogger(__name__)
 
 
 def _aegis_root() -> Path:
@@ -296,6 +299,7 @@ def _coerce_board(raw: Any, env: dict[str, str]) -> BoardConfig:
     try:
         return BoardConfig.model_validate(board_raw)
     except Exception:
+        logger.warning("config.board.invalid", exc_info=True)
         return BoardConfig()
 
 

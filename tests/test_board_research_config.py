@@ -58,6 +58,7 @@ def test_coerce_board_builds_research_config_from_env() -> None:
     cfg = _coerce_board(raw, env)
     assert cfg.research is not None
     assert cfg.research.brave_api_key == "BSA-real-key"
+    assert "${" not in cfg.research.brave_api_key
     assert cfg.research.top_k == 3
 
 
