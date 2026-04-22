@@ -82,7 +82,7 @@ class BraveSearchClient:
 
     async def search(self, query: str) -> list[SearchResult]:
         headers = {
-            "Authorization": f"Bearer {self._api_key}",
+            "X-Subscription-Token": self._api_key,
             "Accept": "application/json",
             "Accept-Encoding": "gzip",
         }
