@@ -618,20 +618,27 @@ def build_long_running_runner(
 
 
 def build_skill_arg_resolver(
-    cfg: AegisConfig, *, python_executable: str | None = None,
+    cfg: AegisConfig,
+    *,
+    registry: SkillRegistry | None = None,
+    python_executable: str | None = None,
 ) -> SkillArgResolver:
     """Return a resolver that turns a ``SkillDescriptor`` into a runnable argv.
 
-    Narrow by design. Today only ``{vault_root}`` is known — pulled
-    from ``cfg.vault_indexing.vault_root``. Any unknown placeholder
-    produces ``None`` so the caller can tell the operator the skill
-    isn't configured in this deployment instead of spawning a
-    subprocess that would crash on ``KeyError`` at format time.
+    Known placeholders:
 
-    The leading ``python`` token in ``argv_template`` is swapped for
-    the current interpreter (``sys.executable`` by default) so dispatches
-    land on the same venv as ``/brief``. Real ``python`` on PATH might
-    pick a system interpreter that lacks our vendored deps.
+    * ``{vault_root}`` — from ``cfg.vault_indexing.vault_root``; returns
+      ``None`` if the vault is not configured so the caller can report
+      "skill not configured in this deployment" rather than crash.
+    * ``{skill_dir}`` — injected from ``registry.source_dir_of(descriptor.id)``
+      when a registry is supplied; skills can co-locate a script with their
+      ``skill.yaml`` and reference it by absolute path.
+
+    Any other placeholder returns ``None``.
+
+    The leading ``python`` token in ``argv_template`` is swapped for the
+    current interpreter (``sys.executable`` by default) so dispatches land
+    on the same venv as ``/brief``.
     """
     python = python_executable if python_executable is not None else sys.executable
 
@@ -646,6 +653,13 @@ def build_skill_arg_resolver(
                 if vr is None:
                     return None
                 values[name] = str(vr)
+            elif name == "skill_dir":
+                if registry is None:
+                    return None
+                source = registry.source_dir_of(descriptor.id)
+                if source is None:
+                    return None
+                values[name] = str(source)
             else:
                 return None
         resolved = [token.format_map(values) for token in spec.argv_template]
@@ -1135,7 +1149,8 @@ def build_application(  # noqa: PLR0912, PLR0915 - top-level assembly seam; each
         logger.warning("files.disabled", extra={"reason": "no_allowed_roots"})
         files_client = None
     if skill_arg_resolver is None:
-        skill_arg_resolver = build_skill_arg_resolver(cfg)
+        registry = SkillRegistry.from_directory(_CATALOG_DIR)
+        skill_arg_resolver = build_skill_arg_resolver(cfg, registry=registry)
 
     # Scheduler has to run inside the same event loop as long-poll, so
     # we build the stack up-front but only wire the tick loop inside

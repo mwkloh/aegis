@@ -23,6 +23,10 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 _PLACEHOLDER_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
+# Placeholders the harness injects automatically from the registry, not from
+# the user-supplied args. Exempted from the "must appear in args_schema" check.
+_INFRASTRUCTURE_PLACEHOLDERS: frozenset[str] = frozenset({"skill_dir"})
+
 _MIN_TIMEOUT_MS = 100
 _MAX_TIMEOUT_MS = 600_000  # 10 minutes — matches `Bash` tool ceiling
 _MAX_TOOLS_PER_SKILL = 16
@@ -99,7 +103,7 @@ class SkillDescriptor(BaseModel):
             if spec.name in names_seen:
                 raise ValueError(f"duplicate tool name: {spec.name!r}")
             names_seen.add(spec.name)
-            missing = spec.placeholders() - allowed
+            missing = spec.placeholders() - allowed - _INFRASTRUCTURE_PLACEHOLDERS
             if missing:
                 keys = ", ".join(sorted(missing))
                 raise ValueError(
