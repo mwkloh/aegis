@@ -111,27 +111,73 @@ class SkillDescriptor(BaseModel):
 class SkillRegistry:
     """In-memory index. Build at startup, never mutate at runtime."""
 
-    def __init__(self, descriptors: list[SkillDescriptor]) -> None:
+    def __init__(
+        self,
+        descriptors: list[SkillDescriptor],
+        *,
+        source_dirs: dict[str, Path] | None = None,
+    ) -> None:
         self._by_id: dict[str, SkillDescriptor] = {d.id: d for d in descriptors}
         self._by_intent: dict[str, SkillDescriptor] = {}
         for d in descriptors:
             for intent in d.intents:
                 # Deterministic: first descriptor to claim an intent wins.
                 self._by_intent.setdefault(intent, d)
+        self._source_dirs: dict[str, Path] = dict(source_dirs or {})
 
     @classmethod
     def from_directory(cls, catalog_dir: Path) -> SkillRegistry:
+        """Load every skill under ``catalog_dir``.
+
+        Recognised layouts, in priority order:
+
+        1. **Directory-per-skill** — ``<catalog_dir>/<id>/skill.yaml``.
+           This is the preferred sovereign layout. ``source_dir_of(id)``
+           returns the per-skill directory so ``{skill_dir}`` placeholders
+           in ``argv_template`` resolve to a co-located script.
+        2. **Flat** — ``<catalog_dir>/<id>.yaml``. Legacy in-repo layout.
+           Kept for back-compat during migration; ``source_dir_of`` returns
+           the catalog directory itself.
+
+        When both forms declare the same id, the directory form wins.
+        """
         catalog_dir = Path(catalog_dir)
         if not catalog_dir.is_dir():
             return cls([])
         descriptors: list[SkillDescriptor] = []
+        source_dirs: dict[str, Path] = {}
+        seen: set[str] = set()
+
+        for entry in sorted(catalog_dir.iterdir()):
+            if not entry.is_dir():
+                continue
+            skill_yaml = entry / "skill.yaml"
+            if not skill_yaml.is_file():
+                continue
+            descriptor = cls._load_one(skill_yaml)
+            if descriptor.id in seen:
+                continue
+            descriptors.append(descriptor)
+            source_dirs[descriptor.id] = entry
+            seen.add(descriptor.id)
+
         for path in sorted(catalog_dir.glob("*.yaml")):
-            with path.open("r", encoding="utf-8") as fh:
-                raw = yaml.safe_load(fh)
-            if not isinstance(raw, dict):
-                raise ValueError(f"{path}: skill descriptor must be a YAML mapping")
-            descriptors.append(SkillDescriptor(**raw))
-        return cls(descriptors)
+            descriptor = cls._load_one(path)
+            if descriptor.id in seen:
+                continue
+            descriptors.append(descriptor)
+            source_dirs[descriptor.id] = catalog_dir
+            seen.add(descriptor.id)
+
+        return cls(descriptors, source_dirs=source_dirs)
+
+    @staticmethod
+    def _load_one(path: Path) -> SkillDescriptor:
+        with path.open("r", encoding="utf-8") as fh:
+            raw = yaml.safe_load(fh)
+        if not isinstance(raw, dict):
+            raise ValueError(f"{path}: skill descriptor must be a YAML mapping")
+        return SkillDescriptor(**raw)
 
     def get(self, skill_id: str) -> SkillDescriptor | None:
         return self._by_id.get(skill_id)
@@ -141,3 +187,7 @@ class SkillRegistry:
 
     def all(self) -> list[SkillDescriptor]:
         return list(self._by_id.values())
+
+    def source_dir_of(self, skill_id: str) -> Path | None:
+        """Directory that holds the descriptor — or ``None`` if unknown."""
+        return self._source_dirs.get(skill_id)
