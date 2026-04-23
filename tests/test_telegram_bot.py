@@ -61,6 +61,7 @@ from runtime.config import (
     AegisConfig,
     ModelConfig,
     ProviderConfig,
+    SkillsConfig,
     StorageConfig,
     TelegramConfig,
     VaultIndexingConfig,
@@ -660,9 +661,12 @@ def test_skill_arg_resolver_returns_none_for_descriptor_without_tools() -> None:
 
 
 def test_build_intent_router_loads_real_catalog() -> None:
-    # Default catalog dir exists in this repo; should load without error
+    # The in-repo catalog dir exists; should load without error
     # and match the morning_brief intent at least.
-    router = build_intent_router()
+    from pathlib import Path  # noqa: PLC0415
+
+    catalog = Path(__file__).resolve().parent.parent / "runtime" / "skills" / "catalog"
+    router = build_intent_router(catalog_dir=catalog)
     assert router is not None
     hit = router.match("send me my morning brief")
     assert hit is not None
@@ -1291,13 +1295,15 @@ def test_build_dispatcher_omits_cron_without_scheduler_store(tmp_path: Path) -> 
 
 
 def test_build_scheduler_returns_none_when_catalog_missing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
     # With no skill catalog on disk there's nothing to schedule — the
     # factory returns None so /cron stays unregistered rather than
     # surfacing a stub.
-    monkeypatch.setattr(bot_mod, "_CATALOG_DIR", tmp_path / "nonexistent")
     cfg = _scheduler_cfg(tmp_path)
+    cfg = cfg.model_copy(
+        update={"skills": SkillsConfig(catalog_dir=tmp_path / "nonexistent")}
+    )
     long_runner = build_long_running_runner(tmp_path)
     events = EventStream(tmp_path / "sessions")
     result = build_scheduler(

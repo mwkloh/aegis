@@ -13,8 +13,18 @@ import pytest
 import respx
 
 from runtime.chat.cli import build_pipeline
+from runtime.config import AegisConfig, SkillsConfig, get_config
 
 pytestmark = pytest.mark.e2e
+
+_REPO_CATALOG = Path(__file__).resolve().parent.parent / "runtime" / "skills" / "catalog"
+
+
+def _cfg_with_repo_catalog() -> AegisConfig:
+    """Return the current config (env-resolved) with catalog_dir patched to the repo catalog."""
+    return get_config().model_copy(
+        update={"skills": SkillsConfig(catalog_dir=_REPO_CATALOG)}
+    )
 
 
 def _read_jsonl(path: Path) -> list[dict[str, object]]:
@@ -23,7 +33,7 @@ def _read_jsonl(path: Path) -> list[dict[str, object]]:
 
 @pytest.mark.asyncio
 async def test_ask_time_tokyo_end_to_end(aegis_sandbox: Path) -> None:
-    pipeline = build_pipeline()
+    pipeline = build_pipeline(config=_cfg_with_repo_catalog())
 
     with respx.mock(assert_all_called=True) as mock:
         mock.post("http://127.0.0.1:11434/api/chat").mock(

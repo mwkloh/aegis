@@ -9,8 +9,21 @@ import pytest
 import respx
 
 from runtime.chat.cli import build_pipeline
+from runtime.config import AegisConfig, SkillsConfig, get_config
 
 pytestmark = pytest.mark.e2e
+
+# Point at the in-repo flat catalog (both flat .yaml and future directory-per-skill
+# layouts are supported by SkillRegistry.from_directory).  Tasks 6–9 will migrate
+# skills to _bundle/ — until then this path remains the canonical built-in source.
+_REPO_CATALOG = Path(__file__).resolve().parent.parent / "runtime" / "skills" / "catalog"
+
+
+def _cfg_with_repo_catalog() -> AegisConfig:
+    """Return the current config (env-resolved) with catalog_dir patched to the repo catalog."""
+    return get_config().model_copy(
+        update={"skills": SkillsConfig(catalog_dir=_REPO_CATALOG)}
+    )
 
 
 def _read_jsonl(path: Path) -> list[dict[str, object]]:
@@ -19,7 +32,7 @@ def _read_jsonl(path: Path) -> list[dict[str, object]]:
 
 @pytest.mark.asyncio
 async def test_echo_round_trip_writes_full_event_chain(aegis_sandbox: Path) -> None:
-    pipeline = build_pipeline()
+    pipeline = build_pipeline(config=_cfg_with_repo_catalog())
     # Echo matches a Tier 0 rule — no model call leaves the process.
     reply = await pipeline.handle("echo hello world")
     assert reply == "echo → hello world"
@@ -52,7 +65,7 @@ async def test_echo_round_trip_writes_full_event_chain(aegis_sandbox: Path) -> N
 
 @pytest.mark.asyncio
 async def test_unknown_intent_replies_with_help(aegis_sandbox: Path) -> None:
-    pipeline = build_pipeline()
+    pipeline = build_pipeline(config=_cfg_with_repo_catalog())
     # "good morning" fires no rule, so the model-backed classifier would call
     # Ollama. We mock a malformed reply so it collapses to `unknown` and the
     # pipeline falls through to the help message — deterministic either way.

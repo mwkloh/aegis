@@ -14,9 +14,18 @@ import pytest
 import respx
 
 from runtime.chat.cli import build_pipeline
-from runtime.config import reset_config
+from runtime.config import AegisConfig, SkillsConfig, get_config, reset_config
 
 pytestmark = pytest.mark.e2e
+
+_REPO_CATALOG = Path(__file__).resolve().parent.parent / "runtime" / "skills" / "catalog"
+
+
+def _cfg_with_repo_catalog() -> AegisConfig:
+    """Return the current config (env-resolved) with catalog_dir patched to the repo catalog."""
+    return get_config().model_copy(
+        update={"skills": SkillsConfig(catalog_dir=_REPO_CATALOG)}
+    )
 
 
 def _read_jsonl(path: Path) -> list[dict[str, object]]:
@@ -29,7 +38,7 @@ async def test_ask_question_tier1_end_to_end(
 ) -> None:
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
     reset_config()  # re-resolve with the test key
-    pipeline = build_pipeline()
+    pipeline = build_pipeline(config=_cfg_with_repo_catalog())
 
     with respx.mock() as mock:
         mock.post("http://127.0.0.1:11434/api/chat").mock(
@@ -78,7 +87,7 @@ async def test_ask_question_without_key_degrades_gracefully(
 ) -> None:
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     reset_config()
-    pipeline = build_pipeline()
+    pipeline = build_pipeline(config=_cfg_with_repo_catalog())
 
     with respx.mock() as mock:
         mock.post("http://127.0.0.1:11434/api/chat").mock(

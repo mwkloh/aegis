@@ -82,12 +82,11 @@ from runtime.scheduler import (
     system_clock,
     system_sleeper,
 )
+from runtime.skills.bootstrap import seed_builtin_skills
 from runtime.skills.intent_router import IntentRouter
 from runtime.skills.registry import SkillDescriptor, SkillRegistry
 
 SkillArgResolver = Callable[[SkillDescriptor], list[str] | None]
-
-_CATALOG_DIR = Path(__file__).resolve().parent.parent.parent / "skills" / "catalog"
 
 MAX_TELEGRAM_CHARS = 4000
 
@@ -678,10 +677,9 @@ def build_intent_router(catalog_dir: Path | None = None) -> IntentRouter | None:
     malformed YAML descriptor) propagate: a broken catalog is an
     operator error, not a silent degrade.
     """
-    catalog = catalog_dir if catalog_dir is not None else _CATALOG_DIR
-    if not catalog.is_dir():
+    if catalog_dir is None or not catalog_dir.is_dir():
         return None
-    registry = SkillRegistry.from_directory(catalog)
+    registry = SkillRegistry.from_directory(catalog_dir)
     return IntentRouter(registry)
 
 
@@ -958,8 +956,8 @@ def build_scheduler(
     the job to the next tick rather than stomping the operator's
     in-flight subprocess.
     """
-    catalog = _CATALOG_DIR
     if registry is None:
+        catalog = cfg.skills.catalog_dir
         if not catalog.is_dir():
             return None
         registry = SkillRegistry.from_directory(catalog)
@@ -1120,6 +1118,10 @@ def build_application(  # noqa: PLR0912, PLR0915 - top-level assembly seam; each
 
     if not cfg.telegram.bot_token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is not configured.")
+    seed_builtin_skills(
+        bundle_dir=cfg.skills.bundle_dir,
+        catalog_dir=cfg.skills.catalog_dir,
+    )
     if events is None:
         # Default-construct a shared stream so write slashes, chat turn
         # telemetry, and the D2 verdict gate all land on the same shard.
@@ -1148,9 +1150,15 @@ def build_application(  # noqa: PLR0912, PLR0915 - top-level assembly seam; each
     except ValueError:
         logger.warning("files.disabled", extra={"reason": "no_allowed_roots"})
         files_client = None
+    # Build the skill registry once so both the skill_arg_resolver and the
+    # scheduler's `/cron` handler share it — lets `/cron add` reject
+    # unknown/unschedulable skills at add time instead of letting the
+    # engine fail silently on every tick.
+    skill_registry: SkillRegistry | None = None
+    if cfg.skills.catalog_dir.is_dir():
+        skill_registry = SkillRegistry.from_directory(cfg.skills.catalog_dir)
     if skill_arg_resolver is None:
-        registry = SkillRegistry.from_directory(_CATALOG_DIR)
-        skill_arg_resolver = build_skill_arg_resolver(cfg, registry=registry)
+        skill_arg_resolver = build_skill_arg_resolver(cfg, registry=skill_registry)
 
     # Scheduler has to run inside the same event loop as long-poll, so
     # we build the stack up-front but only wire the tick loop inside
@@ -1175,14 +1183,6 @@ def build_application(  # noqa: PLR0912, PLR0915 - top-level assembly seam; each
                 )
                 return
             await real.send_message(chat_id=chat_id, text=text)
-
-    # Build the skill registry once so both the scheduler and the
-    # dispatcher's `/cron` handler share it — lets `/cron add` reject
-    # unknown/unschedulable skills at add time instead of letting the
-    # engine fail silently on every tick.
-    skill_registry: SkillRegistry | None = None
-    if _CATALOG_DIR.is_dir():
-        skill_registry = SkillRegistry.from_directory(_CATALOG_DIR)
 
     heartbeat_path = cfg.storage.workspace / "scheduler.heartbeat"
     scheduler_stack = build_scheduler(

@@ -53,3 +53,26 @@ def test_catalog_dir_is_created_if_absent(tmp_path: Path) -> None:
     seed_builtin_skills(bundle_dir=bundle, catalog_dir=catalog)
 
     assert catalog.is_dir()
+
+
+from runtime.chat.telegram.bot import build_intent_router
+from runtime.config import AegisConfig
+
+
+def test_build_intent_router_reads_cfg_catalog_dir(tmp_path: Path, monkeypatch) -> None:
+    catalog = tmp_path / "skills"
+    (catalog / "alpha").mkdir(parents=True)
+    (catalog / "alpha" / "skill.yaml").write_text(
+        "id: alpha\nversion: 0.1.0\ndescription: x\nintents: [alpha]\n"
+        "tool: t\nargs_schema: {type: object, additionalProperties: false}\n"
+        "requires_tier1: false\n"
+    )
+    monkeypatch.setenv("AEGIS_HOME", str(tmp_path))
+
+    cfg = AegisConfig()
+    router = build_intent_router(cfg.skills.catalog_dir)
+
+    assert router is not None
+    descriptor = router.match("alpha")
+    assert descriptor is not None
+    assert descriptor.id == "alpha"
