@@ -598,13 +598,18 @@ def build_long_running_runner(
     subprocess_runner: SubprocessRunner | None = None,
     registry: InFlightRegistry | None = None,
     vault_root: Path | None = None,
+    brief_script: Path | None = None,
 ) -> LongRunningRunner:
     """Assemble a `LongRunningRunner` with sensible defaults.
 
     Defaults wire `AsyncioSubprocessRunner` (shells out via argv) and
     a fresh `InFlightRegistry`. `vault_root` is the Obsidian vault
     path threaded through to `/brief` — when `None`, `/brief` replies
-    with a "not configured" hint. Tests pass fakes for all of it.
+    with a "not configured" hint. `brief_script` is the absolute path
+    to the morning_brief script resolved from the skill registry
+    (``registry.source_dir_of("morning_brief") / "morning_brief.py"``);
+    when `None`, `/brief` replies "not configured". Tests pass fakes
+    for all of it.
     """
     runner = (
         subprocess_runner
@@ -612,7 +617,11 @@ def build_long_running_runner(
         else AsyncioSubprocessRunner()
     )
     return LongRunningRunner(
-        workspace, runner=runner, registry=registry, vault_root=vault_root
+        workspace,
+        runner=runner,
+        registry=registry,
+        vault_root=vault_root,
+        brief_script=brief_script,
     )
 
 
@@ -1138,10 +1147,26 @@ def build_application(  # noqa: PLR0912, PLR0915 - top-level assembly seam; each
         and cfg.vault_indexing.vault_root is not None
     ):
         vault_loader = FilesystemVaultBodyLoader(cfg.vault_indexing.vault_root)
+    # Build the skill registry once so the long-running runner, the
+    # skill_arg_resolver, and the scheduler's `/cron` handler share it —
+    # lets `/cron add` reject unknown/unschedulable skills at add time
+    # instead of letting the engine fail silently on every tick, and
+    # lets `/brief` resolve its script path from the descriptor's
+    # source dir rather than a hardcoded module path.
+    skill_registry: SkillRegistry | None = None
+    if cfg.skills.catalog_dir.is_dir():
+        skill_registry = SkillRegistry.from_directory(cfg.skills.catalog_dir)
     if long_runner is None:
+        _brief_dir = (
+            skill_registry.source_dir_of("morning_brief") if skill_registry else None
+        )
+        brief_script = (
+            _brief_dir / "morning_brief.py" if _brief_dir is not None else None
+        )
         long_runner = build_long_running_runner(
             cfg.storage.workspace,
             vault_root=cfg.vault_indexing.vault_root,
+            brief_script=brief_script,
         )
     board_runner = build_board_stack(cfg, registry=long_runner.registry)
     from runtime.files.client import FilesClient  # noqa: PLC0415
@@ -1150,13 +1175,6 @@ def build_application(  # noqa: PLR0912, PLR0915 - top-level assembly seam; each
     except ValueError:
         logger.warning("files.disabled", extra={"reason": "no_allowed_roots"})
         files_client = None
-    # Build the skill registry once so both the skill_arg_resolver and the
-    # scheduler's `/cron` handler share it — lets `/cron add` reject
-    # unknown/unschedulable skills at add time instead of letting the
-    # engine fail silently on every tick.
-    skill_registry: SkillRegistry | None = None
-    if cfg.skills.catalog_dir.is_dir():
-        skill_registry = SkillRegistry.from_directory(cfg.skills.catalog_dir)
     if skill_arg_resolver is None:
         skill_arg_resolver = build_skill_arg_resolver(cfg, registry=skill_registry)
 
