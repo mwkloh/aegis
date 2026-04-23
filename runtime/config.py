@@ -140,6 +140,34 @@ class FilesConfig(BaseModel):
         return [Path(str(r)).expanduser() for r in v if isinstance(r, (str, Path)) and str(r).strip()]
 
 
+def _bundle_dir() -> Path:
+    """Absolute path to the built-in skill seed bundle inside the repo."""
+    return Path(__file__).resolve().parent / "skills" / "_bundle"
+
+
+class SkillsConfig(BaseModel):
+    """Skill catalog location + seed-bundle source.
+
+    ``catalog_dir`` is the active catalog — the directory the loader scans
+    at runtime and the installer writes to on ``/skills confirm``. Defaults
+    under the sovereign workspace so canonical state lives outside the repo.
+
+    ``bundle_dir`` is the repo-shipped seed source. First-boot logic copies
+    missing entries from here into ``catalog_dir``; operator edits to
+    ``catalog_dir`` always win on subsequent boots (no silent overwrite).
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    catalog_dir: Path = Field(default_factory=lambda: _aegis_home() / "skills")
+    bundle_dir: Path = Field(default_factory=_bundle_dir)
+
+    @field_validator("catalog_dir", "bundle_dir")
+    @classmethod
+    def _expand(cls, v: Path) -> Path:
+        return Path(v).expanduser()
+
+
 class AegisConfig(BaseModel):
     """Top-level config object — the only thing runtime code should import."""
 
@@ -152,6 +180,7 @@ class AegisConfig(BaseModel):
     vault_indexing: VaultIndexingConfig = Field(default_factory=VaultIndexingConfig)
     board: BoardConfig = Field(default_factory=BoardConfig)
     files: FilesConfig = Field(default_factory=FilesConfig)
+    skills: SkillsConfig = Field(default_factory=SkillsConfig)
 
     @field_validator("aegis_home", "aegis_root")
     @classmethod
