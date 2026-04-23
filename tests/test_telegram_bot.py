@@ -407,6 +407,55 @@ async def test_route_chat_hybrid_typing_indicator() -> None:
     assert pipeline.calls == [("111", "hi")]
 
 
+async def test_route_chat_dispatcher_path_shows_typing_indicator() -> None:
+    # Regression: HarnessDispatcher intercept was inserted above the
+    # typing-indicator start, so tool-use intents (list_files, read_file…)
+    # used to silently skip the placeholder + header animation. Caller
+    # now hoists the indicator and passes a reply callback — verify the
+    # full UX (placeholder posted, deleted, reply delivered) still runs
+    # through the dispatcher path, with the pipeline never called.
+
+    class _FiringDispatcher:
+        async def dispatch(
+            self, *, chat_id: int, user_text: str, message: Any, reply: Any = None
+        ) -> Any:
+            from runtime.chat.telegram.harness_dispatcher import DispatchOutcome  # noqa: PLC0415
+            assert reply is not None, "route_chat must supply a reply callback"
+            await reply("tool-use answer")
+            return DispatchOutcome.FIRED
+
+    pipeline = _FakePipeline(canned_reply="pipeline-should-never-run")
+    authorizer = Authorizer((222,))
+
+    placeholder = SimpleNamespace(delete=AsyncMock())
+    reply_text = AsyncMock(return_value=placeholder)
+    send_chat_action = AsyncMock()
+
+    chat = SimpleNamespace(id=222, send_chat_action=send_chat_action)
+    user = SimpleNamespace(id=222)
+    message = SimpleNamespace(text="list my downloads", reply_text=reply_text)
+    update = SimpleNamespace(
+        effective_chat=chat,
+        effective_user=user,
+        effective_message=message,
+    )
+
+    await route_chat(
+        update,
+        None,
+        pipeline=pipeline,
+        authorizer=authorizer,
+        harness_dispatcher=_FiringDispatcher(),  # type: ignore[arg-type]
+    )
+
+    assert reply_text.await_count == 2
+    assert "Thinking" in reply_text.await_args_list[0].args[0]
+    assert reply_text.await_args_list[1].args[0] == "tool-use answer"
+    placeholder.delete.assert_awaited_once()
+    # Pipeline bypassed — dispatcher FIRED.
+    assert pipeline.calls == []
+
+
 # --- intent short-circuit in route_chat --------------------------------
 
 

@@ -309,6 +309,56 @@ async def test_synthesis_failure_falls_back_to_raw() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Reply-callback routing (typing-indicator UX hook)
+# ---------------------------------------------------------------------------
+
+
+async def test_reply_callback_used_on_fired() -> None:
+    # When the caller (Telegram route_chat) supplies a `reply` callable
+    # — so it can tear down its "typing…" placeholder alongside the
+    # reply — the dispatcher must send through the callback, NOT
+    # message.reply_text (which would post a second, un-placeholdered
+    # bubble).
+    message = _FakeMessage()
+    captured: list[str] = []
+
+    async def _capture(text: str) -> None:
+        captured.append(text)
+
+    dispatcher = _make_dispatcher(classifier=_StubClassifier("list_files", 0.9))
+    outcome = await dispatcher.dispatch(
+        chat_id=123,
+        user_text="list my downloads",
+        message=message,
+        reply=_capture,
+    )
+    assert outcome == DispatchOutcome.FIRED
+    assert len(captured) == 1
+    assert captured[0]
+    assert message.replies == []  # never bypassed the callback
+
+
+async def test_reply_callback_used_on_clarify() -> None:
+    message = _FakeMessage()
+    captured: list[str] = []
+
+    async def _capture(text: str) -> None:
+        captured.append(text)
+
+    dispatcher = _make_dispatcher(classifier=_StubClassifier("list_files", 0.5))
+    outcome = await dispatcher.dispatch(
+        chat_id=123,
+        user_text="list something",
+        message=message,
+        reply=_capture,
+    )
+    assert outcome == DispatchOutcome.CLARIFY
+    assert len(captured) == 1
+    assert "folder" in captured[0].lower()
+    assert message.replies == []
+
+
+# ---------------------------------------------------------------------------
 # route_chat integration
 # ---------------------------------------------------------------------------
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import enum
 import logging
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -83,7 +84,17 @@ class HarnessDispatcher:
         chat_id: int,
         user_text: str,
         message: Any,
+        reply: Callable[[str], Awaitable[None]] | None = None,
     ) -> DispatchOutcome:
+        # `reply`, when supplied, lets the caller wrap send with its typing
+        # indicator / placeholder teardown. Absent (tests, CLI), we fall back
+        # to posting directly on the Telegram message object.
+        async def _send(text: str) -> None:
+            if reply is not None:
+                await reply(text)
+            else:
+                await message.reply_text(text)
+
         try:
             classification = await self._classifier.classify(user_text)
         except Exception:
@@ -102,7 +113,7 @@ class HarnessDispatcher:
 
         if confidence < HARNESS_CONFIDENCE_THRESHOLD:
             question = _clarify_question(descriptor)
-            await message.reply_text(question)
+            await _send(question)
             self._tier3.append(str(chat_id), "user", user_text)
             self._tier3.append(str(chat_id), "bot", question)
             return DispatchOutcome.CLARIFY
@@ -112,10 +123,10 @@ class HarnessDispatcher:
             return DispatchOutcome.PASS
 
         result = self._harness.execute(tool_intent)
-        reply = await self._synthesize(user_text, tool_intent, result, chat_id=chat_id)
-        await message.reply_text(_clip(reply))
+        reply_text = await self._synthesize(user_text, tool_intent, result, chat_id=chat_id)
+        await _send(_clip(reply_text))
         self._tier3.append(str(chat_id), "user", user_text)
-        self._tier3.append(str(chat_id), "bot", reply)
+        self._tier3.append(str(chat_id), "bot", reply_text)
         return DispatchOutcome.FIRED
 
     async def _synthesize(

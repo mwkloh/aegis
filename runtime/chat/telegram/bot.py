@@ -440,21 +440,33 @@ async def route_chat(
             )
             return
 
+    # Hybrid indicator: header ChatAction + inline placeholder bubble.
+    # Hoisted above the HarnessDispatcher intercept so tool-use intents
+    # (list_files, read_file, …) get the same "typing…" UX as the legacy
+    # pipeline. Gated on `send_chat_action` so unit tests (bare
+    # SimpleNamespace chats) skip straight to `_reply`.
+    placeholder, typing_task = await _start_typing_indicator(chat, message)
+
     # HarnessDispatcher intercept: tool-use intents bypass ChatPipeline entirely.
     if harness_dispatcher is not None and text:
         from runtime.chat.telegram.harness_dispatcher import DispatchOutcome  # noqa: PLC0415
-        outcome = await harness_dispatcher.dispatch(
-            chat_id=chat_id,
-            user_text=text,
-            message=message,
-        )
+
+        async def _dispatcher_reply(body: str) -> None:
+            await _stop_typing_indicator(typing_task)
+            await _deliver_reply(message, placeholder, body, chat_id=chat_id)
+
+        try:
+            outcome = await harness_dispatcher.dispatch(
+                chat_id=chat_id,
+                user_text=text,
+                message=message,
+                reply=_dispatcher_reply,
+            )
+        except Exception:
+            await _stop_typing_indicator(typing_task)
+            raise
         if outcome != DispatchOutcome.PASS:
             return
-
-    # Hybrid indicator: header ChatAction + inline placeholder bubble.
-    # Gated on `send_chat_action` so unit tests (bare SimpleNamespace
-    # chats) skip straight to the legacy `_reply` flow.
-    placeholder, typing_task = await _start_typing_indicator(chat, message)
 
     try:
         try:
