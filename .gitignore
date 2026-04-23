@@ -75,7 +75,6 @@ Thumbs.db
 coding_harness/diffs/*.patch
 coding_harness/diffs/*.diff
 runtime/harness/openharness/   # vendored as submodule later — not tracked here
-runtime/skills/catalog/_generated/
 
 # --- Logs ---
 *.log
