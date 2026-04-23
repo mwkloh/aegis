@@ -126,7 +126,7 @@ class SkillLoader:
     def _rebuild_index(self) -> None:
         intent_index: dict[str, Path] = {}
         id_index: dict[str, Path] = {}
-        for path in sorted(self._catalog_dir.glob("*.yaml")):
+        for path in self._iter_descriptor_paths():
             header = _read_header(path)
             if header is None:
                 continue
@@ -137,6 +137,23 @@ class SkillLoader:
                 intent_index.setdefault(intent, path)
         self._intent_index = intent_index
         self._id_index = id_index
+
+    def _iter_descriptor_paths(self) -> list[Path]:
+        """Yield every skill descriptor path in sorted order.
+
+        Canonical layout is directory-per-skill: ``<catalog>/<id>/skill.yaml``.
+        Flat ``<catalog>/<id>.yaml`` is tolerated for back-compat during
+        migration so operators with a half-migrated catalog aren't broken.
+        """
+        paths: list[Path] = []
+        for entry in sorted(self._catalog_dir.iterdir()):
+            if entry.is_dir():
+                skill_yaml = entry / "skill.yaml"
+                if skill_yaml.is_file():
+                    paths.append(skill_yaml)
+            elif entry.is_file() and entry.suffix == ".yaml":
+                paths.append(entry)
+        return paths
 
     def _load_path(self, path: Path) -> SkillDescriptor | None:
         try:

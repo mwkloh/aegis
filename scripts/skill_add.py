@@ -37,7 +37,12 @@ from runtime.skills.installer import (
 from runtime.skills.scanner import ScanFinding
 
 DEFAULT_STAGING = Path.home() / ".aegis" / "skills_staging"
-DEFAULT_CATALOG = Path.home() / ".aegis" / "skills"
+
+
+def _default_catalog() -> Path:
+    from runtime.config import get_config  # noqa: PLC0415
+
+    return get_config().skills.catalog_dir
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -70,8 +75,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--catalog-dir",
         type=Path,
-        default=DEFAULT_CATALOG,
-        help=f"Active catalog directory (default: {DEFAULT_CATALOG}).",
+        default=_default_catalog(),
+        help="Active catalog directory (default: cfg.skills.catalog_dir).",
     )
     parser.add_argument(
         "--json",
