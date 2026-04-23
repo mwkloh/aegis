@@ -187,7 +187,7 @@ def test_confirm_moves_into_catalog(
     out = capsys.readouterr().out
     assert rc_confirm == 0
     assert "Installed" in out
-    assert (catalog / "vault_search.yaml").is_file()
+    assert (catalog / "vault_search" / "skill.yaml").is_file()
     assert not (staging / "vault_search.yaml").exists()
 
 

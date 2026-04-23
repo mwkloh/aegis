@@ -82,12 +82,11 @@ from runtime.scheduler import (
     system_clock,
     system_sleeper,
 )
+from runtime.skills.bootstrap import seed_builtin_skills
 from runtime.skills.intent_router import IntentRouter
 from runtime.skills.registry import SkillDescriptor, SkillRegistry
 
 SkillArgResolver = Callable[[SkillDescriptor], list[str] | None]
-
-_CATALOG_DIR = Path(__file__).resolve().parent.parent.parent / "skills" / "catalog"
 
 MAX_TELEGRAM_CHARS = 4000
 
@@ -599,13 +598,18 @@ def build_long_running_runner(
     subprocess_runner: SubprocessRunner | None = None,
     registry: InFlightRegistry | None = None,
     vault_root: Path | None = None,
+    brief_script: Path | None = None,
 ) -> LongRunningRunner:
     """Assemble a `LongRunningRunner` with sensible defaults.
 
     Defaults wire `AsyncioSubprocessRunner` (shells out via argv) and
     a fresh `InFlightRegistry`. `vault_root` is the Obsidian vault
     path threaded through to `/brief` — when `None`, `/brief` replies
-    with a "not configured" hint. Tests pass fakes for all of it.
+    with a "not configured" hint. `brief_script` is the absolute path
+    to the morning_brief script resolved from the skill registry
+    (``registry.source_dir_of("morning_brief") / "morning_brief.py"``);
+    when `None`, `/brief` replies "not configured". Tests pass fakes
+    for all of it.
     """
     runner = (
         subprocess_runner
@@ -613,25 +617,36 @@ def build_long_running_runner(
         else AsyncioSubprocessRunner()
     )
     return LongRunningRunner(
-        workspace, runner=runner, registry=registry, vault_root=vault_root
+        workspace,
+        runner=runner,
+        registry=registry,
+        vault_root=vault_root,
+        brief_script=brief_script,
     )
 
 
 def build_skill_arg_resolver(
-    cfg: AegisConfig, *, python_executable: str | None = None,
+    cfg: AegisConfig,
+    *,
+    registry: SkillRegistry | None = None,
+    python_executable: str | None = None,
 ) -> SkillArgResolver:
     """Return a resolver that turns a ``SkillDescriptor`` into a runnable argv.
 
-    Narrow by design. Today only ``{vault_root}`` is known — pulled
-    from ``cfg.vault_indexing.vault_root``. Any unknown placeholder
-    produces ``None`` so the caller can tell the operator the skill
-    isn't configured in this deployment instead of spawning a
-    subprocess that would crash on ``KeyError`` at format time.
+    Known placeholders:
 
-    The leading ``python`` token in ``argv_template`` is swapped for
-    the current interpreter (``sys.executable`` by default) so dispatches
-    land on the same venv as ``/brief``. Real ``python`` on PATH might
-    pick a system interpreter that lacks our vendored deps.
+    * ``{vault_root}`` — from ``cfg.vault_indexing.vault_root``; returns
+      ``None`` if the vault is not configured so the caller can report
+      "skill not configured in this deployment" rather than crash.
+    * ``{skill_dir}`` — injected from ``registry.source_dir_of(descriptor.id)``
+      when a registry is supplied; skills can co-locate a script with their
+      ``skill.yaml`` and reference it by absolute path.
+
+    Any other placeholder returns ``None``.
+
+    The leading ``python`` token in ``argv_template`` is swapped for the
+    current interpreter (``sys.executable`` by default) so dispatches land
+    on the same venv as ``/brief``.
     """
     python = python_executable if python_executable is not None else sys.executable
 
@@ -646,6 +661,13 @@ def build_skill_arg_resolver(
                 if vr is None:
                     return None
                 values[name] = str(vr)
+            elif name == "skill_dir":
+                if registry is None:
+                    return None
+                source = registry.source_dir_of(descriptor.id)
+                if source is None:
+                    return None
+                values[name] = str(source)
             else:
                 return None
         resolved = [token.format_map(values) for token in spec.argv_template]
@@ -664,10 +686,9 @@ def build_intent_router(catalog_dir: Path | None = None) -> IntentRouter | None:
     malformed YAML descriptor) propagate: a broken catalog is an
     operator error, not a silent degrade.
     """
-    catalog = catalog_dir if catalog_dir is not None else _CATALOG_DIR
-    if not catalog.is_dir():
+    if catalog_dir is None or not catalog_dir.is_dir():
         return None
-    registry = SkillRegistry.from_directory(catalog)
+    registry = SkillRegistry.from_directory(catalog_dir)
     return IntentRouter(registry)
 
 
@@ -944,8 +965,8 @@ def build_scheduler(
     the job to the next tick rather than stomping the operator's
     in-flight subprocess.
     """
-    catalog = _CATALOG_DIR
     if registry is None:
+        catalog = cfg.skills.catalog_dir
         if not catalog.is_dir():
             return None
         registry = SkillRegistry.from_directory(catalog)
@@ -1106,6 +1127,10 @@ def build_application(  # noqa: PLR0912, PLR0915 - top-level assembly seam; each
 
     if not cfg.telegram.bot_token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is not configured.")
+    seed_builtin_skills(
+        bundle_dir=cfg.skills.bundle_dir,
+        catalog_dir=cfg.skills.catalog_dir,
+    )
     if events is None:
         # Default-construct a shared stream so write slashes, chat turn
         # telemetry, and the D2 verdict gate all land on the same shard.
@@ -1122,10 +1147,26 @@ def build_application(  # noqa: PLR0912, PLR0915 - top-level assembly seam; each
         and cfg.vault_indexing.vault_root is not None
     ):
         vault_loader = FilesystemVaultBodyLoader(cfg.vault_indexing.vault_root)
+    # Build the skill registry once so the long-running runner, the
+    # skill_arg_resolver, and the scheduler's `/cron` handler share it —
+    # lets `/cron add` reject unknown/unschedulable skills at add time
+    # instead of letting the engine fail silently on every tick, and
+    # lets `/brief` resolve its script path from the descriptor's
+    # source dir rather than a hardcoded module path.
+    skill_registry: SkillRegistry | None = None
+    if cfg.skills.catalog_dir.is_dir():
+        skill_registry = SkillRegistry.from_directory(cfg.skills.catalog_dir)
     if long_runner is None:
+        _brief_dir = (
+            skill_registry.source_dir_of("morning_brief") if skill_registry else None
+        )
+        brief_script = (
+            _brief_dir / "morning_brief.py" if _brief_dir is not None else None
+        )
         long_runner = build_long_running_runner(
             cfg.storage.workspace,
             vault_root=cfg.vault_indexing.vault_root,
+            brief_script=brief_script,
         )
     board_runner = build_board_stack(cfg, registry=long_runner.registry)
     from runtime.files.client import FilesClient  # noqa: PLC0415
@@ -1135,7 +1176,7 @@ def build_application(  # noqa: PLR0912, PLR0915 - top-level assembly seam; each
         logger.warning("files.disabled", extra={"reason": "no_allowed_roots"})
         files_client = None
     if skill_arg_resolver is None:
-        skill_arg_resolver = build_skill_arg_resolver(cfg)
+        skill_arg_resolver = build_skill_arg_resolver(cfg, registry=skill_registry)
 
     # Scheduler has to run inside the same event loop as long-poll, so
     # we build the stack up-front but only wire the tick loop inside
@@ -1160,14 +1201,6 @@ def build_application(  # noqa: PLR0912, PLR0915 - top-level assembly seam; each
                 )
                 return
             await real.send_message(chat_id=chat_id, text=text)
-
-    # Build the skill registry once so both the scheduler and the
-    # dispatcher's `/cron` handler share it — lets `/cron add` reject
-    # unknown/unschedulable skills at add time instead of letting the
-    # engine fail silently on every tick.
-    skill_registry: SkillRegistry | None = None
-    if _CATALOG_DIR.is_dir():
-        skill_registry = SkillRegistry.from_directory(_CATALOG_DIR)
 
     heartbeat_path = cfg.storage.workspace / "scheduler.heartbeat"
     scheduler_stack = build_scheduler(

@@ -14,9 +14,27 @@ import pytest
 import respx
 
 from runtime.chat.cli import build_pipeline
-from runtime.config import reset_config
+from runtime.config import AegisConfig, SkillsConfig, get_config, reset_config
+from runtime.skills.bootstrap import seed_builtin_skills
 
 pytestmark = pytest.mark.e2e
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_REPO_CATALOG = _REPO_ROOT / "runtime" / "skills" / "catalog"
+_BUNDLE = _REPO_ROOT / "runtime" / "skills" / "_bundle"
+
+
+def _cfg_with_repo_catalog(tmp_path: Path) -> AegisConfig:
+    """Seed the bundle + copy flat catalog into ``tmp_path`` and point config there."""
+    catalog_dir = tmp_path / "skills_catalog"
+    seed_builtin_skills(bundle_dir=_BUNDLE, catalog_dir=catalog_dir)
+    for yaml_file in _REPO_CATALOG.glob("*.yaml"):
+        target = catalog_dir / yaml_file.name
+        if not target.exists():
+            target.write_bytes(yaml_file.read_bytes())
+    return get_config().model_copy(
+        update={"skills": SkillsConfig(catalog_dir=catalog_dir)}
+    )
 
 
 def _read_jsonl(path: Path) -> list[dict[str, object]]:
@@ -29,7 +47,7 @@ async def test_ask_question_tier1_end_to_end(
 ) -> None:
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
     reset_config()  # re-resolve with the test key
-    pipeline = build_pipeline()
+    pipeline = build_pipeline(config=_cfg_with_repo_catalog(aegis_sandbox))
 
     with respx.mock() as mock:
         mock.post("http://127.0.0.1:11434/api/chat").mock(
@@ -78,7 +96,7 @@ async def test_ask_question_without_key_degrades_gracefully(
 ) -> None:
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     reset_config()
-    pipeline = build_pipeline()
+    pipeline = build_pipeline(config=_cfg_with_repo_catalog(aegis_sandbox))
 
     with respx.mock() as mock:
         mock.post("http://127.0.0.1:11434/api/chat").mock(

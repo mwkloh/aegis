@@ -19,7 +19,6 @@ tools:
   - name: echo
     argv_template:
       - python
-      - -m
-      - runtime.skills.scripts.echo
+      - "{skill_dir}/echo.py"
     timeout_ms: 5000
     allow_net: false

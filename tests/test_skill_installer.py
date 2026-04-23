@@ -207,11 +207,30 @@ def test_confirm_skill_moves_file_into_catalog(tmp_path: Path) -> None:
     outcome = confirm_skill("vault_search", staging_dir=staging, catalog_dir=catalog)
 
     assert outcome.verdict == "confirmed"
-    assert outcome.final_path == catalog / "vault_search.yaml"
+    assert outcome.final_path == catalog / "vault_search" / "skill.yaml"
     assert outcome.final_path is not None
     assert outcome.final_path.is_file()
     # Stage file was removed so repeated confirms fail loudly.
     assert not (staging / "vault_search.yaml").exists()
+
+
+def test_confirm_writes_into_directory_per_skill_layout(tmp_path: Path) -> None:
+    src = tmp_path / "alpha.yaml"
+    _write_yaml(src, _clean_descriptor(id="alpha", intents=["alpha"]))
+    staging = tmp_path / "staging"
+    catalog = tmp_path / "workspace" / "skills"
+
+    staged = stage_skill(src, staging_dir=staging)
+    assert staged.verdict == "staged"
+
+    outcome = confirm_skill("alpha", staging_dir=staging, catalog_dir=catalog)
+
+    assert outcome.verdict == "confirmed"
+    assert outcome.final_path == catalog / "alpha" / "skill.yaml"
+    assert (catalog / "alpha" / "skill.yaml").is_file()
+    assert not (staging / "alpha.yaml").exists()
+    # The legacy flat path must NOT be written.
+    assert not (catalog / "alpha.yaml").exists()
 
 
 def test_confirm_skill_rejects_unstaged_id(tmp_path: Path) -> None:
@@ -237,7 +256,9 @@ def test_confirm_rejects_if_staged_file_tampered_to_blocking(tmp_path: Path) -> 
     outcome = confirm_skill("vault_search", staging_dir=staging, catalog_dir=catalog)
 
     assert outcome.verdict == "rejected_scan"
-    assert not (catalog / "vault_search.yaml").exists()
+    assert not (catalog / "vault_search" / "skill.yaml").exists()
+    # Rejection happens before final_dir.mkdir, so the directory must not exist.
+    assert not (catalog / "vault_search").exists()
 
 
 def test_confirm_rejects_if_staged_file_id_changed(tmp_path: Path) -> None:

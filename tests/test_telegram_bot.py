@@ -61,6 +61,7 @@ from runtime.config import (
     AegisConfig,
     ModelConfig,
     ProviderConfig,
+    SkillsConfig,
     StorageConfig,
     TelegramConfig,
     VaultIndexingConfig,
@@ -561,7 +562,6 @@ def _make_cfg(vault_root: Path | None = None) -> AegisConfig:
 def test_skill_arg_resolver_fills_vault_root(tmp_path: Path) -> None:
     vault = tmp_path / "vault"
     cfg = _make_cfg(vault_root=vault)
-    resolve = build_skill_arg_resolver(cfg, python_executable="/usr/bin/python3")
     # A morning_brief-shaped descriptor with the real argv_template.
     descriptor = SkillDescriptor(
         id="morning_brief",
@@ -578,19 +578,26 @@ def test_skill_arg_resolver_fills_vault_root(tmp_path: Path) -> None:
                 name="morning_brief",
                 argv_template=[
                     "python",
-                    "-m",
-                    "runtime.skills.scripts.morning_brief",
+                    "{skill_dir}/morning_brief.py",
                     "--vault-root",
                     "{vault_root}",
                 ],
             )
         ],
     )
+    # Resolver needs a registry to fill {skill_dir}; without one the
+    # descriptor resolves to None. Supply one via a fake that returns
+    # a tmp dir for the morning_brief id.
+    from runtime.skills.registry import SkillRegistry as _Reg  # noqa: PLC0415
+
+    reg = _Reg([descriptor], source_dirs={"morning_brief": tmp_path / "skills" / "morning_brief"})
+    resolve = build_skill_arg_resolver(
+        cfg, registry=reg, python_executable="/usr/bin/python3"
+    )
     argv = resolve(descriptor)
     assert argv == [
         "/usr/bin/python3",
-        "-m",
-        "runtime.skills.scripts.morning_brief",
+        str(tmp_path / "skills" / "morning_brief" / "morning_brief.py"),
         "--vault-root",
         str(vault),
     ]
@@ -659,10 +666,25 @@ def test_skill_arg_resolver_returns_none_for_descriptor_without_tools() -> None:
 # --- build_intent_router ------------------------------------------------
 
 
-def test_build_intent_router_loads_real_catalog() -> None:
-    # Default catalog dir exists in this repo; should load without error
-    # and match the morning_brief intent at least.
-    router = build_intent_router()
+def test_build_intent_router_loads_real_catalog(tmp_path: Path) -> None:
+    # Seed the bundle into a scratch catalog so the loader sees morning_brief
+    # (which lives in runtime/skills/_bundle/ post-workspace-skills migration).
+    from pathlib import Path  # noqa: PLC0415
+
+    from runtime.skills.bootstrap import seed_builtin_skills  # noqa: PLC0415
+
+    repo_root = Path(__file__).resolve().parent.parent
+    bundle = repo_root / "runtime" / "skills" / "_bundle"
+    legacy_catalog = repo_root / "runtime" / "skills" / "catalog"
+    catalog = tmp_path / "skills"
+    # Merge legacy flat catalog (still populated for other skills) with the
+    # newly-migrated bundle entries.
+    seed_builtin_skills(bundle_dir=bundle, catalog_dir=catalog)
+    for yaml_file in legacy_catalog.glob("*.yaml"):
+        target = catalog / yaml_file.name
+        if not target.exists():
+            target.write_bytes(yaml_file.read_bytes())
+    router = build_intent_router(catalog_dir=catalog)
     assert router is not None
     hit = router.match("send me my morning brief")
     assert hit is not None
@@ -1021,6 +1043,70 @@ def test_build_application_default_constructs_events(
     assert (tmp_path / "sessions") in captured["events"].path.parents
 
 
+def test_build_application_threads_brief_script_into_long_runner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Regression for the deleted `runtime.skills.scripts.morning_brief`
+    # module path: `/brief` must use the bundle-layout script path
+    # resolved from the skill registry (source_dir_of("morning_brief") /
+    # "morning_brief.py") instead of a hardcoded `-m` invocation. This
+    # test captures the runner handed to build_long_running_runner and
+    # asserts its `_brief_script` matches the seeded catalog path.
+    captured: dict[str, Any] = {}
+    real_build_runner = bot_mod.build_long_running_runner
+
+    def _spy(ws: Path, **kwargs: Any) -> LongRunningRunner:
+        captured["brief_script"] = kwargs.get("brief_script")
+        return real_build_runner(ws, **kwargs)
+
+    monkeypatch.setattr(bot_mod, "build_long_running_runner", _spy)
+
+    # Patch the SDK entry point so build_application doesn't open a
+    # real Telegram connection.
+    class _FakeApp:
+        def __init__(self) -> None:
+            self.bot = SimpleNamespace(send_message=AsyncMock())
+
+        def add_handler(self, _handler: Any) -> None:
+            pass
+
+    class _FakeBuilder:
+        def token(self, _t: str) -> _FakeBuilder:
+            return self
+
+        def post_init(self, _fn: Any) -> _FakeBuilder:
+            return self
+
+        def build(self) -> _FakeApp:
+            return _FakeApp()
+
+    import telegram.ext as ptb_ext  # noqa: PLC0415
+
+    monkeypatch.setattr(ptb_ext, "ApplicationBuilder", _FakeBuilder)
+
+    catalog_dir = tmp_path / "skills"
+    cfg = AegisConfig(
+        aegis_home=tmp_path,
+        aegis_root=tmp_path,
+        models=ModelConfig(smart="x-ai/grok-4"),
+        providers=ProviderConfig(openrouter_api_key="sk-test"),
+        telegram=TelegramConfig(bot_token="fake-token", user_allowlist=[42]),
+        storage=StorageConfig(
+            workspace=tmp_path,
+            sessions_dir=tmp_path / "sessions",
+            memory_db=tmp_path / "memory" / "index.db",
+        ),
+        skills=SkillsConfig(catalog_dir=catalog_dir),
+    )
+    build_application(cfg)
+
+    expected = catalog_dir / "morning_brief" / "morning_brief.py"
+    assert captured["brief_script"] == expected
+    # And the seeded file actually exists — seed_builtin_skills copied
+    # the bundle into the catalog so `/brief` can exec it.
+    assert expected.is_file()
+
+
 # --- startup notification ---------------------------------------------
 
 
@@ -1291,13 +1377,15 @@ def test_build_dispatcher_omits_cron_without_scheduler_store(tmp_path: Path) -> 
 
 
 def test_build_scheduler_returns_none_when_catalog_missing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
     # With no skill catalog on disk there's nothing to schedule — the
     # factory returns None so /cron stays unregistered rather than
     # surfacing a stub.
-    monkeypatch.setattr(bot_mod, "_CATALOG_DIR", tmp_path / "nonexistent")
     cfg = _scheduler_cfg(tmp_path)
+    cfg = cfg.model_copy(
+        update={"skills": SkillsConfig(catalog_dir=tmp_path / "nonexistent")}
+    )
     long_runner = build_long_running_runner(tmp_path)
     events = EventStream(tmp_path / "sessions")
     result = build_scheduler(

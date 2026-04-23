@@ -205,8 +205,9 @@ def confirm_skill(
     if outcome is not None:
         return outcome
 
-    catalog_dir.mkdir(parents=True, exist_ok=True)
-    final_path = catalog_dir / f"{skill_id}.yaml"
+    final_dir = catalog_dir / skill_id
+    final_dir.mkdir(parents=True, exist_ok=True)
+    final_path = final_dir / "skill.yaml"
     try:
         shutil.copyfile(stage_path, final_path)
         stage_path.unlink()

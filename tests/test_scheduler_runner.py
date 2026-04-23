@@ -43,7 +43,7 @@ def _descriptor(
         tools.append(
             ToolSpec(
                 name="run",
-                argv_template=["python", "-m", f"runtime.skills.scripts.{skill_id}"],
+                argv_template=["python", f"{{skill_dir}}/{skill_id}.py"],
             )
         )
     return SkillDescriptor(
@@ -146,7 +146,7 @@ async def test_fires_skill_and_delivers_output(tmp_path: Path) -> None:
     assert outcome.status == "ok"
     assert len(subp.calls) == 1
     argv, cwd = subp.calls[0]
-    assert argv == ["python", "-m", "runtime.skills.scripts.morning_brief"]
+    assert argv == ["python", "{skill_dir}/morning_brief.py"]
     assert cwd == tmp_path
     assert len(sink) == 1
     # Delivery contains the skill output; formatting is allowed to

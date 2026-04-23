@@ -333,6 +333,7 @@ async def test_brief_happy_path_returns_full_markdown(tmp_path: Path) -> None:
         runner=fake,
         python_executable="/usr/bin/python3",
         vault_root=tmp_path / "vault",
+        brief_script=tmp_path / "brief.py",
     )
     msg = _FakeReplyable()
     await runner.run(chat_id=1, cmd=_cmd("/brief"), message=msg)
@@ -340,8 +341,7 @@ async def test_brief_happy_path_returns_full_markdown(tmp_path: Path) -> None:
     argv, cwd = fake.calls[0]
     assert argv == [
         "/usr/bin/python3",
-        "-m",
-        "runtime.skills.scripts.morning_brief",
+        str(tmp_path / "brief.py"),
         "--vault-root",
         str(tmp_path / "vault"),
     ]
@@ -355,7 +355,10 @@ async def test_brief_happy_path_returns_full_markdown(tmp_path: Path) -> None:
 async def test_brief_failure_renders_exit_code(tmp_path: Path) -> None:
     fake = _FakeSubprocessRunner(canned=[(2, "Traceback: MetOcean down")])
     runner = LongRunningRunner(
-        tmp_path, runner=fake, vault_root=tmp_path / "vault"
+        tmp_path,
+        runner=fake,
+        vault_root=tmp_path / "vault",
+        brief_script=tmp_path / "brief.py",
     )
     msg = _FakeReplyable()
     await runner.run(chat_id=1, cmd=_cmd("/brief"), message=msg)
@@ -369,12 +372,31 @@ async def test_brief_in_flight_guard_rejects_concurrent(tmp_path: Path) -> None:
     reg.try_acquire(1, "/brief")
     fake = _FakeSubprocessRunner()
     runner = LongRunningRunner(
-        tmp_path, runner=fake, registry=reg, vault_root=tmp_path / "vault"
+        tmp_path,
+        runner=fake,
+        registry=reg,
+        vault_root=tmp_path / "vault",
+        brief_script=tmp_path / "brief.py",
     )
     msg = _FakeReplyable()
     await runner.run(chat_id=1, cmd=_cmd("/brief"), message=msg)
     assert fake.calls == []
     assert "Already running /brief" in msg.replies[0].initial_text
+
+
+async def test_brief_not_configured_without_brief_script(tmp_path: Path) -> None:
+    # vault_root set but brief_script missing → operator-visible error,
+    # no subprocess. Guards the `build_application` wiring: if the
+    # morning_brief descriptor isn't in the catalog, `/brief` must
+    # fail cleanly instead of trying to exec `None`.
+    fake = _FakeSubprocessRunner()
+    runner = LongRunningRunner(
+        tmp_path, runner=fake, vault_root=tmp_path / "vault"
+    )
+    msg = _FakeReplyable()
+    await runner.run(chat_id=1, cmd=_cmd("/brief"), message=msg)
+    assert fake.calls == []
+    assert "not configured" in msg.replies[0].initial_text
 
 
 # --- run_skill (intent-dispatch path) ---------------------------------
@@ -385,7 +407,7 @@ async def test_run_skill_happy_path_echoes_output(tmp_path: Path) -> None:
     fake = _FakeSubprocessRunner(canned=[(0, body)])
     runner = LongRunningRunner(tmp_path, runner=fake)
     msg = _FakeReplyable()
-    argv = ["/usr/bin/python3", "-m", "runtime.skills.scripts.morning_brief"]
+    argv = ["/usr/bin/python3", str(tmp_path / "morning_brief.py")]
     await runner.run_skill(
         chat_id=1, skill_id="morning_brief", argv=argv, message=msg
     )

@@ -1,9 +1,27 @@
 """Unit tests for the echo subprocess entry point (scheduler path)."""
 from __future__ import annotations
 
+import importlib.util
+from pathlib import Path
+
 import pytest
 
-from runtime.skills.scripts.echo import main
+_SCRIPT = (
+    Path(__file__).resolve().parent.parent
+    / "runtime" / "skills" / "_bundle" / "echo" / "echo.py"
+)
+
+
+def _load_module():
+    spec = importlib.util.spec_from_file_location("echo_bundle", _SCRIPT)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_echo = _load_module()
+main = _echo.main
 
 pytestmark = pytest.mark.unit
 

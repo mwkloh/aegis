@@ -13,8 +13,27 @@ import pytest
 import respx
 
 from runtime.chat.cli import build_pipeline
+from runtime.config import AegisConfig, SkillsConfig, get_config
+from runtime.skills.bootstrap import seed_builtin_skills
 
 pytestmark = pytest.mark.e2e
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_REPO_CATALOG = _REPO_ROOT / "runtime" / "skills" / "catalog"
+_BUNDLE = _REPO_ROOT / "runtime" / "skills" / "_bundle"
+
+
+def _cfg_with_repo_catalog(tmp_path: Path) -> AegisConfig:
+    """Seed the bundle + copy flat catalog into ``tmp_path`` and point config there."""
+    catalog_dir = tmp_path / "skills_catalog"
+    seed_builtin_skills(bundle_dir=_BUNDLE, catalog_dir=catalog_dir)
+    for yaml_file in _REPO_CATALOG.glob("*.yaml"):
+        target = catalog_dir / yaml_file.name
+        if not target.exists():
+            target.write_bytes(yaml_file.read_bytes())
+    return get_config().model_copy(
+        update={"skills": SkillsConfig(catalog_dir=catalog_dir)}
+    )
 
 
 def _read_jsonl(path: Path) -> list[dict[str, object]]:
@@ -23,7 +42,7 @@ def _read_jsonl(path: Path) -> list[dict[str, object]]:
 
 @pytest.mark.asyncio
 async def test_ask_time_tokyo_end_to_end(aegis_sandbox: Path) -> None:
-    pipeline = build_pipeline()
+    pipeline = build_pipeline(config=_cfg_with_repo_catalog(aegis_sandbox))
 
     with respx.mock(assert_all_called=True) as mock:
         mock.post("http://127.0.0.1:11434/api/chat").mock(

@@ -33,9 +33,6 @@ from .patterns import detect_all
 from .proposals import draft
 from .writer import write_patterns, write_proposals
 
-CATALOG_DIR = Path(__file__).parent.parent / "skills" / "catalog"
-
-
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(sys.argv[1:] if argv is None else argv)
     cfg = get_config()
@@ -63,7 +60,7 @@ async def _run(
     print(f"[reflection] patterns: {len(patterns)} detected", file=out)
 
     client, label = _build_reflection_client(cfg, events_log)
-    skills = sorted(s.id for s in SkillRegistry.from_directory(CATALOG_DIR).all())
+    skills = sorted(s.id for s in SkillRegistry.from_directory(cfg.skills.catalog_dir).all())
     proposals = await draft(
         patterns,
         client=client,

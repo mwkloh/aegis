@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import sys
 from collections.abc import Iterator
-from pathlib import Path
 from typing import Protocol
 
 from runtime.config import AegisConfig, get_config
@@ -28,8 +27,6 @@ from runtime.llm.clients.openrouter_client import (
 from runtime.reasoning import SkillRunner
 from runtime.reasoning.tier1_reasoner import Tier1Reasoner
 from runtime.skills import SkillRegistry
-
-CATALOG_DIR = Path(__file__).parent.parent / "skills" / "catalog"
 
 
 class _AsyncClassifier(Protocol):
@@ -127,7 +124,7 @@ def build_pipeline(config: AegisConfig | None = None) -> Pipeline:
     cfg = config or get_config()
     cfg.storage.sessions_dir.mkdir(parents=True, exist_ok=True)
     events = EventStream(cfg.storage.sessions_dir)
-    registry = SkillRegistry.from_directory(CATALOG_DIR)
+    registry = SkillRegistry.from_directory(cfg.skills.catalog_dir)
     known_intents = [i for d in registry.all() for i in d.intents]
 
     classifier: _AsyncClassifier

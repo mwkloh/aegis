@@ -52,7 +52,7 @@ These are filesystem and git operations only — no application code is written.
 mkdir -p ~/.aegis/workspace
 mkdir -p ~/.aegis/workspace/memory
 mkdir -p ~/.aegis/workspace/sessions
-mkdir -p ~/.aegis/workspace/skills        # empty for now
+mkdir -p ~/.aegis/workspace/skills        # seeded on first boot from runtime/skills/_bundle
 ```
 
 ### 2.2 Copy canonical files (idempotent, never overwrite if target exists)

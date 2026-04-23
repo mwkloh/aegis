@@ -69,7 +69,7 @@ def _bundle() -> ContextBundle:
         ],
         skills=[
             SkillSlice(
-                path="runtime/skills/catalog/echo.yaml",
+                path="runtime/skills/_bundle/echo/skill.yaml",
                 content="id: echo\nintents: [echo]\ntool: echo\n",
                 bytes_total=37,
                 was_truncated=False,
@@ -137,7 +137,7 @@ async def test_context_blob_is_injected_before_approved_task() -> None:
     # Each slice's path appears, and at least some content from each.
     assert "### runtime/intent/classifier.py" in rendered
     assert "def classify(): return 'echo'" in rendered
-    assert "### runtime/skills/catalog/echo.yaml (skill)" in rendered
+    assert "### runtime/skills/_bundle/echo/skill.yaml (skill)" in rendered
     assert "id: echo" in rendered
     # The blob is positioned BEFORE the approved-task section so the
     # model reads context first, then the task.

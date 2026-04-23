@@ -125,6 +125,7 @@ class LongRunningRunner:
         registry: InFlightRegistry | None = None,
         python_executable: str | None = None,
         vault_root: Path | None = None,
+        brief_script: Path | None = None,
     ) -> None:
         self._workspace = workspace
         self._runner = runner
@@ -133,6 +134,7 @@ class LongRunningRunner:
             python_executable if python_executable is not None else sys.executable
         )
         self._vault_root = vault_root
+        self._brief_script = brief_script
 
     @property
     def commands(self) -> frozenset[str]:
@@ -203,11 +205,14 @@ class LongRunningRunner:
     async def _run_brief(self, *, message: _Replyable) -> None:
         # Wraps the `morning_brief` skill script so the operator gets
         # the full markdown brief posted back into chat. `/brief` takes
-        # no args — the vault root is resolved from configuration at
-        # wire-time (see `build_long_running_runner`). If the config
-        # never set `vault_indexing.vault_root`, we fail fast with a
-        # human-readable reply instead of exploding under subprocess.
-        if self._vault_root is None:
+        # no args — the vault root + script path are both resolved from
+        # configuration and the skill registry at wire-time (see
+        # `build_long_running_runner` and `build_application`). The
+        # canonical script path is `registry.source_dir_of("morning_brief")
+        # / "morning_brief.py"`. If either dependency is missing, we
+        # fail fast with a human-readable reply instead of exploding
+        # under subprocess.
+        if self._vault_root is None or self._brief_script is None:
             await message.reply_text(
                 "/brief is not configured — set vaultIndexing.vaultRoot "
                 "in config.json to enable."
@@ -215,8 +220,7 @@ class LongRunningRunner:
             return
         argv = [
             self._python,
-            "-m",
-            "runtime.skills.scripts.morning_brief",
+            str(self._brief_script),
             "--vault-root",
             str(self._vault_root),
         ]
