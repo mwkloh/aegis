@@ -21,21 +21,40 @@ import pytest
 
 from runtime.scheduler.seed import SYSTEM_JOBS
 from runtime.skills import SkillRegistry
+from runtime.skills.bootstrap import seed_builtin_skills
 
 pytestmark = pytest.mark.unit
 
 
-CATALOG = Path(__file__).parent.parent / "runtime" / "skills" / "catalog"
+_REPO_ROOT = Path(__file__).parent.parent
+CATALOG = _REPO_ROOT / "runtime" / "skills" / "catalog"
+BUNDLE = _REPO_ROOT / "runtime" / "skills" / "_bundle"
 
 
-def test_catalog_directory_loads() -> None:
-    registry = SkillRegistry.from_directory(CATALOG)
+def _seeded_registry(tmp_path: Path) -> SkillRegistry:
+    """Build a registry that merges the flat catalog with the seed bundle.
+
+    Mirrors what ``build_application`` does at boot: seed the bundle into the
+    workspace path, then load. Tests call this with ``tmp_path`` so each test
+    gets a fresh catalog free of cross-contamination.
+    """
+    catalog_dir = tmp_path / "skills"
+    seed_builtin_skills(bundle_dir=BUNDLE, catalog_dir=catalog_dir)
+    for yaml_file in CATALOG.glob("*.yaml"):
+        target = catalog_dir / yaml_file.name
+        if not target.exists():
+            target.write_bytes(yaml_file.read_bytes())
+    return SkillRegistry.from_directory(catalog_dir)
+
+
+def test_catalog_directory_loads(tmp_path: Path) -> None:
+    registry = _seeded_registry(tmp_path)
     # Every skill id is unique and validates via model schema.
     assert registry.get("morning_brief") is not None
 
 
-def test_vault_reindex_descriptor() -> None:
-    registry = SkillRegistry.from_directory(CATALOG)
+def test_vault_reindex_descriptor(tmp_path: Path) -> None:
+    registry = _seeded_registry(tmp_path)
     desc = registry.get("vault_reindex")
     assert desc is not None, "vault_reindex.yaml missing from catalog"
     assert desc.tool == "vault_reindex"
@@ -50,8 +69,8 @@ def test_vault_reindex_descriptor() -> None:
     assert tool.allow_net is False
 
 
-def test_tier2_compress_descriptor() -> None:
-    registry = SkillRegistry.from_directory(CATALOG)
+def test_tier2_compress_descriptor(tmp_path: Path) -> None:
+    registry = _seeded_registry(tmp_path)
     desc = registry.get("tier2_compress")
     assert desc is not None, "tier2_compress.yaml missing from catalog"
     assert desc.tool == "tier2_compress"
@@ -66,8 +85,8 @@ def test_tier2_compress_descriptor() -> None:
     assert tool.allow_net is False
 
 
-def test_reflection_sweep_descriptor() -> None:
-    registry = SkillRegistry.from_directory(CATALOG)
+def test_reflection_sweep_descriptor(tmp_path: Path) -> None:
+    registry = _seeded_registry(tmp_path)
     desc = registry.get("reflection_sweep")
     assert desc is not None, "reflection_sweep.yaml missing from catalog"
     assert desc.tool == "reflection_sweep"
@@ -89,8 +108,8 @@ def test_reflection_sweep_descriptor() -> None:
     assert tool.allow_net is False
 
 
-def test_echo_descriptor() -> None:
-    registry = SkillRegistry.from_directory(CATALOG)
+def test_echo_descriptor(tmp_path: Path) -> None:
+    registry = _seeded_registry(tmp_path)
     desc = registry.get("echo")
     assert desc is not None, "echo.yaml missing from catalog"
     assert desc.tool == "echo"
@@ -102,11 +121,11 @@ def test_echo_descriptor() -> None:
     assert tool.allow_net is False
 
 
-def test_system_job_skills_all_resolvable() -> None:
+def test_system_job_skills_all_resolvable(tmp_path: Path) -> None:
     """Every SYSTEM_JOBS.skill loads from the catalog (D3a/b/c/d all done).
     Catches typos in ``seed.SYSTEM_JOBS``.
     """
-    registry = SkillRegistry.from_directory(CATALOG)
+    registry = _seeded_registry(tmp_path)
     for spec in SYSTEM_JOBS:
         desc = registry.get(spec.skill)
         assert desc is not None, (

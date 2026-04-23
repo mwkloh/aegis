@@ -660,12 +660,24 @@ def test_skill_arg_resolver_returns_none_for_descriptor_without_tools() -> None:
 # --- build_intent_router ------------------------------------------------
 
 
-def test_build_intent_router_loads_real_catalog() -> None:
-    # The in-repo catalog dir exists; should load without error
-    # and match the morning_brief intent at least.
+def test_build_intent_router_loads_real_catalog(tmp_path: Path) -> None:
+    # Seed the bundle into a scratch catalog so the loader sees morning_brief
+    # (which lives in runtime/skills/_bundle/ post-workspace-skills migration).
     from pathlib import Path  # noqa: PLC0415
 
-    catalog = Path(__file__).resolve().parent.parent / "runtime" / "skills" / "catalog"
+    from runtime.skills.bootstrap import seed_builtin_skills  # noqa: PLC0415
+
+    repo_root = Path(__file__).resolve().parent.parent
+    bundle = repo_root / "runtime" / "skills" / "_bundle"
+    legacy_catalog = repo_root / "runtime" / "skills" / "catalog"
+    catalog = tmp_path / "skills"
+    # Merge legacy flat catalog (still populated for other skills) with the
+    # newly-migrated bundle entries.
+    seed_builtin_skills(bundle_dir=bundle, catalog_dir=catalog)
+    for yaml_file in legacy_catalog.glob("*.yaml"):
+        target = catalog / yaml_file.name
+        if not target.exists():
+            target.write_bytes(yaml_file.read_bytes())
     router = build_intent_router(catalog_dir=catalog)
     assert router is not None
     hit = router.match("send me my morning brief")

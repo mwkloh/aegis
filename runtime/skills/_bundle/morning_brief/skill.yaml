@@ -26,8 +26,7 @@ tools:
   - name: morning_brief
     argv_template:
       - python
-      - -m
-      - runtime.skills.scripts.morning_brief
+      - "{skill_dir}/morning_brief.py"
       - --vault-root
       - "{vault_root}"
     timeout_ms: 90000

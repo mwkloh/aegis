@@ -21,6 +21,7 @@ Network is mocked with respx — zero real I/O.
 """
 from __future__ import annotations
 
+import importlib.util
 import random
 from datetime import UTC, datetime
 from pathlib import Path
@@ -31,7 +32,21 @@ import httpx
 import pytest
 import respx
 
-from runtime.skills.scripts import morning_brief
+_SCRIPT = (
+    Path(__file__).resolve().parent.parent
+    / "runtime" / "skills" / "_bundle" / "morning_brief" / "morning_brief.py"
+)
+
+
+def _load_module() -> Any:
+    spec = importlib.util.spec_from_file_location("morning_brief_bundle", _SCRIPT)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+morning_brief = _load_module()
 
 pytestmark = pytest.mark.unit
 
