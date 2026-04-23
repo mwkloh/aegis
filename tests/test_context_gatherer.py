@@ -30,7 +30,8 @@ def _make_repo(tmp_path: Path) -> Path:
     """Stand up a minimal repo with a couple of source files + skill YAMLs."""
     repo = tmp_path / "repo"
     (repo / "runtime/intent").mkdir(parents=True)
-    (repo / "runtime/skills/catalog").mkdir(parents=True)
+    (repo / "runtime/skills/_bundle/echo").mkdir(parents=True)
+    (repo / "runtime/skills/_bundle/time_query").mkdir(parents=True)
     (repo / "runtime/tools").mkdir(parents=True)
 
     (repo / "runtime/intent/classifier.py").write_text(
@@ -39,10 +40,10 @@ def _make_repo(tmp_path: Path) -> Path:
     (repo / "runtime/tools/echo_tool.py").write_text(
         "def echo(msg): return msg\n", encoding="utf-8",
     )
-    (repo / "runtime/skills/catalog/echo.yaml").write_text(
+    (repo / "runtime/skills/_bundle/echo/skill.yaml").write_text(
         "id: echo\nintents: [echo]\ntool: echo\n", encoding="utf-8",
     )
-    (repo / "runtime/skills/catalog/time_query.yaml").write_text(
+    (repo / "runtime/skills/_bundle/time_query/skill.yaml").write_text(
         "id: time_query\nintents: [time]\ntool: time\n", encoding="utf-8",
     )
     return repo
@@ -80,20 +81,20 @@ def test_gather_pulls_skill_yaml_when_scope_basename_matches_id(
     bundle = gather_context(repo, ["runtime/tools/echo_tool.py"])
 
     skill_paths = [s.path for s in bundle.skills]
-    assert "runtime/skills/catalog/echo.yaml" in skill_paths
+    assert "runtime/skills/_bundle/echo/skill.yaml" in skill_paths
     # An unrelated skill must NOT be pulled in.
-    assert "runtime/skills/catalog/time_query.yaml" not in skill_paths
+    assert "runtime/skills/_bundle/time_query/skill.yaml" not in skill_paths
 
 
 def test_gather_includes_yaml_directly_listed_in_scope(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
-    bundle = gather_context(repo, ["runtime/skills/catalog/echo.yaml"])
+    bundle = gather_context(repo, ["runtime/skills/_bundle/echo/skill.yaml"])
 
     # Direct scope hit is recorded as a file slice (not a skill slice) and
     # is NOT also added as a skill (no double-counting).
     file_paths = [f.path for f in bundle.files]
     skill_paths = [s.path for s in bundle.skills]
-    assert "runtime/skills/catalog/echo.yaml" in file_paths
+    assert "runtime/skills/_bundle/echo/skill.yaml" in file_paths
     assert skill_paths == []
 
 
@@ -102,7 +103,7 @@ def test_gather_includes_yaml_directly_listed_in_scope(tmp_path: Path) -> None:
 
 def test_per_file_cap_head_truncates_with_marker(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
-    (repo / "runtime/skills/catalog").mkdir(parents=True)
+    (repo / "runtime/skills/_bundle").mkdir(parents=True)
     (repo / "runtime").mkdir(exist_ok=True)
     big = repo / "runtime/big.py"
     big.write_text("x" * 10_000, encoding="utf-8")  # > 4 KB
@@ -121,7 +122,7 @@ def test_per_file_cap_head_truncates_with_marker(tmp_path: Path) -> None:
 def test_total_cap_stops_further_entries(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     (repo / "runtime").mkdir(parents=True)
-    (repo / "runtime/skills/catalog").mkdir(parents=True)
+    (repo / "runtime/skills/_bundle").mkdir(parents=True)
     for i in range(5):
         (repo / f"runtime/f{i}.py").write_text("y" * 4096, encoding="utf-8")
 
@@ -142,7 +143,7 @@ def test_custom_caps_respected(tmp_path: Path) -> None:
     don't emit marker-only stub slices."""
     repo = tmp_path / "repo"
     (repo / "runtime").mkdir(parents=True)
-    (repo / "runtime/skills/catalog").mkdir(parents=True)
+    (repo / "runtime/skills/_bundle").mkdir(parents=True)
     (repo / "runtime/a.py").write_text("a" * 200, encoding="utf-8")
     (repo / "runtime/b.py").write_text("b" * 200, encoding="utf-8")
 
@@ -161,7 +162,7 @@ def test_total_cap_strict_for_each_slice(tmp_path: Path) -> None:
     so ``total_bytes`` always stays under ``max_total_bytes``."""
     repo = tmp_path / "repo"
     (repo / "runtime").mkdir(parents=True)
-    (repo / "runtime/skills/catalog").mkdir(parents=True)
+    (repo / "runtime/skills/_bundle").mkdir(parents=True)
     for i in range(5):
         (repo / f"runtime/g{i}.py").write_text("z" * 4096, encoding="utf-8")
 
@@ -177,7 +178,7 @@ def test_total_cap_strict_for_each_slice(tmp_path: Path) -> None:
 
 def test_dotdot_escape_is_refused(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
-    (repo / "runtime/skills/catalog").mkdir(parents=True)
+    (repo / "runtime/skills/_bundle").mkdir(parents=True)
     (tmp_path / "outside.py").write_text("secret\n", encoding="utf-8")
 
     bundle = gather_context(repo, ["../outside.py"])
@@ -234,7 +235,7 @@ def test_empty_scope_returns_empty_bundle(tmp_path: Path) -> None:
 
 
 def test_no_skills_dir_does_not_crash(tmp_path: Path) -> None:
-    """A repo without ``runtime/skills/catalog/`` returns no skill slices."""
+    """A repo without ``runtime/skills/_bundle/`` returns no skill slices."""
     repo = tmp_path / "repo"
     (repo / "runtime").mkdir(parents=True)
     (repo / "runtime/foo.py").write_text("z\n", encoding="utf-8")

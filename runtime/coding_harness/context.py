@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 DEFAULT_PER_FILE_BYTES: Final[int] = 4096
 DEFAULT_TOTAL_BYTES: Final[int] = 15360  # 15 KB — Decision #5 (Phase 5 sign-off)
-_SKILLS_RELDIR: Final[str] = "runtime/skills/catalog"
+_SKILLS_RELDIR: Final[str] = "runtime/skills/_bundle"
 _PATH_MAX: Final[int] = 512
 _MARKER_OVERHEAD: Final[int] = 100  # generous bound on truncation marker bytes
 _MIN_USEFUL_BYTES: Final[int] = 200  # below this, skip the file entirely
@@ -114,7 +114,7 @@ def _matching_skill_yaml_paths(
     scope_set = set(scope_paths)
     scope_basenames = [Path(p).name for p in scope_paths]
     matches: list[Path] = []
-    for yaml_path in sorted(catalog.glob("*.yaml")):
+    for yaml_path in sorted(catalog.glob("*/skill.yaml")):
         rel = str(yaml_path.relative_to(repo_root))
         if rel in scope_set:
             matches.append(yaml_path)

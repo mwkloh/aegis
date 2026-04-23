@@ -1,7 +1,7 @@
 """Catalog-side sanity for the SYS-* recurring jobs (Track D, D3).
 
 Each scheduled system job (morning_brief, vault_reindex, tier2_compress,
-reflection_sweep) ships a YAML in ``runtime/skills/catalog/`` declaring its
+reflection_sweep) ships a YAML in ``runtime/skills/_bundle/<id>/`` declaring its
 argv template. These tests assert:
 
 * The shipped catalog loads without errors (YAML valid, placeholders resolve).
