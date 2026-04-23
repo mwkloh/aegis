@@ -6,15 +6,21 @@ import pytest
 from pydantic import ValidationError
 
 from runtime.skills import SkillDescriptor, SkillRegistry, ToolSpec
+from runtime.skills.bootstrap import seed_builtin_skills
 
 pytestmark = pytest.mark.unit
 
 
-CATALOG = Path(__file__).parent.parent / "runtime" / "skills" / "catalog"
+_BUNDLE = Path(__file__).resolve().parent.parent / "runtime" / "skills" / "_bundle"
 
 
-def test_loads_echo_descriptor() -> None:
-    registry = SkillRegistry.from_directory(CATALOG)
+def _seeded_registry(tmp_path: Path) -> SkillRegistry:
+    seed_builtin_skills(bundle_dir=_BUNDLE, catalog_dir=tmp_path)
+    return SkillRegistry.from_directory(tmp_path)
+
+
+def test_loads_echo_descriptor(tmp_path: Path) -> None:
+    registry = _seeded_registry(tmp_path)
     echo = registry.get("echo")
     assert echo is not None
     assert echo.tool == "echo"
@@ -22,11 +28,11 @@ def test_loads_echo_descriptor() -> None:
     assert "ping" in echo.intents
     assert echo.requires_tier1 is False
     assert len(echo.tools) == 1
-    assert echo.tools[0].argv_template[:3] == ["python", "-m", "runtime.skills.scripts.echo"]
+    assert echo.tools[0].argv_template == ["python", "{skill_dir}/echo.py"]
 
 
-def test_for_intent_resolves_to_descriptor() -> None:
-    registry = SkillRegistry.from_directory(CATALOG)
+def test_for_intent_resolves_to_descriptor(tmp_path: Path) -> None:
+    registry = _seeded_registry(tmp_path)
     assert registry.for_intent("echo") is not None
     assert registry.for_intent("nope") is None
 

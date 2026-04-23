@@ -115,9 +115,11 @@ def test_echo_descriptor(tmp_path: Path) -> None:
     assert desc.tool == "echo"
     assert len(desc.tools) == 1
     tool = desc.tools[0]
-    assert tool.argv_template[:3] == ["python", "-m", "runtime.skills.scripts.echo"]
-    # No placeholders — scheduler appends positional args from the job's args tuple.
-    assert tool.placeholders() == set()
+    assert tool.argv_template == ["python", "{skill_dir}/echo.py"]
+    # Only the infrastructure {skill_dir} placeholder — the harness injects it
+    # from the registry's source_dir. Scheduler appends positional args from
+    # the job's args tuple after argv resolution.
+    assert tool.placeholders() == {"skill_dir"}
     assert tool.allow_net is False
 
 
