@@ -75,7 +75,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--catalog-dir",
         type=Path,
-        default=_default_catalog(),
+        default=None,
         help="Active catalog directory (default: cfg.skills.catalog_dir).",
     )
     parser.add_argument(
@@ -92,10 +92,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.list:
         return _cmd_list(args.staging_dir, as_json=args.json)
     if args.confirm:
+        catalog_dir = args.catalog_dir if args.catalog_dir is not None else _default_catalog()
         return _cmd_confirm(
             args.confirm,
             staging_dir=args.staging_dir,
-            catalog_dir=args.catalog_dir,
+            catalog_dir=catalog_dir,
             as_json=args.json,
         )
     if args.source is None:
