@@ -28,7 +28,7 @@ def test_files_open_invokes_open_with_app(monkeypatch, client: FilesClient, tmp_
     out = tools["files_open"]({"path": str(tmp_path / "hello.txt")})
 
     assert calls == [(str(tmp_path / "hello.txt"), None)]
-    assert "Opened" in out["result"]
+    assert out["result"] == f"Opened {tmp_path / 'hello.txt'}."
 
 
 def test_files_open_passes_app_arg(monkeypatch, client: FilesClient, tmp_path: Path) -> None:
@@ -36,6 +36,7 @@ def test_files_open_passes_app_arg(monkeypatch, client: FilesClient, tmp_path: P
     monkeypatch.setattr(client, "open_with_app", lambda p, app=None: calls.append((p, app)))
 
     tools = make_files_tools(client)
-    tools["files_open"]({"path": str(tmp_path / "hello.txt"), "app": "Preview"})
+    out = tools["files_open"]({"path": str(tmp_path / "hello.txt"), "app": "Preview"})
 
     assert calls == [(str(tmp_path / "hello.txt"), "Preview")]
+    assert out["result"] == f"Opened {tmp_path / 'hello.txt'} with Preview."

@@ -13,7 +13,7 @@ _MAX_TOOL_CHARS = 3500
 def make_files_tools(
     client: FilesClient,
 ) -> dict[str, Callable[[dict[str, Any]], dict[str, Any]]]:
-    """Return the four read-only harness callables closed over `client`."""
+    """Return the five harness callables closed over `client`."""
 
     def _wrap(fn: Callable[[dict[str, Any]], dict[str, Any]]) -> Callable[[dict[str, Any]], dict[str, Any]]:
         @functools.wraps(fn)
