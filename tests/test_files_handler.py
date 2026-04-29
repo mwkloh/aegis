@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from runtime.chat.telegram.dispatch import IncomingMessage, ParsedCommand
+from runtime.chat.telegram.dispatch import Handler, IncomingMessage, ParsedCommand
 from runtime.chat.telegram.files_handler import files_handler
 from runtime.files.client import DirEntry, FileInfo, FileTooBig, PathDenied
 
@@ -87,71 +87,71 @@ def stub() -> _StubClient:
 
 
 @pytest.fixture()
-def handler(stub: _StubClient) -> object:
+def handler(stub: _StubClient) -> Handler:
     return files_handler(client=stub)  # type: ignore[arg-type]
 
 
 # ── No args ───────────────────────────────────────────────────────────────────
 
-def test_no_args_returns_usage(handler: object) -> None:
+def test_no_args_returns_usage(handler: Handler) -> None:
     result = handler(_msg(), _cmd("/files"))
     assert "Usage" in result
 
 
-def test_unknown_subverb_returns_usage(handler: object) -> None:
+def test_unknown_subverb_returns_usage(handler: Handler) -> None:
     result = handler(_msg(), _cmd("/files", "bogus"))
     assert "Usage" in result
 
 
 # ── ls ────────────────────────────────────────────────────────────────────────
 
-def test_ls_formats_file_entry(handler: object, stub: _StubClient) -> None:
+def test_ls_formats_file_entry(handler: Handler, stub: _StubClient) -> None:
     stub.entries = [DirEntry(name="report.pdf", path="/x/report.pdf", type="file", size=2048, modified=_NOW)]
     result = handler(_msg(), _cmd("/files", "ls", "/x"))
     assert "[f]" in result
     assert "report.pdf" in result
 
 
-def test_ls_formats_directory_entry(handler: object, stub: _StubClient) -> None:
+def test_ls_formats_directory_entry(handler: Handler, stub: _StubClient) -> None:
     stub.entries = [DirEntry(name="docs", path="/x/docs", type="directory", size=0, modified=_NOW)]
     result = handler(_msg(), _cmd("/files", "ls", "/x"))
     assert "[d]" in result
     assert "docs" in result
 
 
-def test_ls_empty_directory(handler: object) -> None:
+def test_ls_empty_directory(handler: Handler) -> None:
     result = handler(_msg(), _cmd("/files", "ls", "/x"))
     assert "empty" in result.lower()
 
 
-def test_ls_missing_path_returns_usage(handler: object) -> None:
+def test_ls_missing_path_returns_usage(handler: Handler) -> None:
     result = handler(_msg(), _cmd("/files", "ls"))
     assert "Usage" in result
 
 
 # ── read ──────────────────────────────────────────────────────────────────────
 
-def test_read_returns_content(handler: object, stub: _StubClient) -> None:
+def test_read_returns_content(handler: Handler, stub: _StubClient) -> None:
     stub.content = "hello world"
     result = handler(_msg(), _cmd("/files", "read", "/x/file.txt"))
     assert "hello world" in result
 
 
-def test_read_clips_long_content(handler: object, stub: _StubClient) -> None:
+def test_read_clips_long_content(handler: Handler, stub: _StubClient) -> None:
     stub.content = "x" * 5000
     result = handler(_msg(), _cmd("/files", "read", "/x/file.txt"))
     assert "truncated" in result
     assert len(result) < 5000
 
 
-def test_read_missing_path_returns_usage(handler: object) -> None:
+def test_read_missing_path_returns_usage(handler: Handler) -> None:
     result = handler(_msg(), _cmd("/files", "read"))
     assert "Usage" in result
 
 
 # ── stat ──────────────────────────────────────────────────────────────────────
 
-def test_stat_shows_all_fields(handler: object) -> None:
+def test_stat_shows_all_fields(handler: Handler) -> None:
     result = handler(_msg(), _cmd("/files", "stat", "/x/doc.txt"))
     assert "type" in result
     assert "size" in result
@@ -161,93 +161,93 @@ def test_stat_shows_all_fields(handler: object) -> None:
 
 # ── find ──────────────────────────────────────────────────────────────────────
 
-def test_find_no_matches(handler: object) -> None:
+def test_find_no_matches(handler: Handler) -> None:
     result = handler(_msg(), _cmd("/files", "find", "/x", "*.pdf"))
     assert "No matches" in result
 
 
-def test_find_shows_paths(handler: object, stub: _StubClient) -> None:
+def test_find_shows_paths(handler: Handler, stub: _StubClient) -> None:
     stub.search_results = ["/x/report.pdf"]
     result = handler(_msg(), _cmd("/files", "find", "/x", "*.pdf"))
     assert "/x/report.pdf" in result
 
 
-def test_find_missing_args_returns_usage(handler: object) -> None:
+def test_find_missing_args_returns_usage(handler: Handler) -> None:
     result = handler(_msg(), _cmd("/files", "find", "/x"))
     assert "Usage" in result
 
 
 # ── mv ────────────────────────────────────────────────────────────────────────
 
-def test_mv_success_message(handler: object) -> None:
+def test_mv_success_message(handler: Handler) -> None:
     result = handler(_msg(), _cmd("/files", "mv", "/x/a.txt", "/x/b.txt"))
     assert "Moved" in result
 
 
-def test_mv_missing_dst_returns_usage(handler: object) -> None:
+def test_mv_missing_dst_returns_usage(handler: Handler) -> None:
     result = handler(_msg(), _cmd("/files", "mv", "/x/a.txt"))
     assert "Usage" in result
 
 
 # ── cp ────────────────────────────────────────────────────────────────────────
 
-def test_cp_success_message(handler: object) -> None:
+def test_cp_success_message(handler: Handler) -> None:
     result = handler(_msg(), _cmd("/files", "cp", "/x/a.txt", "/x/b.txt"))
     assert "Copied" in result
 
 
 # ── rm ────────────────────────────────────────────────────────────────────────
 
-def test_rm_without_confirm_flag(handler: object, stub: _StubClient) -> None:
+def test_rm_without_confirm_flag(handler: Handler, stub: _StubClient) -> None:
     stub.raise_on_next = PathDenied("non-empty, use --confirm")
     result = handler(_msg(), _cmd("/files", "rm", "/x/dir"))
     assert "Access denied" in result
 
 
-def test_rm_with_confirm_flag(handler: object) -> None:
+def test_rm_with_confirm_flag(handler: Handler) -> None:
     result = handler(_msg(), _cmd("/files", "rm", "--confirm", "/x/dir"))
     assert "Deleted" in result
 
 
-def test_rm_missing_path_returns_usage(handler: object) -> None:
+def test_rm_missing_path_returns_usage(handler: Handler) -> None:
     result = handler(_msg(), _cmd("/files", "rm"))
     assert "Usage" in result
 
 
 # ── mkdir ─────────────────────────────────────────────────────────────────────
 
-def test_mkdir_success(handler: object) -> None:
+def test_mkdir_success(handler: Handler) -> None:
     result = handler(_msg(), _cmd("/files", "mkdir", "/x/newdir"))
     assert "Created" in result
 
 
 # ── open ──────────────────────────────────────────────────────────────────────
 
-def test_open_success(handler: object) -> None:
+def test_open_success(handler: Handler) -> None:
     result = handler(_msg(), _cmd("/files", "open", "/x/doc.txt"))
     assert "Opened" in result
 
 
-def test_open_with_named_app(handler: object) -> None:
+def test_open_with_named_app(handler: Handler) -> None:
     result = handler(_msg(), _cmd("/files", "open", "/x/doc.txt", "Preview"))
     assert "Preview" in result
 
 
 # ── Error paths ───────────────────────────────────────────────────────────────
 
-def test_path_denied_shows_access_denied(handler: object, stub: _StubClient) -> None:
+def test_path_denied_shows_access_denied(handler: Handler, stub: _StubClient) -> None:
     stub.raise_on_next = PathDenied("outside roots")
     result = handler(_msg(), _cmd("/files", "read", "/etc/passwd"))
     assert "Access denied" in result
 
 
-def test_file_too_big_shows_error(handler: object, stub: _StubClient) -> None:
+def test_file_too_big_shows_error(handler: Handler, stub: _StubClient) -> None:
     stub.raise_on_next = FileTooBig("10 MB exceeded")
     result = handler(_msg(), _cmd("/files", "read", "/x/huge.bin"))
     assert "too large" in result.lower()
 
 
-def test_os_error_shows_error(handler: object, stub: _StubClient) -> None:
+def test_os_error_shows_error(handler: Handler, stub: _StubClient) -> None:
     stub.raise_on_next = OSError("permission denied")
     result = handler(_msg(), _cmd("/files", "read", "/x/locked.txt"))
     assert "Error" in result
