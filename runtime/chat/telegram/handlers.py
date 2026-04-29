@@ -22,11 +22,8 @@ from runtime.chat.memory.recall import VaultBodyLoader
 from runtime.chat.memory.tier2 import ColdRef, Tier2Store
 from runtime.chat.memory.vault_indexer import ReindexResult, VaultIndexer
 from runtime.chat.telegram.cron_handler import cron_handler
-from runtime.chat.telegram.files_handler import files_handler
-from runtime.skills import SkillRegistry
-from runtime.skills.chat_state import ChatSkillState
-from runtime.skills.loader import SkillLoader
 from runtime.chat.telegram.dispatch import Handler, IncomingMessage, ParsedCommand
+from runtime.chat.telegram.files_handler import files_handler
 from runtime.chat.telegram.formatters import (
     DEFAULT_DECISIONS_TAIL,
     render_decision_idempotent,
@@ -57,6 +54,9 @@ from runtime.improvement.decisions import (
 from runtime.improvement.proposal_loader import load_proposals
 from runtime.llm.router import ModelRouter
 from runtime.scheduler.store import ScheduledJobStore
+from runtime.skills import SkillRegistry
+from runtime.skills.chat_state import ChatSkillState
+from runtime.skills.loader import SkillLoader
 
 Clock = Callable[[], datetime]
 
@@ -444,7 +444,7 @@ def health_handler(
         header = f"Health: {status}  (last tick {round(age_seconds)}s ago)"
         if status_note:
             header += "\n" + status_note
-        roster = f"\nJobs ({len(jobs)}):\n" + "\n".join(job_lines) if jobs else f"\nJobs (0): none"
+        roster = f"\nJobs ({len(jobs)}):\n" + "\n".join(job_lines) if jobs else "\nJobs (0): none"
         return header + roster
 
     return _handle
@@ -664,12 +664,12 @@ __all__ = [
     "build_write_handlers",
     "decisions_handler",
     "defer_handler",
+    "health_handler",
     "help_descriptions_for",
     "help_handler",
     "logs_handler",
     "pending_handler",
     "proposal_handler",
-    "health_handler",
     "recall_handler",
     "reject_handler",
     "status_handler",
