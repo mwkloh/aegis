@@ -245,7 +245,7 @@ DEFAULT_COMMAND_HELP: dict[str, str] = {
         f"(default {DEFAULT_LOG_LINES}, max {MAX_LOG_LINES})."
     ),
     "/health": "Scheduler heartbeat + job roster.",
-    "/skills": "List, show, enable, disable, stage, or confirm skills.",
+    "/skills": "List, show, enable, disable, list staged, or confirm skills.",
 }
 
 
