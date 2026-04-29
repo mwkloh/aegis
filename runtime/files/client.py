@@ -5,6 +5,7 @@ All paths are validated against `allowed_roots` before any operation.
 """
 from __future__ import annotations
 
+import logging
 import re
 import shutil
 import subprocess
@@ -12,6 +13,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
+
+logger = logging.getLogger(__name__)
 
 MAX_READ_BYTES = 10 * 1024 * 1024  # 10 MB — mirrors MCP server cap
 _SEARCH_KIND = frozenset({"file", "directory", "any"})
@@ -150,8 +153,11 @@ class FilesClient:
                         results.append(str(item))
                 if item.is_dir():
                     self._walk_search(item, regex, kind, results)
-        except PermissionError:
-            pass
+        except PermissionError as exc:
+            logger.debug(
+                "files.search.permission_denied",
+                extra={"path": str(current), "err": str(exc)},
+            )
 
     # ── Destructive ops ───────────────────────────────────────────────────────
 
