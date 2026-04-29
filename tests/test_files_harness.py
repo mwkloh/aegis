@@ -118,5 +118,11 @@ def test_oserror_raises_runtime_error(tools: dict, stub: _StubClient) -> None:
         tools["files_list"]({"path": "/x"})
 
 
-def test_make_files_tools_returns_four_callables(tools: dict) -> None:
-    assert set(tools.keys()) == {"files_list", "files_read", "files_stat", "files_search"}
+def test_make_files_tools_returns_five_callables(tools: dict) -> None:
+    assert set(tools.keys()) == {
+        "files_list",
+        "files_read",
+        "files_stat",
+        "files_search",
+        "files_open",
+    }
