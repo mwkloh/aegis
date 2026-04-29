@@ -55,11 +55,19 @@ def make_files_tools(
         )
         return {"result": "\n".join(matches) if matches else "No matches."}
 
+    def files_open(args: dict[str, Any]) -> dict[str, Any]:
+        path = args["path"]
+        app = args.get("app")
+        client.open_with_app(path, app=app if app else None)
+        target = path if not app else f"{path} with {app}"
+        return {"result": f"Opened {target}."}
+
     return {
         "files_list": _wrap(files_list),
         "files_read": _wrap(files_read),
         "files_stat": _wrap(files_stat),
         "files_search": _wrap(files_search),
+        "files_open": _wrap(files_open),
     }
 
 
