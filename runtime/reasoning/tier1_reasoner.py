@@ -8,6 +8,7 @@ and emits a `pattern.tier1_missing` event for the reflection plane.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, cast
@@ -24,6 +25,23 @@ from runtime.skills import SkillDescriptor
 
 _PROMPT_PATH: Path = Path(__file__).parent / "prompts" / "tier1_skill.txt"
 _MAX_USER_CHARS: int = 8192
+
+_TAG_RE = re.compile(r"</?\s*[A-Za-z][A-Za-z0-9_-]*\s*[^>]*>")
+
+
+def _sanitize_user_text(text: str) -> str:
+    """Make user_text safe to interpolate into the system prompt.
+
+    - Doubles `{` and `}` so .format() leaves user braces intact.
+    - Replaces XML-ish opening/closing tags (`<foo>`, `</foo>`) with
+      `&lt;foo&gt;` so the user cannot inject control markers like
+      `</instructions>` that the LLM might honour.
+    """
+    escaped = text.replace("{", "{{").replace("}", "}}")
+    return _TAG_RE.sub(
+        lambda m: m.group(0).replace("<", "&lt;").replace(">", "&gt;"),
+        escaped,
+    )
 _MAX_RECENT_TURNS: int = 6
 _MAX_TURN_CHARS: int = 400
 _MAX_HISTORY_CHARS: int = 2048
@@ -66,7 +84,7 @@ class Tier1Reasoner:
         *,
         recent: Sequence[tuple[str, str]] = (),
     ) -> ToolIntent:
-        bounded = user_text[:_MAX_USER_CHARS]
+        bounded = _sanitize_user_text(user_text[:_MAX_USER_CHARS])
         system = self._prompt_template.format(
             skill_id=descriptor.id,
             tool=descriptor.tool,
