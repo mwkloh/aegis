@@ -83,7 +83,9 @@ from runtime.scheduler import (
     system_sleeper,
 )
 from runtime.skills.bootstrap import seed_builtin_skills
+from runtime.skills.chat_state import ChatSkillState
 from runtime.skills.intent_router import IntentRouter
+from runtime.skills.loader import SkillLoader
 from runtime.skills.registry import SkillDescriptor, SkillRegistry
 
 SkillArgResolver = Callable[[SkillDescriptor], list[str] | None]
@@ -139,6 +141,10 @@ def build_dispatcher(
     health_store: ScheduledJobStore | None = None,
     fire_now_fn: Callable[[str], None] | None = None,
     files_client: object | None = None,
+    skill_loader: SkillLoader | None = None,
+    skill_state: ChatSkillState | None = None,
+    staging_dir: Path | None = None,
+    catalog_dir: Path | None = None,
 ) -> Dispatcher:
     """Assemble a `Dispatcher` wired with both read and write slashes.
 
@@ -171,6 +177,10 @@ def build_dispatcher(
         heartbeat_path=heartbeat_path,
         health_store=health_store,
         files_client=files_client,
+        skill_loader=skill_loader,
+        skill_state=skill_state,
+        staging_dir=staging_dir,
+        catalog_dir=catalog_dir,
     )
     write = build_write_handlers(
         workspace,
@@ -1166,8 +1176,12 @@ def build_application(  # noqa: PLR0912, PLR0915 - top-level assembly seam; each
     # lets `/brief` resolve its script path from the descriptor's
     # source dir rather than a hardcoded module path.
     skill_registry: SkillRegistry | None = None
+    skill_loader: SkillLoader | None = None
+    skill_state: ChatSkillState | None = None
     if cfg.skills.catalog_dir.is_dir():
         skill_registry = SkillRegistry.from_directory(cfg.skills.catalog_dir)
+        skill_loader = SkillLoader(cfg.skills.catalog_dir)
+        skill_state = ChatSkillState(cfg.storage.memory_db)
     if long_runner is None:
         _brief_dir = (
             skill_registry.source_dir_of("morning_brief") if skill_registry else None
@@ -1263,6 +1277,10 @@ def build_application(  # noqa: PLR0912, PLR0915 - top-level assembly seam; each
             health_store=scheduler_store,
             fire_now_fn=fire_now_fn,
             files_client=files_client,
+            skill_loader=skill_loader,
+            skill_state=skill_state,
+            staging_dir=cfg.skills.staging_dir,
+            catalog_dir=cfg.skills.catalog_dir,
         )
     # Build shared memory stores; dispatcher and pipeline write to the same
     # Tier3Store so tool-use turns appear in chat history on subsequent turns.

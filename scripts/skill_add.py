@@ -45,6 +45,12 @@ def _default_catalog() -> Path:
     return get_config().skills.catalog_dir
 
 
+def _default_staging() -> Path:
+    from runtime.config import get_config  # noqa: PLC0415
+
+    return get_config().skills.staging_dir
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="aegis-skill-add",
@@ -69,8 +75,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--staging-dir",
         type=Path,
-        default=DEFAULT_STAGING,
-        help=f"Staging directory (default: {DEFAULT_STAGING}).",
+        default=None,
+        help="Staging directory (default: cfg.skills.staging_dir).",
     )
     parser.add_argument(
         "--catalog-dir",
@@ -89,13 +95,14 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
 
+    staging_dir = args.staging_dir if args.staging_dir is not None else _default_staging()
     if args.list:
-        return _cmd_list(args.staging_dir, as_json=args.json)
+        return _cmd_list(staging_dir, as_json=args.json)
     if args.confirm:
         catalog_dir = args.catalog_dir if args.catalog_dir is not None else _default_catalog()
         return _cmd_confirm(
             args.confirm,
-            staging_dir=args.staging_dir,
+            staging_dir=staging_dir,
             catalog_dir=catalog_dir,
             as_json=args.json,
         )
@@ -105,7 +112,7 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
-    return _cmd_stage(args.source, staging_dir=args.staging_dir, as_json=args.json)
+    return _cmd_stage(args.source, staging_dir=staging_dir, as_json=args.json)
 
 
 # --- subcommands -------------------------------------------------------------

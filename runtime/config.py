@@ -161,8 +161,9 @@ class SkillsConfig(BaseModel):
 
     catalog_dir: Path = Field(default_factory=lambda: _aegis_home() / "skills")
     bundle_dir: Path = Field(default_factory=_bundle_dir)
+    staging_dir: Path = Field(default_factory=lambda: _aegis_home() / "skills_staging")
 
-    @field_validator("catalog_dir", "bundle_dir")
+    @field_validator("catalog_dir", "bundle_dir", "staging_dir")
     @classmethod
     def _expand(cls, v: Path) -> Path:
         return Path(v).expanduser()

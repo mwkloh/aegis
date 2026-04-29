@@ -24,6 +24,8 @@ from runtime.chat.memory.vault_indexer import ReindexResult, VaultIndexer
 from runtime.chat.telegram.cron_handler import cron_handler
 from runtime.chat.telegram.files_handler import files_handler
 from runtime.skills import SkillRegistry
+from runtime.skills.chat_state import ChatSkillState
+from runtime.skills.loader import SkillLoader
 from runtime.chat.telegram.dispatch import Handler, IncomingMessage, ParsedCommand
 from runtime.chat.telegram.formatters import (
     DEFAULT_DECISIONS_TAIL,
@@ -243,6 +245,7 @@ DEFAULT_COMMAND_HELP: dict[str, str] = {
         f"(default {DEFAULT_LOG_LINES}, max {MAX_LOG_LINES})."
     ),
     "/health": "Scheduler heartbeat + job roster.",
+    "/skills": "List, show, enable, disable, stage, or confirm skills.",
 }
 
 
@@ -463,6 +466,10 @@ def build_read_only_handlers(
     heartbeat_path: Path | None = None,
     health_store: ScheduledJobStore | None = None,
     files_client: object | None = None,   # FilesClient | None — avoid circular import
+    skill_loader: SkillLoader | None = None,
+    skill_state: ChatSkillState | None = None,
+    staging_dir: Path | None = None,
+    catalog_dir: Path | None = None,
 ) -> dict[str, Handler]:
     """Map slash → handler for every read-only Phase 7 command.
 
@@ -507,6 +514,19 @@ def build_read_only_handlers(
         )
     if files_client is not None:
         handlers["/files"] = files_handler(client=files_client)  # type: ignore[arg-type]
+    if (
+        skill_loader is not None
+        and skill_state is not None
+        and staging_dir is not None
+        and catalog_dir is not None
+    ):
+        from runtime.chat.telegram.skills_slash import skills_handler  # noqa: PLC0415
+        handlers["/skills"] = skills_handler(
+            loader=skill_loader,
+            state=skill_state,
+            staging_dir=staging_dir,
+            catalog_dir=catalog_dir,
+        )
     return handlers
 
 
