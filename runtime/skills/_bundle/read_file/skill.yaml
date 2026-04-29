@@ -3,7 +3,6 @@ version: 0.1.0
 description: Read the text content of a local file.
 intents:
   - read_file
-  - open_file
 tool: files_read
 args_schema:
   type: object

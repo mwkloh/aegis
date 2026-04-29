@@ -1,0 +1,33 @@
+id: open_file
+version: 0.1.0
+description: >-
+  Open a local file in its default macOS application (Preview for images,
+  QuickTime for videos, etc). Use this when the user wants to "open", "view",
+  "show", or "play" a binary file (image, audio, video, PDF). For text files
+  the user wants to read, prefer read_file.
+intents:
+  - open_file
+  - view_file
+  - show_file
+  - play_file
+tool: files_open
+args_schema:
+  type: object
+  properties:
+    path:
+      type: string
+      minLength: 1
+      maxLength: 512
+      description: >-
+        Absolute path to the file (e.g. /Users/michaelloh/Desktop/foo.png).
+        '~' is allowed. Relative paths and bare filenames are rejected.
+    app:
+      type: string
+      maxLength: 64
+      pattern: "^[A-Za-z0-9 _.-]+$"
+      description: >-
+        Optional macOS application name (e.g. "Preview", "QuickTime Player").
+        Omit to use the system default for the file type.
+  required:
+    - path
+requires_tier1: true
