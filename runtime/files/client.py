@@ -15,6 +15,7 @@ from typing import Literal
 
 MAX_READ_BYTES = 10 * 1024 * 1024  # 10 MB — mirrors MCP server cap
 _SEARCH_KIND = frozenset({"file", "directory", "any"})
+_APP_NAME_RE = re.compile(r"^[A-Za-z0-9 _.-]+$")
 
 
 class PathDenied(Exception):
@@ -191,6 +192,11 @@ class FilesClient:
         p = self._validate(path)
         argv = ["/usr/bin/open"]
         if app:
+            if len(app) > 64 or not _APP_NAME_RE.match(app):
+                raise PathDenied(
+                    f"Invalid app name {app!r}. Only alphanumerics, space, "
+                    "underscore, dot, and hyphen are allowed (max 64 chars)."
+                )
             argv += ["-a", app]
         argv.append(str(p))
         subprocess.run(argv, check=True)

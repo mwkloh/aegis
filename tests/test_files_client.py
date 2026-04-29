@@ -288,3 +288,17 @@ def test_open_with_app_with_named_app(client: FilesClient, tmp_path: Path) -> No
         argv = mock_run.call_args[0][0]
         assert "-a" in argv
         assert "TextEdit" in argv
+
+
+def test_open_with_app_rejects_dangerous_app_name(tmp_path: Path) -> None:
+    client = FilesClient(allowed_roots=[tmp_path])
+    (tmp_path / "x.txt").write_text("x", encoding="utf-8")
+    with pytest.raises(PathDenied, match="app name"):
+        client.open_with_app(str(tmp_path / "x.txt"), app="../../bin/sh")
+
+
+def test_open_with_app_rejects_app_with_metachars(tmp_path: Path) -> None:
+    client = FilesClient(allowed_roots=[tmp_path])
+    (tmp_path / "x.txt").write_text("x", encoding="utf-8")
+    with pytest.raises(PathDenied, match="app name"):
+        client.open_with_app(str(tmp_path / "x.txt"), app="Preview;rm -rf /")
