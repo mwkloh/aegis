@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 MAX_READ_BYTES = 10 * 1024 * 1024  # 10 MB — mirrors MCP server cap
 _SEARCH_KIND = frozenset({"file", "directory", "any"})
 _APP_NAME_RE = re.compile(r"^[A-Za-z0-9 _.-]+$")
+_APP_NAME_MAX_LEN = 64
 
 
 class PathDenied(Exception):
@@ -198,7 +199,7 @@ class FilesClient:
         p = self._validate(path)
         argv = ["/usr/bin/open"]
         if app:
-            if len(app) > 64 or not _APP_NAME_RE.match(app):
+            if len(app) > _APP_NAME_MAX_LEN or not _APP_NAME_RE.match(app):
                 raise PathDenied(
                     f"Invalid app name {app!r}. Only alphanumerics, space, "
                     "underscore, dot, and hyphen are allowed (max 64 chars)."
