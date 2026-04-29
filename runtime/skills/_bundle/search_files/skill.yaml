@@ -12,6 +12,9 @@ args_schema:
       type: string
       minLength: 1
       maxLength: 512
+      description: >-
+        Absolute path to the directory to search (e.g. /Users/michaelloh/Desktop).
+        '~' is allowed. Relative paths and bare names are rejected.
     pattern:
       type: string
       minLength: 1

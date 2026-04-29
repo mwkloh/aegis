@@ -59,6 +59,39 @@ async def test_tier1_reasoner_produces_contract() -> None:
 
 
 @pytest.mark.asyncio
+async def test_tier1_reasoner_includes_recent_turns_in_prompt() -> None:
+    stub = _StubClient(
+        content='{"args": {"message": "ok"}, "rationale": "r"}'
+    )
+    reasoner = Tier1Reasoner(client=stub, model="minimax/minimax-m2.7")
+
+    await reasoner.reason(
+        _ask_question(),
+        "and what about tomorrow?",
+        recent=[
+            ("user", "what's the weather in Tokyo?"),
+            ("bot", "22°C and sunny"),
+        ],
+    )
+
+    assert len(stub.calls) == 1
+    system_prompt = stub.calls[0].messages[0].content
+    assert "USER: what's the weather in Tokyo?" in system_prompt
+    assert "BOT: 22°C and sunny" in system_prompt
+
+
+@pytest.mark.asyncio
+async def test_tier1_reasoner_renders_empty_history_sentinel() -> None:
+    stub = _StubClient(content='{"args": {"message": "ok"}, "rationale": "r"}')
+    reasoner = Tier1Reasoner(client=stub, model="minimax/minimax-m2.7")
+
+    await reasoner.reason(_ask_question(), "hi")
+
+    system_prompt = stub.calls[0].messages[0].content
+    assert "(no prior turns)" in system_prompt
+
+
+@pytest.mark.asyncio
 async def test_tier1_reasoner_rejects_extra_args() -> None:
     stub = _StubClient(content='{"args": {"message": "ok", "rogue": true}, "rationale": "x"}')
     reasoner = Tier1Reasoner(client=stub, model="minimax/minimax-m2.7")

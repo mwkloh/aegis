@@ -64,8 +64,16 @@ def _stub_registry(descriptor: SkillDescriptor | None = None) -> SkillRegistry:
 class _StubRunner:
     def __init__(self, intent: ToolIntent) -> None:
         self._intent = intent
+        self.last_recent: tuple[tuple[str, str], ...] = ()
 
-    async def build(self, descriptor: SkillDescriptor, user_text: str) -> ToolIntent:
+    async def build(
+        self,
+        descriptor: SkillDescriptor,
+        user_text: str,
+        *,
+        recent: tuple[tuple[str, str], ...] = (),
+    ) -> ToolIntent:
+        self.last_recent = tuple(recent)
         return self._intent
 
 
@@ -91,11 +99,21 @@ class _RaisingSynthesizer:
 
 
 @dataclass
+class _StubTier3Turn:
+    role: str
+    text: str
+
+
+@dataclass
 class _StubTier3:
     turns: list[tuple[str, str, str]] = field(default_factory=list)
+    preload: dict[str, list[_StubTier3Turn]] = field(default_factory=dict)
 
     def append(self, chat_id: str, role: str, text: str) -> None:
         self.turns.append((chat_id, role, text))
+
+    def recent(self, chat_id: str) -> tuple[_StubTier3Turn, ...]:
+        return tuple(self.preload.get(chat_id, ()))
 
 
 @dataclass
@@ -275,6 +293,79 @@ async def test_tier3_written_on_fired() -> None:
     assert len(tier3.turns) == 2
     assert tier3.turns[0] == ("999", "user", "list downloads")
     assert tier3.turns[1][1] == "bot"
+
+
+async def test_recent_turns_threaded_to_runner() -> None:
+    # Prior turns in the rolling window must flow into SkillRunner.build so the
+    # Tier 1 reasoner can resolve references like "the same folder".
+    tier3 = _StubTier3(
+        preload={
+            "777": [
+                _StubTier3Turn("user", "show files in main Desktop folder"),
+                _StubTier3Turn("bot", "Here are the files in your Desktop…"),
+            ],
+        }
+    )
+    runner_intent = ToolIntent(
+        tool="files_read",
+        args={"path": "~/Desktop/ava-selfie.png"},
+        skill_id="read_file",
+    )
+    descriptor = _stub_descriptor("read_file", "files_read", ["read_file"])
+    registry = _stub_registry(descriptor)
+    stub_runner = _StubRunner(runner_intent)
+    harness = HarnessAdapter(tools={"files_read": lambda args: {"content": "…"}})
+
+    dispatcher = HarnessDispatcher(
+        classifier=_StubClassifier("read_file", 0.9),
+        registry=registry,
+        runner=stub_runner,
+        harness=harness,
+        synthesizer=_StubSynthesizer(),
+        tier3=tier3,
+        tier1_loader=_StubTier1Loader(),
+        synthesis_model="stub-model",
+    )
+
+    outcome = await dispatcher.dispatch(
+        chat_id=777,
+        user_text="open ava-selfie.png in the same folder",
+        message=_FakeMessage(),
+    )
+    assert outcome == DispatchOutcome.FIRED
+    assert stub_runner.last_recent == (
+        ("user", "show files in main Desktop folder"),
+        ("bot", "Here are the files in your Desktop…"),
+    )
+
+
+async def test_recent_turns_empty_when_tier3_lacks_recent() -> None:
+    # Defensive path: any tier3 stub without .recent() still dispatches cleanly.
+    @dataclass
+    class _MinimalTier3:
+        turns: list[tuple[str, str, str]] = field(default_factory=list)
+
+        def append(self, chat_id: str, role: str, text: str) -> None:
+            self.turns.append((chat_id, role, text))
+
+    stub_runner = _StubRunner(
+        ToolIntent(tool="files_list", args={"path": "~/Downloads"}, skill_id="list_files")
+    )
+    dispatcher = HarnessDispatcher(
+        classifier=_StubClassifier("list_files", 0.9),
+        registry=_stub_registry(_stub_descriptor()),
+        runner=stub_runner,
+        harness=_stub_harness(),
+        synthesizer=_StubSynthesizer(),
+        tier3=_MinimalTier3(),
+        tier1_loader=_StubTier1Loader(),
+        synthesis_model="stub-model",
+    )
+    outcome = await dispatcher.dispatch(
+        chat_id=1, user_text="list downloads", message=_FakeMessage()
+    )
+    assert outcome == DispatchOutcome.FIRED
+    assert stub_runner.last_recent == ()
 
 
 async def test_error_result_synthesized() -> None:

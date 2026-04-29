@@ -9,6 +9,7 @@ pipeline never raises.
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 
 from runtime.harness import ToolIntent
 from runtime.skills import SkillDescriptor
@@ -24,9 +25,15 @@ class SkillRunner:
     def __init__(self, tier1: Tier1Reasoner | None = None) -> None:
         self._tier1 = tier1
 
-    async def build(self, descriptor: SkillDescriptor, user_text: str) -> ToolIntent:
+    async def build(
+        self,
+        descriptor: SkillDescriptor,
+        user_text: str,
+        *,
+        recent: Sequence[tuple[str, str]] = (),
+    ) -> ToolIntent:
         if descriptor.requires_tier1:
-            return await self._build_tier1(descriptor, user_text)
+            return await self._build_tier1(descriptor, user_text, recent=recent)
         return ToolIntent(
             tool=descriptor.tool,
             args=self._args_for(descriptor, user_text),
@@ -35,12 +42,16 @@ class SkillRunner:
         )
 
     async def _build_tier1(
-        self, descriptor: SkillDescriptor, user_text: str
+        self,
+        descriptor: SkillDescriptor,
+        user_text: str,
+        *,
+        recent: Sequence[tuple[str, str]] = (),
     ) -> ToolIntent:
         if self._tier1 is None:
             return _tier1_unavailable(descriptor, "no OPENROUTER_API_KEY configured")
         try:
-            return await self._tier1.reason(descriptor, user_text)
+            return await self._tier1.reason(descriptor, user_text, recent=recent)
         except Tier1ReasonerError as exc:
             return _tier1_unavailable(descriptor, f"reasoner failed: {exc}")
 

@@ -8,6 +8,10 @@ object that conforms exactly to the schema.
 Args schema (JSON Schema fragment):
 {args_schema}
 
+Recent conversation (oldest → newest; use to resolve references like
+"the same folder", "that file", "in this folder"):
+{conversation_history}
+
 User message:
 {user_text}
 
@@ -17,6 +21,13 @@ Respond with EXACTLY this JSON shape and nothing else:
 Rules:
 - "args" must contain ONLY the keys defined in the schema above.
 - Do not invent extra keys. Do not omit required keys.
+- Any filesystem path (keys named `path`, `directory`, or similarly described
+  in the schema) MUST be absolute — begin with "/" or "~". Do not emit a bare
+  filename like "foo.png" or a relative path like "Desktop/foo.png"; the
+  sandbox rejects those. If the user named a common folder, expand it:
+  "Desktop" → "~/Desktop", "Downloads" → "~/Downloads", "Documents" →
+  "~/Documents". If a prior turn established the directory (e.g. a `files_list`
+  result), reuse that absolute path.
 - "rationale" must be a single short sentence, plain text only.
 - If you cannot fulfil the request safely, return:
   {{"args": {{}}, "rationale": "decline: <reason>"}}

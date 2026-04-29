@@ -118,7 +118,8 @@ class HarnessDispatcher:
             self._tier3.append(str(chat_id), "bot", question)
             return DispatchOutcome.CLARIFY
 
-        tool_intent = await self._runner.build(descriptor, user_text)
+        recent = self._recent_turns(chat_id)
+        tool_intent = await self._runner.build(descriptor, user_text, recent=recent)
         if tool_intent.tool == "respond":
             return DispatchOutcome.PASS
 
@@ -128,6 +129,24 @@ class HarnessDispatcher:
         self._tier3.append(str(chat_id), "user", user_text)
         self._tier3.append(str(chat_id), "bot", reply_text)
         return DispatchOutcome.FIRED
+
+    def _recent_turns(self, chat_id: int) -> tuple[tuple[str, str], ...]:
+        """Pull the rolling window of (role, text) pairs for anaphora resolution."""
+        recent_fn = getattr(self._tier3, "recent", None)
+        if recent_fn is None:
+            return ()
+        try:
+            turns = recent_fn(str(chat_id))
+        except Exception:
+            logger.exception("harness_dispatcher.recent_turns_failed")
+            return ()
+        out: list[tuple[str, str]] = []
+        for t in turns:
+            role = getattr(t, "role", None)
+            text = getattr(t, "text", None)
+            if isinstance(role, str) and isinstance(text, str):
+                out.append((role, text))
+        return tuple(out)
 
     async def _synthesize(
         self,

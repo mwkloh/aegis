@@ -53,6 +53,28 @@ def test_validate_denies_traversal_attack(client: FilesClient, tmp_path: Path) -
         client._validate(evil)
 
 
+def test_validate_denies_bare_filename(client: FilesClient) -> None:
+    with pytest.raises(PathDenied, match="absolute"):
+        client._validate("ava-selfie.png")
+
+
+def test_validate_denies_relative_path(client: FilesClient) -> None:
+    with pytest.raises(PathDenied, match="absolute"):
+        client._validate("Desktop/ava-selfie.png")
+
+
+def test_validate_denies_dotdot_relative(client: FilesClient) -> None:
+    with pytest.raises(PathDenied, match="absolute"):
+        client._validate("../ava-selfie.png")
+
+
+def test_validate_allows_tilde(client: FilesClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Redirect ~ to tmp_path so the resolved path lands inside an allowed root.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / "note.txt").write_text("ok")
+    client._validate("~/note.txt")
+
+
 # ── list_dir ─────────────────────────────────────────────────────────────────
 
 def test_list_dir_returns_entries(client: FilesClient, tmp_path: Path) -> None:

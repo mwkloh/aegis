@@ -8,6 +8,7 @@ and emits a `pattern.tier1_missing` event for the reflection plane.
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, cast
 
@@ -23,6 +24,9 @@ from runtime.skills import SkillDescriptor
 
 _PROMPT_PATH: Path = Path(__file__).parent / "prompts" / "tier1_skill.txt"
 _MAX_USER_CHARS: int = 8192
+_MAX_RECENT_TURNS: int = 6
+_MAX_TURN_CHARS: int = 400
+_MAX_HISTORY_CHARS: int = 2048
 
 
 class Tier1Reply(BaseModel):
@@ -55,12 +59,19 @@ class Tier1Reasoner:
         self._events = events
         self._max_retries = max_retries
 
-    async def reason(self, descriptor: SkillDescriptor, user_text: str) -> ToolIntent:
+    async def reason(
+        self,
+        descriptor: SkillDescriptor,
+        user_text: str,
+        *,
+        recent: Sequence[tuple[str, str]] = (),
+    ) -> ToolIntent:
         bounded = user_text[:_MAX_USER_CHARS]
         system = self._prompt_template.format(
             skill_id=descriptor.id,
             tool=descriptor.tool,
             args_schema=json.dumps(descriptor.args_schema, indent=2, sort_keys=True),
+            conversation_history=_format_history(recent),
             user_text=bounded,
         )
         messages = [
@@ -98,6 +109,20 @@ class Tier1Reasoner:
             skill_id=descriptor.id,
             rationale=reply.rationale or "tier1 reasoning",
         )
+
+
+def _format_history(turns: Sequence[tuple[str, str]]) -> str:
+    if not turns:
+        return "(no prior turns)"
+    lines: list[str] = []
+    for role, text in list(turns)[-_MAX_RECENT_TURNS:]:
+        label = "USER" if role == "user" else "BOT"
+        clipped = text if len(text) <= _MAX_TURN_CHARS else text[:_MAX_TURN_CHARS] + "…"
+        lines.append(f"{label}: {clipped}")
+    joined = "\n".join(lines)
+    if len(joined) > _MAX_HISTORY_CHARS:
+        joined = joined[-_MAX_HISTORY_CHARS:]
+    return joined
 
 
 def _allowed_keys(descriptor: SkillDescriptor) -> set[str]:

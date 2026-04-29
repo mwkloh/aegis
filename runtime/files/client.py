@@ -65,6 +65,11 @@ class FilesClient:
     # ── Internal ──────────────────────────────────────────────────────────────
 
     def _validate(self, p: str) -> Path:
+        if not p.startswith(("/", "~")):
+            raise PathDenied(
+                f"Path {p!r} must be absolute (e.g. /Users/you/Desktop/foo.png) "
+                "or start with '~'. Relative paths are not accepted."
+            )
         resolved = Path(p).expanduser().resolve()
         for root in self._roots:
             if resolved == root or str(resolved).startswith(str(root) + "/"):
