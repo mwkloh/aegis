@@ -21,7 +21,9 @@ Design pins:
 """
 from __future__ import annotations
 
+import contextlib
 import sqlite3
+from collections.abc import Iterator
 from pathlib import Path
 
 _SCHEMA = """
@@ -99,10 +101,17 @@ class ChatSkillState:
 
     # -- internals -----------------------------------------------------------
 
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._db_path)
-        conn.execute("PRAGMA foreign_keys = ON")
-        return conn
+    def _connect(self) -> contextlib.AbstractContextManager[sqlite3.Connection]:
+        @contextlib.contextmanager
+        def _ctx() -> Iterator[sqlite3.Connection]:
+            conn = sqlite3.connect(self._db_path)
+            try:
+                conn.execute("PRAGMA foreign_keys = ON")
+                with conn:
+                    yield conn
+            finally:
+                conn.close()
+        return _ctx()
 
 
 __all__ = ["ChatSkillState"]

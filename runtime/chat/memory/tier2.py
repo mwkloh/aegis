@@ -25,10 +25,11 @@ search is global (the vault is one shared corpus per operator).
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import math
 import sqlite3
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -141,10 +142,17 @@ class Tier2Store:
 
     # -- internal --------------------------------------------------------
 
-    def _conn(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self._db_path)
-        conn.execute("PRAGMA foreign_keys = ON")
-        return conn
+    def _conn(self) -> contextlib.AbstractContextManager[sqlite3.Connection]:
+        @contextlib.contextmanager
+        def _ctx() -> Iterator[sqlite3.Connection]:
+            conn = sqlite3.connect(self._db_path)
+            try:
+                conn.execute("PRAGMA foreign_keys = ON")
+                with conn:
+                    yield conn
+            finally:
+                conn.close()
+        return _ctx()
 
     @staticmethod
     def _row_to_episodic(row: tuple[Any, ...]) -> EpisodicMemory:
