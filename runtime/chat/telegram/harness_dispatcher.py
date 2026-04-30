@@ -53,6 +53,13 @@ def _clarify_question(descriptor: SkillDescriptor) -> str:
 
 
 def _clip(text: str) -> str:
+    """Bound raw tool output used as a synthesis-failure fallback.
+
+    Successful synthesis replies are NOT clipped — `_chunk()` in
+    `bot.py` splits long replies into multiple Telegram messages at
+    the 4096-char per-message limit. This function only guards the
+    fallback path where we ship `str(tool_result.payload)` directly.
+    """
     return text[:_MAX_REPLY_CHARS]
 
 
@@ -159,7 +166,7 @@ class HarnessDispatcher:
             "harness_dispatcher.synthesize_done", extra={"reply_chars": len(reply_text)}
         )
         logger.info("harness_dispatcher.send_start")
-        await _send(_clip(reply_text))
+        await _send(reply_text)
         logger.info("harness_dispatcher.send_done")
         self._tier3.append(str(chat_id), "user", user_text)
         self._tier3.append(str(chat_id), "bot", reply_text)
