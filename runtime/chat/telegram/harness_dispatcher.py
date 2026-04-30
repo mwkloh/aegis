@@ -95,6 +95,7 @@ class HarnessDispatcher:
             else:
                 await message.reply_text(text)
 
+        logger.info("harness_dispatcher.dispatch_start", extra={"chat_id": chat_id})
         try:
             classification = await self._classifier.classify(user_text)
         except Exception:
@@ -103,12 +104,20 @@ class HarnessDispatcher:
 
         intent = classification.intent
         confidence = classification.confidence
+        logger.info(
+            "harness_dispatcher.classified",
+            extra={"intent": intent, "confidence": confidence},
+        )
 
         descriptor = self._registry.for_intent(intent)
         if descriptor is None:
+            logger.info("harness_dispatcher.no_descriptor", extra={"intent": intent})
             return DispatchOutcome.PASS
 
         if not self._harness.has_tool(descriptor.tool):
+            logger.info(
+                "harness_dispatcher.no_tool", extra={"tool": descriptor.tool}
+            )
             return DispatchOutcome.PASS
 
         if confidence < HARNESS_CONFIDENCE_THRESHOLD:
@@ -118,16 +127,43 @@ class HarnessDispatcher:
             self._tier3.append(str(chat_id), "bot", question)
             return DispatchOutcome.CLARIFY
 
+        logger.info(
+            "harness_dispatcher.recent_turns_start", extra={"chat_id": chat_id}
+        )
         recent = self._recent_turns(chat_id)
+        logger.info(
+            "harness_dispatcher.runner_build_start",
+            extra={"skill_id": descriptor.id, "recent_turns": len(recent)},
+        )
         tool_intent = await self._runner.build(descriptor, user_text, recent=recent)
+        logger.info(
+            "harness_dispatcher.runner_build_done tool=%s args=%r",
+            tool_intent.tool,
+            tool_intent.args,
+        )
         if tool_intent.tool == "respond":
             return DispatchOutcome.PASS
 
+        logger.info(
+            "harness_dispatcher.harness_execute_start tool=%s args=%r",
+            tool_intent.tool,
+            tool_intent.args,
+        )
         result = self._harness.execute(tool_intent)
+        logger.info(
+            "harness_dispatcher.harness_execute_done", extra={"status": result.status}
+        )
+        logger.info("harness_dispatcher.synthesize_start")
         reply_text = await self._synthesize(user_text, tool_intent, result, chat_id=chat_id)
+        logger.info(
+            "harness_dispatcher.synthesize_done", extra={"reply_chars": len(reply_text)}
+        )
+        logger.info("harness_dispatcher.send_start")
         await _send(_clip(reply_text))
+        logger.info("harness_dispatcher.send_done")
         self._tier3.append(str(chat_id), "user", user_text)
         self._tier3.append(str(chat_id), "bot", reply_text)
+        logger.info("harness_dispatcher.dispatch_complete")
         return DispatchOutcome.FIRED
 
     def _recent_turns(self, chat_id: int) -> tuple[tuple[str, str], ...]:
@@ -156,11 +192,14 @@ class HarnessDispatcher:
         *,
         chat_id: int,
     ) -> str:
+        logger.info("harness_dispatcher.synthesis.tier1_load_start")
         try:
             snap = self._tier1_loader.load(str(chat_id))
             identity = snap.identity or "AEGIS, an operator-facing assistant"
         except Exception:
+            logger.exception("harness_dispatcher.synthesis.tier1_load_failed")
             identity = "AEGIS, an operator-facing assistant"
+        logger.info("harness_dispatcher.synthesis.tier1_load_done")
 
         if result.status == "error" and result.error:
             tool_result_text = result.error
@@ -169,10 +208,16 @@ class HarnessDispatcher:
         else:
             tool_result_text = "(empty)"
 
+        logger.info("harness_dispatcher.synthesis.prompt_read_start")
         try:
             prompt_template = _SYNTHESIS_PROMPT_PATH.read_text(encoding="utf-8")
         except OSError:
+            logger.exception("harness_dispatcher.synthesis.prompt_read_failed")
             return _clip(tool_result_text)
+        logger.info(
+            "harness_dispatcher.synthesis.prompt_read_done",
+            extra={"chars": len(prompt_template)},
+        )
 
         system = prompt_template.format(
             identity=identity,
@@ -189,8 +234,16 @@ class HarnessDispatcher:
             temperature=0.2,
             max_tokens=512,
         )
+        logger.info(
+            "harness_dispatcher.synthesis.chat_start",
+            extra={"model": self._synthesis_model, "tool_result_chars": len(tool_result_text)},
+        )
         try:
             response = await self._synthesizer.chat(request)
+            logger.info(
+                "harness_dispatcher.synthesis.chat_done",
+                extra={"reply_chars": len(response.content)},
+            )
             return response.content
         except Exception:
             logger.exception("harness_dispatcher.synthesis_failed")
