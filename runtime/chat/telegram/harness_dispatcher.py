@@ -239,7 +239,7 @@ class HarnessDispatcher:
                 ChatMessage(role="user", content=user_text),
             ],
             temperature=0.2,
-            max_tokens=512,
+            max_tokens=2048,
         )
         logger.info(
             "harness_dispatcher.synthesis.chat_start",
