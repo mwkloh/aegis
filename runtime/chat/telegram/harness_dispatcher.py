@@ -75,6 +75,8 @@ class HarnessDispatcher:
         tier3: Tier3Store,
         tier1_loader: Tier1Loader,
         synthesis_model: str,
+        multi_step: bool = False,
+        max_steps: int = 5,
     ) -> None:
         self._classifier = classifier
         self._registry = registry
@@ -84,6 +86,12 @@ class HarnessDispatcher:
         self._tier3 = tier3
         self._tier1_loader = tier1_loader
         self._synthesis_model = synthesis_model
+        # multi_step is the Step-1 scaffold for the multi-step agent loop. The
+        # Step-2 loop body, the verdict-gate refactor (set-based), and the
+        # destructive-tool guard all hang off this flag — keep it gated until
+        # those land. See docs/PLAN_MULTI_STEP_AGENT_LOOP.md.
+        self._multi_step = multi_step
+        self._max_steps = max_steps
 
     async def dispatch(
         self,
@@ -138,18 +146,27 @@ class HarnessDispatcher:
             "harness_dispatcher.recent_turns_start", extra={"chat_id": chat_id}
         )
         recent = self._recent_turns(chat_id)
-        logger.info(
-            "harness_dispatcher.runner_build_start",
-            extra={"skill_id": descriptor.id, "recent_turns": len(recent)},
-        )
-        tool_intent = await self._runner.build(descriptor, user_text, recent=recent)
-        logger.info(
-            "harness_dispatcher.runner_build_done tool=%s args=%r",
-            tool_intent.tool,
-            tool_intent.args,
-        )
-        if tool_intent.tool == "respond":
-            return DispatchOutcome.PASS
+        if self._multi_step:
+            tool_intent = await self._plan_first_step(
+                descriptor=descriptor,
+                user_text=user_text,
+                recent=recent,
+            )
+            if tool_intent is None:
+                return DispatchOutcome.PASS
+        else:
+            logger.info(
+                "harness_dispatcher.runner_build_start",
+                extra={"skill_id": descriptor.id, "recent_turns": len(recent)},
+            )
+            tool_intent = await self._runner.build(descriptor, user_text, recent=recent)
+            logger.info(
+                "harness_dispatcher.runner_build_done tool=%s args=%r",
+                tool_intent.tool,
+                tool_intent.args,
+            )
+            if tool_intent.tool == "respond":
+                return DispatchOutcome.PASS
 
         logger.info(
             "harness_dispatcher.harness_execute_start tool=%s args=%r",
@@ -172,6 +189,47 @@ class HarnessDispatcher:
         self._tier3.append(str(chat_id), "bot", reply_text)
         logger.info("harness_dispatcher.dispatch_complete")
         return DispatchOutcome.FIRED
+
+    async def _plan_first_step(
+        self,
+        *,
+        descriptor: SkillDescriptor,
+        user_text: str,
+        recent: tuple[tuple[str, str], ...],
+    ) -> ToolIntent | None:
+        """Single-step scaffolding for the multi-step loop (Step 1).
+
+        Calls `runner.plan_next` once with an empty history and translates the
+        result into a `ToolIntent`. Returning None means "respond" — caller
+        treats it as PASS, mirroring the existing `tool_intent.tool == 'respond'`
+        branch on the legacy path. The full bounded loop (history threading,
+        step cap, mid-chain abort) lands in Step 2 of
+        docs/PLAN_MULTI_STEP_AGENT_LOOP.md.
+        """
+        available = list(self._registry.all())
+        logger.info(
+            "harness_dispatcher.plan_next_start",
+            extra={"skill_id": descriptor.id, "available_skills": len(available)},
+        )
+        step = await self._runner.plan_next(
+            user_text=user_text,
+            available_skills=available,
+            history=(),
+            recent=recent,
+        )
+        logger.info(
+            "harness_dispatcher.plan_next_done kind=%s tool=%s",
+            step.kind,
+            step.tool,
+        )
+        if step.kind != "tool_call" or step.tool is None:
+            return None
+        return ToolIntent(
+            tool=step.tool,
+            args=dict(step.args or {}),
+            skill_id=descriptor.id,
+            rationale="multi-step planner: first step",
+        )
 
     def _recent_turns(self, chat_id: int) -> tuple[tuple[str, str], ...]:
         """Pull the rolling window of (role, text) pairs for anaphora resolution."""

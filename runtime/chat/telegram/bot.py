@@ -890,6 +890,8 @@ def build_harness_dispatcher(
         tier3=tier3,
         tier1_loader=tier1_loader,
         synthesis_model=cfg.models.smart,
+        multi_step=cfg.harness.multi_step,
+        max_steps=cfg.harness.max_steps,
     )
 
 
