@@ -496,16 +496,26 @@ async def test_route_chat_dispatcher_fires_before_pipeline() -> None:
 
 
 class _StubPlanRunner:
-    """Runner stub that exposes both `build` and `plan_next` so the dispatcher
-    can be exercised on either branch of the multi_step flag."""
+    """Runner stub that exposes both `build` and `plan_next`.
+
+    `plan_next` returns from a queue of `PlanStep`s in order. After the queue
+    is drained the stub keeps returning the LAST step (so a stub seeded with
+    a single `tool_call` step exercises the step-cap path without needing
+    `max_steps + 1` queue entries). Pass `plan_step=` for the legacy
+    single-element queue API.
+    """
 
     def __init__(
         self,
         *,
-        plan_step: PlanStep,
+        plan_step: PlanStep | None = None,
+        plan_steps: list[PlanStep] | None = None,
         build_intent: ToolIntent | None = None,
     ) -> None:
-        self._plan_step = plan_step
+        if plan_steps is None:
+            assert plan_step is not None, "supply plan_step or plan_steps"
+            plan_steps = [plan_step]
+        self._plan_steps = list(plan_steps)
         self._build_intent = build_intent
         self.build_calls = 0
         self.plan_next_calls: list[dict[str, Any]] = []
@@ -538,7 +548,11 @@ class _StubPlanRunner:
                 "recent": tuple(recent),
             }
         )
-        return self._plan_step
+        # Pop from the queue; once drained, repeat the last step so callers
+        # that only seed one step exercise the step-cap path naturally.
+        if len(self._plan_steps) > 1:
+            return self._plan_steps.pop(0)
+        return self._plan_steps[0]
 
 
 def _make_multi_step_dispatcher(
@@ -595,10 +609,24 @@ async def test_multi_step_off_by_default_uses_build() -> None:
 
 
 async def test_multi_step_true_routes_to_plan_next_and_fires() -> None:
-    plan_step = PlanStep(
-        kind="tool_call", tool="files_list", args={"path": "~/Downloads"}
+    descriptor = _stub_descriptor()
+    runner = _StubPlanRunner(
+        plan_steps=[
+            PlanStep(kind="tool_call", tool="files_list", args={"path": "~/Downloads"}),
+            PlanStep(kind="respond"),
+        ],
     )
-    dispatcher, runner = _make_multi_step_dispatcher(plan_step=plan_step)
+    dispatcher = HarnessDispatcher(
+        classifier=_StubClassifier("list_files", 0.9),
+        registry=_stub_registry(descriptor),
+        runner=runner,
+        harness=_stub_harness(),
+        synthesizer=_StubSynthesizer(),
+        tier3=_StubTier3(),
+        tier1_loader=_StubTier1Loader(),
+        synthesis_model="stub-model",
+        multi_step=True,
+    )
 
     message = _FakeMessage()
     outcome = await dispatcher.dispatch(
@@ -607,11 +635,13 @@ async def test_multi_step_true_routes_to_plan_next_and_fires() -> None:
 
     assert outcome == DispatchOutcome.FIRED
     assert runner.build_calls == 0
-    assert len(runner.plan_next_calls) == 1
-    call = runner.plan_next_calls[0]
-    assert call["user_text"] == "list downloads"
-    assert call["history"] == ()  # Step 1 always passes empty history
-    assert len(call["available_skills"]) == 1
+    assert len(runner.plan_next_calls) == 2  # tool_call + respond
+    first = runner.plan_next_calls[0]
+    assert first["user_text"] == "list downloads"
+    assert first["history"] == ()  # first call always sees empty history
+    assert len(first["available_skills"]) == 1
+    # Second call sees the one tool result threaded into history.
+    assert len(runner.plan_next_calls[1]["history"]) == 1
     assert len(message.replies) == 1
 
 
@@ -631,10 +661,13 @@ async def test_multi_step_respond_kind_returns_pass() -> None:
 
 
 async def test_multi_step_threads_recent_turns_into_plan_next() -> None:
-    """The rolling tier3 window must reach plan_next for anaphora resolution."""
+    """The rolling tier3 window must reach EVERY plan_next call (anaphora)."""
     descriptor = _stub_descriptor()
     runner = _StubPlanRunner(
-        plan_step=PlanStep(kind="tool_call", tool="files_list", args={"path": "~/Downloads"}),
+        plan_steps=[
+            PlanStep(kind="tool_call", tool="files_list", args={"path": "~/Downloads"}),
+            PlanStep(kind="respond"),
+        ],
     )
     tier3 = _StubTier3(
         preload={
@@ -660,8 +693,10 @@ async def test_multi_step_threads_recent_turns_into_plan_next() -> None:
         chat_id=777, user_text="and the same folder again?", message=_FakeMessage()
     )
 
-    assert len(runner.plan_next_calls) == 1
-    assert runner.plan_next_calls[0]["recent"] == (
+    assert len(runner.plan_next_calls) >= 1
+    expected_recent = (
         ("user", "show files in main Desktop folder"),
         ("bot", "Here are the files in your Desktop…"),
     )
+    for call in runner.plan_next_calls:
+        assert call["recent"] == expected_recent

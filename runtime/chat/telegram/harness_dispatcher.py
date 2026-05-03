@@ -195,13 +195,23 @@ class HarnessDispatcher:
         )
         recent = self._recent_turns(chat_id)
         if self._multi_step:
-            tool_intent = await self._plan_first_step(
+            history = await self._run_multi_step(
                 descriptor=descriptor,
                 user_text=user_text,
                 recent=recent,
             )
-            if tool_intent is None:
+            if not history:
+                # Planner immediately said "respond" — nothing ran, no synthesis,
+                # no tier3 write. Mirrors the legacy `tool == 'respond'` PASS.
                 return DispatchOutcome.PASS
+            logger.info("harness_dispatcher.chain_synthesize_start")
+            reply_text = await self._synthesize_chain(
+                user_text, history, chat_id=chat_id
+            )
+            logger.info(
+                "harness_dispatcher.chain_synthesize_done",
+                extra={"reply_chars": len(reply_text), "chain_steps": len(history)},
+            )
         else:
             logger.info(
                 "harness_dispatcher.runner_build_start",
@@ -216,20 +226,21 @@ class HarnessDispatcher:
             if tool_intent.tool == "respond":
                 return DispatchOutcome.PASS
 
-        logger.info(
-            "harness_dispatcher.harness_execute_start tool=%s args=%r",
-            tool_intent.tool,
-            tool_intent.args,
-        )
-        result = self._harness.execute(tool_intent)
-        logger.info(
-            "harness_dispatcher.harness_execute_done", extra={"status": result.status}
-        )
-        logger.info("harness_dispatcher.synthesize_start")
-        reply_text = await self._synthesize(user_text, tool_intent, result, chat_id=chat_id)
-        logger.info(
-            "harness_dispatcher.synthesize_done", extra={"reply_chars": len(reply_text)}
-        )
+            logger.info(
+                "harness_dispatcher.harness_execute_start tool=%s args=%r",
+                tool_intent.tool,
+                tool_intent.args,
+            )
+            result = self._harness.execute(tool_intent)
+            logger.info(
+                "harness_dispatcher.harness_execute_done", extra={"status": result.status}
+            )
+            logger.info("harness_dispatcher.synthesize_start")
+            reply_text = await self._synthesize(user_text, tool_intent, result, chat_id=chat_id)
+            logger.info(
+                "harness_dispatcher.synthesize_done", extra={"reply_chars": len(reply_text)}
+            )
+
         logger.info("harness_dispatcher.send_start")
         await _send(reply_text)
         logger.info("harness_dispatcher.send_done")
@@ -238,46 +249,82 @@ class HarnessDispatcher:
         logger.info("harness_dispatcher.dispatch_complete")
         return DispatchOutcome.FIRED
 
-    async def _plan_first_step(
+    async def _run_multi_step(
         self,
         *,
         descriptor: SkillDescriptor,
         user_text: str,
         recent: tuple[tuple[str, str], ...],
-    ) -> ToolIntent | None:
-        """Single-step scaffolding for the multi-step loop (Step 1).
+    ) -> list[tuple[ToolIntent, ToolResult]]:
+        """Bounded multi-step planner loop (Step 2).
 
-        Calls `runner.plan_next` once with an empty history and translates the
-        result into a `ToolIntent`. Returning None means "respond" — caller
-        treats it as PASS, mirroring the existing `tool_intent.tool == 'respond'`
-        branch on the legacy path. The full bounded loop (history threading,
-        step cap, mid-chain abort) lands in Step 2 of
-        docs/PLAN_MULTI_STEP_AGENT_LOOP.md.
+        Calls `runner.plan_next` up to `self._max_steps` times, executing
+        each `tool_call` and threading the resulting history into the next
+        plan call. Terminations: `kind == "respond"`, step cap reached, or
+        an empty available-skills set. Tool errors are appended to history
+        like any other result — the planner sees them on the next call and
+        can decide to recover or respond. The full chain (possibly empty)
+        is returned to the caller, which synthesises one final reply.
+
+        See docs/PLAN_MULTI_STEP_AGENT_LOOP.md.
         """
+        # TODO(step 4): destructive guard — auto-abort + operator confirm
+        # when a planner step proposes a destructive tool beyond step 1.
         available = list(self._registry.all())
+        history: list[tuple[ToolIntent, ToolResult]] = []
         logger.info(
-            "harness_dispatcher.plan_next_start",
-            extra={"skill_id": descriptor.id, "available_skills": len(available)},
+            "harness_dispatcher.multi_step_start",
+            extra={
+                "skill_id": descriptor.id,
+                "available_skills": len(available),
+                "max_steps": self._max_steps,
+            },
         )
-        step = await self._runner.plan_next(
-            user_text=user_text,
-            available_skills=available,
-            history=(),
-            recent=recent,
-        )
+
+        for step_no in range(1, self._max_steps + 1):
+            logger.info(
+                "harness_dispatcher.plan_next_start",
+                extra={"step": step_no, "history_len": len(history)},
+            )
+            plan = await self._runner.plan_next(
+                user_text=user_text,
+                available_skills=available,
+                history=tuple(history),
+                recent=recent,
+            )
+            logger.info(
+                "harness_dispatcher.plan_next_done step=%d kind=%s tool=%s",
+                step_no,
+                plan.kind,
+                plan.tool,
+            )
+            if plan.kind != "tool_call" or plan.tool is None:
+                break
+
+            tool_intent = ToolIntent(
+                tool=plan.tool,
+                args=dict(plan.args or {}),
+                skill_id=descriptor.id,
+                rationale=f"multi-step planner: step {step_no}",
+            )
+            logger.info(
+                "harness_dispatcher.harness_execute_start step=%d tool=%s args=%r",
+                step_no,
+                tool_intent.tool,
+                tool_intent.args,
+            )
+            result = self._harness.execute(tool_intent)
+            logger.info(
+                "harness_dispatcher.harness_execute_done",
+                extra={"step": step_no, "status": result.status},
+            )
+            history.append((tool_intent, result))
+
         logger.info(
-            "harness_dispatcher.plan_next_done kind=%s tool=%s",
-            step.kind,
-            step.tool,
+            "harness_dispatcher.multi_step_done",
+            extra={"chain_steps": len(history)},
         )
-        if step.kind != "tool_call" or step.tool is None:
-            return None
-        return ToolIntent(
-            tool=step.tool,
-            args=dict(step.args or {}),
-            skill_id=descriptor.id,
-            rationale="multi-step planner: first step",
-        )
+        return history
 
     def _recent_turns(self, chat_id: int) -> tuple[tuple[str, str], ...]:
         """Pull the rolling window of (role, text) pairs for anaphora resolution."""
