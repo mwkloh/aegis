@@ -12,9 +12,12 @@ import re
 from collections.abc import Sequence
 
 from runtime.harness import ToolIntent
+from runtime.harness.contract import ToolResult
 from runtime.skills import SkillDescriptor
 
-from .tier1_reasoner import Tier1Reasoner, Tier1ReasonerError
+from .tier1_reasoner import PlanStep, Tier1Reasoner, Tier1ReasonerError
+
+__all__ = ["PlanStep", "SkillRunner"]
 
 _ECHO_STRIP = re.compile(r"^\s*(?:echo|ping)\s*", re.IGNORECASE)
 
@@ -40,6 +43,31 @@ class SkillRunner:
             skill_id=descriptor.id,
             rationale="tier 0 deterministic mapping from intent to tool",
         )
+
+    async def plan_next(
+        self,
+        *,
+        user_text: str,
+        available_skills: Sequence[SkillDescriptor],
+        history: Sequence[tuple[ToolIntent, ToolResult]] = (),
+        recent: Sequence[tuple[str, str]] = (),
+    ) -> PlanStep:
+        """Ask the planner for the next step in a multi-step chain.
+
+        Without a configured Tier 1 reasoner, or when the reasoner errors,
+        the runner returns a `respond` step so the loop terminates safely.
+        """
+        if self._tier1 is None:
+            return PlanStep(kind="respond")
+        try:
+            return await self._tier1.plan_next(
+                user_text=user_text,
+                available_skills=available_skills,
+                history=history,
+                recent=recent,
+            )
+        except Tier1ReasonerError:
+            return PlanStep(kind="respond")
 
     async def _build_tier1(
         self,
