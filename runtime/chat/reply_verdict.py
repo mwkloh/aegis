@@ -3,7 +3,8 @@
 Phase 8 §D2. An LLM's reply is a *claim*; whether an action actually
 happened is determined by the Plane-1 ``tool.invoked`` records (§D1).
 This module detects when a reply asserts "I did X" but the audit
-trail shows no verified tool call for the turn, and prepends:
+trail shows no verified tool call for the action implied by X, and
+prepends:
 
     ⚠️ unverified tool claim — not executed
 
@@ -18,8 +19,14 @@ Design:
 
 * **Pure function.** ``annotate_unverified_claim(reply, verified_tools)``
   is deterministic; it doesn't touch the event stream or any store.
-  The pipeline owns the "did any verified tool run this turn?"
-  boolean and passes it in.
+  The pipeline owns the "which tools actually ran this turn?" set
+  and passes it in.
+* **Per-tool match.** Each claim pattern is paired with the tool id
+  it implies (or ``None`` for generic action verbs). When ``verified_tools``
+  is non-empty, a specific-verb claim is flagged only if its implied
+  tool id is *not* in the set; generic-verb claims are trusted because
+  *some* tool ran. When ``verified_tools`` is empty, every claim hit
+  is flagged — same as the legacy ``count == 0`` path.
 * **Structural verdict.** ``ReplyVerdict`` returns the flagged
   phrases + annotated reply so callers can log which phrase tripped
   the gate without the caller re-running the regex.
@@ -30,14 +37,15 @@ Design:
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 UNVERIFIED_BANNER = "⚠️ unverified tool claim — not executed"
 
 
-# First-person assertion patterns for actions that *should* leave a
-# tool.invoked verdict. Each pattern matches a single phrase; the gate
-# aggregates hits and annotates once. Patterns are case-insensitive.
+# Each entry is ``(implied_tool_id, regex)``. ``implied_tool_id`` is the
+# harness tool id the verb maps to, or ``None`` for generic action verbs
+# that don't pin a specific tool ("ran", "executed", "applied"…).
 #
 # When adding patterns:
 #   - Anchor on first-person subject ("I ", "I've", "I have") or
@@ -47,22 +55,32 @@ UNVERIFIED_BANNER = "⚠️ unverified tool claim — not executed"
 #     like me to run") — those aren't claims.
 #   - Keep each regex small and readable; we want false-negative
 #     leaning behaviour.
-_DEFAULT_CLAIM_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
-    re.compile(p, re.IGNORECASE)
-    for p in (
-        r"\bI(?:'ve| have)? (?:just )?(?:ran|run|executed|invoked|called) \b",
-        r"\bI(?:'ve| have)? (?:just )?applied (?:the |your |a )?(?:patch|diff|change)\b",
-        r"\bI(?:'ve| have)? (?:just )?(?:created|wrote|written|generated|saved) \b",
-        r"\bI(?:'ve| have)? (?:just )?(?:deleted|removed|dropped) \b",
-        r"\bI(?:'ve| have)? (?:just )?(?:published|pushed|posted|sent) \b",
-        r"\bI(?:'ve| have)? (?:just )?(?:fetched|downloaded|retrieved) \b",
-        r"\b(?:ran|executed|invoked) (?:the )?(?:tool|skill|command)s?\b",
-        r"\b(?:tool|skill|command) (?:ran|executed|succeeded|completed)\b",
+#   - Use ``None`` for generic verbs so that *any* verified tool
+#     trusts the claim. Use a specific tool id when the verb has a
+#     1:1 meaning ("deleted" → ``files_delete``).
+_DEFAULT_CLAIM_PATTERNS: tuple[tuple[str | None, re.Pattern[str]], ...] = tuple(
+    (tool_id, re.compile(p, re.IGNORECASE))
+    for tool_id, p in (
+        # Generic action verbs — trusted whenever any tool ran.
+        (None, r"\bI(?:'ve| have)? (?:just )?(?:ran|run|executed|invoked|called) \b"),
+        (None, r"\bI(?:'ve| have)? (?:just )?applied (?:the |your |a )?(?:patch|diff|change)\b"),
+        (None, r"\bI(?:'ve| have)? (?:just )?(?:published|pushed|posted|sent) \b"),
+        (None, r"\bI(?:'ve| have)? (?:just )?(?:fetched|downloaded|retrieved) \b"),
+        (None, r"\b(?:ran|executed|invoked) (?:the )?(?:tool|skill|command)s?\b"),
+        (None, r"\b(?:tool|skill|command) (?:ran|executed|succeeded|completed)\b"),
         # Terse completion claims — "I did.", "I've done that.", "I completed
-        # the cleanup." These weasel phrasings were missing from the original
-        # set and let "say you ran X" prompts slip past the gate in practice.
-        r"\bI(?:'ve| have)? (?:just )?(?:did|done)\b",
-        r"\bI(?:'ve| have)? (?:just )?(?:completed|finished|cleaned up|cleared)\b",
+        # the cleanup." These weasel phrasings let "say you ran X" prompts
+        # slip past the gate in practice.
+        (None, r"\bI(?:'ve| have)? (?:just )?(?:did|done)\b"),
+        (None, r"\bI(?:'ve| have)? (?:just )?(?:completed|finished|cleaned up|cleared)\b"),
+        # Specific-verb claims — pinned to a tool id.
+        ("files_write", r"\bI(?:'ve| have)? (?:just )?(?:created|wrote|written|generated|saved) \b"),
+        ("files_delete", r"\bI(?:'ve| have)? (?:just )?(?:deleted|removed|dropped) \b"),
+        ("files_move", r"\bI(?:'ve| have)? (?:just )?(?:moved|renamed) \b"),
+        ("files_open", r"\bI(?:'ve| have)? (?:just )?opened \b"),
+        ("files_search", r"\bI(?:'ve| have)? (?:just )?searched \b"),
+        ("files_read", r"\bI(?:'ve| have)? (?:just )?read \b"),
+        ("files_list", r"\bI(?:'ve| have)? (?:just )?listed \b"),
     )
 )
 
@@ -98,26 +116,41 @@ class ReplyVerdict:
 def annotate_unverified_claim(
     reply: str,
     *,
-    verified_tools: int,
-    claim_patterns: tuple[re.Pattern[str], ...] = _DEFAULT_CLAIM_PATTERNS,
+    verified_tools: Iterable[str],
+    claim_patterns: tuple[tuple[str | None, re.Pattern[str]], ...] = _DEFAULT_CLAIM_PATTERNS,
     suppress_patterns: tuple[re.Pattern[str], ...] = _DEFAULT_SUPPRESS_PATTERNS,
 ) -> ReplyVerdict:
-    """Prepend the banner if ``reply`` asserts an action without verification.
+    """Prepend the banner if ``reply`` asserts an unverified action.
 
-    - ``verified_tools`` is the count of ``tool.invoked`` events with
-      ``verdict="verified"`` on record for this turn. When non-zero,
-      we trust the claim and return the reply untouched.
-    - ``claim_patterns`` is overridable for tests / operator tuning.
+    - ``verified_tools`` is the set of tool ids that actually executed
+      on this turn (from ``tool.invoked`` records with verdict
+      ``"verified"``, or the in-memory chain history). Empty set means
+      "no tools ran" — every claim hit is flagged.
+    - When non-empty, a generic-verb claim (e.g. "I ran the tool")
+      passes because *some* tool ran; a specific-verb claim
+      (e.g. "I deleted the file") is flagged only if its implied tool
+      isn't in the set.
+    - ``claim_patterns`` and ``suppress_patterns`` are overridable for
+      tests / operator tuning.
     - ``suppress_patterns`` wins: if any suppress pattern matches the
       reply, no annotation even if a claim pattern also hit.
     """
-    if verified_tools > 0 or not reply.strip():
+    if not reply.strip():
         return ReplyVerdict(annotated_reply=reply, flagged_phrases=())
 
+    verified_set = frozenset(verified_tools)
     flagged: list[str] = []
-    for pattern in claim_patterns:
+    for tool_id, pattern in claim_patterns:
         match = pattern.search(reply)
-        if match is not None:
+        if match is None:
+            continue
+        if tool_id is None:
+            # Generic verb: trusted whenever any tool ran.
+            if not verified_set:
+                flagged.append(match.group(0).strip())
+            continue
+        # Specific verb: trusted iff its implied tool actually ran.
+        if tool_id not in verified_set:
             flagged.append(match.group(0).strip())
 
     if not flagged:
