@@ -209,19 +209,19 @@ class ChatPipeline:
     def _gate_reply(self, reply: str) -> str:
         """Annotate the reply if it claims an action the audit trail can't confirm.
 
-        Counts ``tool.invoked`` records on the current session shard
-        with ``verdict='verified'``. When zero, the verdict gate flags
-        first-person action claims (§D2). When the shard isn't
-        reachable (no events wired, IO error), we skip the gate
-        rather than over-annotate — chat must never crash on a log
-        read failure.
+        Builds the set of ``tool.invoked`` tool ids on the current
+        session shard with ``verdict='verified'``. The gate uses this
+        set to per-tool match against claim phrasings (§D2). When the
+        shard isn't reachable (no events wired, IO error), we skip
+        the gate rather than over-annotate — chat must never crash on
+        a log read failure.
         """
         if self._events is None:
             return reply
         try:
-            verified = sum(
-                1 for r in load_tool_calls(self._events) if r.verdict == "verified"
-            )
+            verified = {
+                r.tool for r in load_tool_calls(self._events) if r.verdict == "verified"
+            }
         except Exception:
             logger.exception("chat.pipeline.verdict_gate_read_failed")
             return reply
