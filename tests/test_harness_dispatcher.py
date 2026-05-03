@@ -700,3 +700,265 @@ async def test_multi_step_threads_recent_turns_into_plan_next() -> None:
     )
     for call in runner.plan_next_calls:
         assert call["recent"] == expected_recent
+
+
+# ---------------------------------------------------------------------------
+# Multi-step bounded LOOP body — Step 2 of docs/PLAN_MULTI_STEP_AGENT_LOOP.md.
+# ---------------------------------------------------------------------------
+
+
+class _RecordingHarness:
+    """HarnessAdapter-shaped stub that records each execute() call.
+
+    Tools is a dict[tool_name → callable]; the callable returns either a
+    payload dict or raises (which the real adapter wraps into an error
+    ToolResult — we mirror that here).
+    """
+
+    def __init__(self, tools: dict[str, Any]) -> None:
+        self._tools = tools
+        self.calls: list[ToolIntent] = []
+
+    def has_tool(self, name: str) -> bool:
+        return name in self._tools
+
+    def execute(self, intent: ToolIntent) -> ToolResult:
+        self.calls.append(intent)
+        fn = self._tools.get(intent.tool)
+        if fn is None:
+            return ToolResult(status="error", error=f"unknown: {intent.tool}")
+        try:
+            payload = fn(intent.args)
+        except Exception as exc:
+            return ToolResult(status="error", error=f"{type(exc).__name__}: {exc}")
+        return ToolResult(status="ok", payload=payload)
+
+
+class _MultiSkillRegistry:
+    """Registry stub that exposes multiple skills via .all() while still
+    routing one classified intent through .for_intent()."""
+
+    def __init__(self, descriptors: list[SkillDescriptor], primary_intent: str) -> None:
+        self._descriptors = descriptors
+        self._primary = primary_intent
+
+    def for_intent(self, intent: str) -> SkillDescriptor | None:
+        for d in self._descriptors:
+            if intent in d.intents:
+                return d
+        return None
+
+    def all(self) -> list[SkillDescriptor]:
+        return list(self._descriptors)
+
+
+def _two_skill_setup() -> tuple[_MultiSkillRegistry, _RecordingHarness]:
+    search = SkillDescriptor(
+        id="search_files",
+        description="Search for files matching a glob.",
+        intents=["search_files"],
+        tool="files_search",
+        args_schema={"type": "object", "properties": {"glob": {"type": "string"}}},
+        requires_tier1=True,
+    )
+    read = SkillDescriptor(
+        id="read_file",
+        description="Read a file's contents.",
+        intents=["read_file"],
+        tool="files_read",
+        args_schema={"type": "object", "properties": {"path": {"type": "string"}}},
+        requires_tier1=True,
+    )
+    registry = _MultiSkillRegistry([search, read], primary_intent="search_files")
+    harness = _RecordingHarness(
+        tools={
+            "files_search": lambda args: {"matches": ["/tmp/a.md", "/tmp/b.md"]},
+            "files_read": lambda args: {"content": "hello"},
+        }
+    )
+    return registry, harness
+
+
+def _make_loop_dispatcher(
+    *,
+    runner: _StubPlanRunner,
+    registry: _MultiSkillRegistry | None = None,
+    harness: _RecordingHarness | None = None,
+    synthesizer: Any = None,
+    tier3: _StubTier3 | None = None,
+    max_steps: int = 5,
+) -> HarnessDispatcher:
+    if registry is None or harness is None:
+        registry, harness = _two_skill_setup()
+    return HarnessDispatcher(
+        classifier=_StubClassifier("search_files", 0.9),
+        registry=registry,
+        runner=runner,
+        harness=harness,
+        synthesizer=synthesizer or _StubSynthesizer(reply="chain reply"),
+        tier3=tier3 or _StubTier3(),
+        tier1_loader=_StubTier1Loader(),
+        synthesis_model="stub-model",
+        multi_step=True,
+        max_steps=max_steps,
+    )
+
+
+async def test_multi_step_happy_two_step_chain() -> None:
+    """Planner: search → read → respond. Both tools fire; synthesis gets the chain."""
+    registry, harness = _two_skill_setup()
+    runner = _StubPlanRunner(
+        plan_steps=[
+            PlanStep(kind="tool_call", tool="files_search", args={"glob": "*.md"}),
+            PlanStep(kind="tool_call", tool="files_read", args={"path": "/tmp/a.md"}),
+            PlanStep(kind="respond"),
+        ],
+    )
+    tier3 = _StubTier3()
+    dispatcher = _make_loop_dispatcher(
+        runner=runner, registry=registry, harness=harness, tier3=tier3
+    )
+    message = _FakeMessage()
+
+    outcome = await dispatcher.dispatch(
+        chat_id=42, user_text="find and read", message=message
+    )
+
+    assert outcome == DispatchOutcome.FIRED
+    assert len(runner.plan_next_calls) == 3
+    # First call has empty history; subsequent calls thread accumulating history.
+    assert runner.plan_next_calls[0]["history"] == ()
+    assert len(runner.plan_next_calls[1]["history"]) == 1
+    assert len(runner.plan_next_calls[2]["history"]) == 2
+    # Both tools executed, in order.
+    assert [c.tool for c in harness.calls] == ["files_search", "files_read"]
+    assert len(message.replies) == 1
+    # tier3 logged user + bot turn.
+    assert [t[1] for t in tier3.turns] == ["user", "bot"]
+
+
+async def test_multi_step_single_tool_then_respond() -> None:
+    runner = _StubPlanRunner(
+        plan_steps=[
+            PlanStep(kind="tool_call", tool="files_search", args={"glob": "*.md"}),
+            PlanStep(kind="respond"),
+        ],
+    )
+    registry, harness = _two_skill_setup()
+    dispatcher = _make_loop_dispatcher(
+        runner=runner, registry=registry, harness=harness
+    )
+
+    outcome = await dispatcher.dispatch(
+        chat_id=1, user_text="find md files", message=_FakeMessage()
+    )
+
+    assert outcome == DispatchOutcome.FIRED
+    assert len(harness.calls) == 1
+    # Synthesis got exactly the one call's history.
+    assert len(runner.plan_next_calls[1]["history"]) == 1
+
+
+async def test_multi_step_immediate_respond_returns_pass() -> None:
+    runner = _StubPlanRunner(plan_steps=[PlanStep(kind="respond")])
+    registry, harness = _two_skill_setup()
+    tier3 = _StubTier3()
+    dispatcher = _make_loop_dispatcher(
+        runner=runner, registry=registry, harness=harness, tier3=tier3
+    )
+    message = _FakeMessage()
+
+    outcome = await dispatcher.dispatch(
+        chat_id=1, user_text="thanks", message=message
+    )
+
+    assert outcome == DispatchOutcome.PASS
+    assert harness.calls == []
+    assert message.replies == []
+    assert tier3.turns == []  # no synthesis ⇒ no tier3 write
+
+
+async def test_multi_step_step_cap_forces_termination() -> None:
+    """Planner that always returns tool_call must stop at max_steps."""
+    runner = _StubPlanRunner(
+        plan_steps=[
+            PlanStep(kind="tool_call", tool="files_search", args={"glob": "*"}),
+        ],
+    )
+    registry, harness = _two_skill_setup()
+    dispatcher = _make_loop_dispatcher(
+        runner=runner, registry=registry, harness=harness, max_steps=3
+    )
+
+    outcome = await dispatcher.dispatch(
+        chat_id=1, user_text="loop please", message=_FakeMessage()
+    )
+
+    assert outcome == DispatchOutcome.FIRED
+    assert len(harness.calls) == 3  # exactly max_steps
+    assert len(runner.plan_next_calls) == 3  # no extra plan_next after cap
+
+
+async def test_multi_step_mid_chain_error_thread_into_history() -> None:
+    """Tool raise → harness wraps as error ToolResult → planner sees it → respond."""
+    registry, _ = _two_skill_setup()
+
+    def _boom(args: dict) -> dict:
+        raise PermissionError("denied")
+
+    harness = _RecordingHarness(
+        tools={
+            "files_search": _boom,
+            "files_read": lambda args: {"content": "x"},
+        }
+    )
+    runner = _StubPlanRunner(
+        plan_steps=[
+            PlanStep(kind="tool_call", tool="files_search", args={"glob": "*"}),
+            PlanStep(kind="respond"),
+        ],
+    )
+    dispatcher = _make_loop_dispatcher(
+        runner=runner, registry=registry, harness=harness
+    )
+    message = _FakeMessage()
+
+    outcome = await dispatcher.dispatch(
+        chat_id=1, user_text="find x", message=message
+    )
+
+    assert outcome == DispatchOutcome.FIRED
+    assert len(message.replies) == 1
+    # The respond-call saw the error result threaded into history.
+    second_call_history = runner.plan_next_calls[1]["history"]
+    assert len(second_call_history) == 1
+    _, err_result = second_call_history[0]
+    assert err_result.status == "error"
+    assert "denied" in (err_result.error or "")
+
+
+async def test_multi_step_synthesis_failure_falls_back_to_last_payload() -> None:
+    runner = _StubPlanRunner(
+        plan_steps=[
+            PlanStep(kind="tool_call", tool="files_search", args={"glob": "*"}),
+            PlanStep(kind="respond"),
+        ],
+    )
+    registry, harness = _two_skill_setup()
+    dispatcher = _make_loop_dispatcher(
+        runner=runner,
+        registry=registry,
+        harness=harness,
+        synthesizer=_RaisingSynthesizer(),
+    )
+    message = _FakeMessage()
+
+    outcome = await dispatcher.dispatch(
+        chat_id=1, user_text="find md", message=message
+    )
+
+    assert outcome == DispatchOutcome.FIRED
+    assert len(message.replies) == 1
+    # Fallback uses last payload — the matches dict from files_search.
+    assert "matches" in message.replies[0]
+    assert len(message.replies[0]) <= 3500
