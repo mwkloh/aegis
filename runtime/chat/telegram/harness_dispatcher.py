@@ -4,6 +4,7 @@ from __future__ import annotations
 import enum
 import logging
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -47,13 +48,36 @@ _SYNTHESIS_CHAIN_PROMPT_PATH = (
 )
 _MAX_CHAIN_RESULT_CHARS = 1024
 
-__all__ = ["DispatchOutcome", "HarnessDispatcher"]
+__all__ = ["DESTRUCTIVE_TOOLS", "DispatchOutcome", "HarnessDispatcher"]
 
 
 class DispatchOutcome(enum.Enum):
     FIRED = "fired"
     CLARIFY = "clarify"
     PASS = "pass"
+
+
+@dataclass(frozen=True)
+class _ChainResult:
+    """Outcome of `_run_multi_step`. `guarded_intent` is set when the
+    destructive guard intercepted a planner step beyond step 1; `history`
+    holds whatever ran successfully BEFORE the interception."""
+
+    history: list[tuple[ToolIntent, ToolResult]] = field(default_factory=list)
+    guarded_intent: ToolIntent | None = None
+
+
+def _format_destructive_confirmation(intent: ToolIntent) -> str:
+    """Deterministic operator-facing message for the destructive-guard path.
+
+    Routed directly through `_send` — never through the synthesizer. The
+    point of the guard is to bypass the model on destructive paths so the
+    operator sees the exact tool id and args, not an LLM paraphrase.
+    """
+    return (
+        f"⚠️ I'd like to run `{intent.tool}` with args {intent.args!r} to "
+        f"finish this — please confirm with a follow-up message before I proceed."
+    )
 
 
 def _clarify_question(descriptor: SkillDescriptor) -> str:
@@ -209,11 +233,22 @@ class HarnessDispatcher:
         )
         recent = self._recent_turns(chat_id)
         if self._multi_step:
-            history = await self._run_multi_step(
+            chain = await self._run_multi_step(
                 descriptor=descriptor,
                 user_text=user_text,
                 recent=recent,
             )
+            if chain.guarded_intent is not None:
+                # Destructive guard tripped beyond step 1. Skip synthesis and
+                # ship a deterministic confirmation prompt — the operator must
+                # see the exact tool id and args, not an LLM paraphrase.
+                reply_text = _format_destructive_confirmation(chain.guarded_intent)
+                await _send(reply_text)
+                self._tier3.append(str(chat_id), "user", user_text)
+                self._tier3.append(str(chat_id), "bot", reply_text)
+                logger.info("harness_dispatcher.dispatch_complete_guarded")
+                return DispatchOutcome.FIRED
+            history = chain.history
             if not history:
                 # Planner immediately said "respond" — nothing ran, no synthesis,
                 # no tier3 write. Mirrors the legacy `tool == 'respond'` PASS.
@@ -279,21 +314,24 @@ class HarnessDispatcher:
         descriptor: SkillDescriptor,
         user_text: str,
         recent: tuple[tuple[str, str], ...],
-    ) -> list[tuple[ToolIntent, ToolResult]]:
-        """Bounded multi-step planner loop (Step 2).
+    ) -> _ChainResult:
+        """Bounded multi-step planner loop (Steps 2 + 4).
 
         Calls `runner.plan_next` up to `self._max_steps` times, executing
         each `tool_call` and threading the resulting history into the next
-        plan call. Terminations: `kind == "respond"`, step cap reached, or
-        an empty available-skills set. Tool errors are appended to history
-        like any other result — the planner sees them on the next call and
-        can decide to recover or respond. The full chain (possibly empty)
-        is returned to the caller, which synthesises one final reply.
+        plan call. Terminations: `kind == "respond"`, step cap reached, an
+        empty available-skills set, or the destructive guard tripping. Tool
+        errors are appended to history like any other result — the planner
+        sees them on the next call and can decide to recover or respond.
+
+        Destructive guard: a `tool_call` for a tool in `DESTRUCTIVE_TOOLS`
+        is allowed at step 1 (the operator's explicit opening request) but
+        intercepted at step 2+. The intercepted intent is returned via
+        `_ChainResult.guarded_intent`; the caller is responsible for
+        shipping a deterministic confirmation prompt.
 
         See docs/PLAN_MULTI_STEP_AGENT_LOOP.md.
         """
-        # TODO(step 4): destructive guard — auto-abort + operator confirm
-        # when a planner step proposes a destructive tool beyond step 1.
         available = list(self._registry.all())
         history: list[tuple[ToolIntent, ToolResult]] = []
         logger.info(
@@ -331,6 +369,14 @@ class HarnessDispatcher:
                 skill_id=descriptor.id,
                 rationale=f"multi-step planner: step {step_no}",
             )
+
+            if plan.tool in DESTRUCTIVE_TOOLS and step_no >= 2:
+                logger.info(
+                    "harness_dispatcher.destructive_guard_triggered",
+                    extra={"tool": plan.tool, "step": step_no},
+                )
+                return _ChainResult(history=history, guarded_intent=tool_intent)
+
             logger.info(
                 "harness_dispatcher.harness_execute_start step=%d tool=%s args=%r",
                 step_no,
@@ -348,7 +394,7 @@ class HarnessDispatcher:
             "harness_dispatcher.multi_step_done",
             extra={"chain_steps": len(history)},
         )
-        return history
+        return _ChainResult(history=history)
 
     def _recent_turns(self, chat_id: int) -> tuple[tuple[str, str], ...]:
         """Pull the rolling window of (role, text) pairs for anaphora resolution."""
