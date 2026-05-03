@@ -991,3 +991,171 @@ async def test_multi_step_chain_synthesis_runs_verdict_gate() -> None:
     # Chain ran files_search + files_read; reply claims a delete → flag.
     assert message.replies[0].startswith(UNVERIFIED_BANNER)
     assert "deleted the file" in message.replies[0]
+
+
+# ---------------------------------------------------------------------------
+# Destructive-tool guard — Step 4 of docs/PLAN_MULTI_STEP_AGENT_LOOP.md.
+# Allowed at step 1 (operator's explicit opening request); intercepted at
+# step 2+ with a deterministic confirmation prompt (no LLM).
+# ---------------------------------------------------------------------------
+
+
+def _destructive_setup(
+    destructive_tool: str = "files_delete",
+) -> tuple[_MultiSkillRegistry, _RecordingHarness]:
+    """Registry that exposes both files_search (non-destructive, executes) and
+    a destructive tool descriptor. Harness has both stubs; the test asserts
+    the destructive stub is NEVER invoked when intercepted."""
+    search = SkillDescriptor(
+        id="search_files",
+        description="Search for files matching a glob.",
+        intents=["search_files"],
+        tool="files_search",
+        args_schema={"type": "object", "properties": {"glob": {"type": "string"}}},
+        requires_tier1=True,
+    )
+    destructive = SkillDescriptor(
+        id=destructive_tool,
+        description=f"Destructive: {destructive_tool}.",
+        intents=[destructive_tool],
+        tool=destructive_tool,
+        args_schema={"type": "object", "properties": {"path": {"type": "string"}}},
+        requires_tier1=True,
+    )
+    registry = _MultiSkillRegistry(
+        [search, destructive], primary_intent="search_files"
+    )
+    harness = _RecordingHarness(
+        tools={
+            "files_search": lambda args: {"matches": ["/tmp/a.md"]},
+            destructive_tool: lambda args: {"removed": args.get("path")},
+        }
+    )
+    return registry, harness
+
+
+async def test_destructive_at_step_1_is_allowed() -> None:
+    """Operator's opening request CAN be destructive — no interception."""
+    registry, harness = _destructive_setup("files_delete")
+    runner = _StubPlanRunner(
+        plan_steps=[
+            PlanStep(kind="tool_call", tool="files_delete", args={"path": "/tmp/x"}),
+            PlanStep(kind="respond"),
+        ],
+    )
+    dispatcher = _make_loop_dispatcher(runner=runner, registry=registry, harness=harness)
+    message = _FakeMessage()
+
+    outcome = await dispatcher.dispatch(
+        chat_id=42, user_text="delete /tmp/x", message=message
+    )
+
+    assert outcome == DispatchOutcome.FIRED
+    assert [c.tool for c in harness.calls] == ["files_delete"]
+    assert len(message.replies) == 1
+    # Synthesizer ran (the stub returns "chain reply"); guard did NOT trip.
+    assert "I'd like to run" not in message.replies[0]
+
+
+async def test_destructive_at_step_2_is_intercepted() -> None:
+    """search → delete: only search executes; deterministic confirm message ships."""
+    registry, harness = _destructive_setup("files_delete")
+    runner = _StubPlanRunner(
+        plan_steps=[
+            PlanStep(kind="tool_call", tool="files_search", args={"glob": "*.md"}),
+            PlanStep(kind="tool_call", tool="files_delete", args={"path": "/tmp/a.md"}),
+            PlanStep(kind="respond"),
+        ],
+    )
+
+    class _ExplodingSynth:
+        """If the synthesizer is ever called on the guarded path, fail loudly."""
+
+        async def chat(self, request: Any) -> Any:
+            raise AssertionError("synthesizer must not be called on destructive guard")
+
+    tier3 = _StubTier3()
+    dispatcher = _make_loop_dispatcher(
+        runner=runner,
+        registry=registry,
+        harness=harness,
+        synthesizer=_ExplodingSynth(),
+        tier3=tier3,
+    )
+    message = _FakeMessage()
+
+    outcome = await dispatcher.dispatch(
+        chat_id=42, user_text="find and delete a.md", message=message
+    )
+
+    assert outcome == DispatchOutcome.FIRED
+    assert [c.tool for c in harness.calls] == ["files_search"]
+    assert len(message.replies) == 1
+    reply = message.replies[0]
+    assert "files_delete" in reply
+    assert "/tmp/a.md" in reply
+    # Tier3 records both turns even on guard path (mirrors CLARIFY semantics).
+    assert tier3.turns == [
+        ("42", "user", "find and delete a.md"),
+        ("42", "bot", reply),
+    ]
+
+
+async def test_destructive_confirmation_message_is_deterministic() -> None:
+    """Confirmation message must contain literal tool id + args, no filler."""
+    registry, harness = _destructive_setup("files_move")
+    runner = _StubPlanRunner(
+        plan_steps=[
+            PlanStep(kind="tool_call", tool="files_search", args={"glob": "*"}),
+            PlanStep(kind="tool_call", tool="files_move", args={"src": "/a", "dst": "/b"}),
+            PlanStep(kind="respond"),
+        ],
+    )
+
+    class _ExplodingSynth:
+        async def chat(self, request: Any) -> Any:
+            raise AssertionError("synthesizer must not be called")
+
+    dispatcher = _make_loop_dispatcher(
+        runner=runner, registry=registry, harness=harness, synthesizer=_ExplodingSynth(),
+    )
+    message = _FakeMessage()
+
+    await dispatcher.dispatch(
+        chat_id=1, user_text="move things", message=message
+    )
+
+    reply = message.replies[0]
+    # Deterministic prefix from _format_destructive_confirmation:
+    assert reply.startswith("⚠️ I'd like to run `files_move`")
+    assert "/a" in reply and "/b" in reply
+    assert "please confirm" in reply.lower()
+
+
+@pytest.mark.parametrize("dtool", ["files_delete", "files_move", "files_write"])
+async def test_destructive_guard_covers_all_destructive_tools(dtool: str) -> None:
+    registry, harness = _destructive_setup(dtool)
+    runner = _StubPlanRunner(
+        plan_steps=[
+            PlanStep(kind="tool_call", tool="files_search", args={"glob": "*"}),
+            PlanStep(kind="tool_call", tool=dtool, args={"path": "/tmp/x"}),
+            PlanStep(kind="respond"),
+        ],
+    )
+
+    class _ExplodingSynth:
+        async def chat(self, request: Any) -> Any:
+            raise AssertionError(f"synthesizer must not run for guarded {dtool}")
+
+    dispatcher = _make_loop_dispatcher(
+        runner=runner, registry=registry, harness=harness, synthesizer=_ExplodingSynth(),
+    )
+    message = _FakeMessage()
+
+    outcome = await dispatcher.dispatch(
+        chat_id=42, user_text=f"chain into {dtool}", message=message
+    )
+
+    assert outcome == DispatchOutcome.FIRED
+    assert [c.tool for c in harness.calls] == ["files_search"]
+    assert dtool in message.replies[0]
