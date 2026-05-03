@@ -20,6 +20,19 @@ logger = logging.getLogger(__name__)
 
 HARNESS_CONFIDENCE_THRESHOLD = 0.7
 _MAX_REPLY_CHARS = 3500
+
+# Tools that mutate filesystem state. The multi-step loop intercepts any
+# planner step proposing one of these BEYOND the first tool call and routes
+# the operator through a deterministic confirmation path (no LLM rephrasing).
+# A destructive intent at step 1 is allowed — it's the operator's explicit
+# opening request. Defence-in-depth: these names are not in DEFAULT_TOOLS
+# today, but a hallucinating planner could still propose them.
+# See docs/PLAN_MULTI_STEP_AGENT_LOOP.md §5 decision 5.
+DESTRUCTIVE_TOOLS: frozenset[str] = frozenset({
+    "files_delete",
+    "files_move",
+    "files_write",
+})
 _SYNTHESIS_PROMPT_PATH = (
     Path(__file__).resolve().parent.parent.parent
     / "reasoning"
