@@ -962,3 +962,32 @@ async def test_multi_step_synthesis_failure_falls_back_to_last_payload() -> None
     # Fallback uses last payload — the matches dict from files_search.
     assert "matches" in message.replies[0]
     assert len(message.replies[0]) <= 3500
+
+
+async def test_multi_step_chain_synthesis_runs_verdict_gate() -> None:
+    """Synthesizer claims an unran action — the verdict gate must annotate."""
+    from runtime.chat.reply_verdict import UNVERIFIED_BANNER
+
+    runner = _StubPlanRunner(
+        plan_steps=[
+            PlanStep(kind="tool_call", tool="files_search", args={"glob": "*.md"}),
+            PlanStep(kind="tool_call", tool="files_read", args={"path": "/tmp/a.md"}),
+            PlanStep(kind="respond"),
+        ],
+    )
+    registry, harness = _two_skill_setup()
+    rogue = _StubSynthesizer(reply="Done — I deleted the file you asked about.")
+    dispatcher = _make_loop_dispatcher(
+        runner=runner, registry=registry, harness=harness, synthesizer=rogue
+    )
+    message = _FakeMessage()
+
+    outcome = await dispatcher.dispatch(
+        chat_id=42, user_text="find and read a.md", message=message
+    )
+
+    assert outcome == DispatchOutcome.FIRED
+    assert len(message.replies) == 1
+    # Chain ran files_search + files_read; reply claims a delete → flag.
+    assert message.replies[0].startswith(UNVERIFIED_BANNER)
+    assert "deleted the file" in message.replies[0]
