@@ -13,7 +13,7 @@ from runtime.harness.adapter import HarnessAdapter
 from runtime.harness.contract import ToolIntent, ToolResult
 from runtime.intent.classifier import IntentClassification
 from runtime.llm.clients.base import ChatResponse
-from runtime.reasoning.skill_runner import SkillRunner
+from runtime.reasoning.skill_runner import PlanStep, SkillRunner
 from runtime.skills.registry import SkillDescriptor, SkillRegistry
 
 pytestmark = pytest.mark.unit
@@ -485,3 +485,183 @@ async def test_route_chat_dispatcher_fires_before_pipeline() -> None:
 
     assert not pipeline_called
     assert len(message.replies) == 1
+
+
+# ---------------------------------------------------------------------------
+# Multi-step scaffolding (cfg.harness.multi_step) — Step 1 of
+# docs/PLAN_MULTI_STEP_AGENT_LOOP.md. The full bounded loop lands in Step 2;
+# Step 1 only verifies the flag routes through `runner.plan_next` and that the
+# legacy single-shot `runner.build` path is preserved when the flag is off.
+# ---------------------------------------------------------------------------
+
+
+class _StubPlanRunner:
+    """Runner stub that exposes both `build` and `plan_next` so the dispatcher
+    can be exercised on either branch of the multi_step flag."""
+
+    def __init__(
+        self,
+        *,
+        plan_step: PlanStep,
+        build_intent: ToolIntent | None = None,
+    ) -> None:
+        self._plan_step = plan_step
+        self._build_intent = build_intent
+        self.build_calls = 0
+        self.plan_next_calls: list[dict[str, Any]] = []
+
+    async def build(
+        self,
+        descriptor: SkillDescriptor,
+        user_text: str,
+        *,
+        recent: tuple[tuple[str, str], ...] = (),
+    ) -> ToolIntent:
+        self.build_calls += 1
+        if self._build_intent is None:
+            raise AssertionError("build() should not be called when multi_step=True")
+        return self._build_intent
+
+    async def plan_next(
+        self,
+        *,
+        user_text: str,
+        available_skills: Any,
+        history: tuple = (),
+        recent: tuple[tuple[str, str], ...] = (),
+    ) -> PlanStep:
+        self.plan_next_calls.append(
+            {
+                "user_text": user_text,
+                "available_skills": list(available_skills),
+                "history": tuple(history),
+                "recent": tuple(recent),
+            }
+        )
+        return self._plan_step
+
+
+def _make_multi_step_dispatcher(
+    *,
+    plan_step: PlanStep,
+    descriptor: SkillDescriptor | None = None,
+    runner: _StubPlanRunner | None = None,
+    multi_step: bool = True,
+) -> tuple[HarnessDispatcher, _StubPlanRunner]:
+    descriptor = descriptor or _stub_descriptor()
+    registry = _stub_registry(descriptor)
+    runner = runner or _StubPlanRunner(plan_step=plan_step)
+    dispatcher = HarnessDispatcher(
+        classifier=_StubClassifier("list_files", 0.9),
+        registry=registry,
+        runner=runner,
+        harness=_stub_harness(),
+        synthesizer=_StubSynthesizer(),
+        tier3=_StubTier3(),
+        tier1_loader=_StubTier1Loader(),
+        synthesis_model="stub-model",
+        multi_step=multi_step,
+    )
+    return dispatcher, runner
+
+
+async def test_multi_step_off_by_default_uses_build() -> None:
+    """Default constructor (no multi_step) must hit `runner.build`."""
+    descriptor = _stub_descriptor()
+    runner = _StubPlanRunner(
+        plan_step=PlanStep(kind="respond"),
+        build_intent=ToolIntent(
+            tool="files_list", args={"path": "~/Downloads"}, skill_id="list_files"
+        ),
+    )
+    dispatcher = HarnessDispatcher(
+        classifier=_StubClassifier("list_files", 0.9),
+        registry=_stub_registry(descriptor),
+        runner=runner,
+        harness=_stub_harness(),
+        synthesizer=_StubSynthesizer(),
+        tier3=_StubTier3(),
+        tier1_loader=_StubTier1Loader(),
+        synthesis_model="stub-model",
+    )
+
+    outcome = await dispatcher.dispatch(
+        chat_id=42, user_text="list downloads", message=_FakeMessage()
+    )
+
+    assert outcome == DispatchOutcome.FIRED
+    assert runner.build_calls == 1
+    assert runner.plan_next_calls == []
+
+
+async def test_multi_step_true_routes_to_plan_next_and_fires() -> None:
+    plan_step = PlanStep(
+        kind="tool_call", tool="files_list", args={"path": "~/Downloads"}
+    )
+    dispatcher, runner = _make_multi_step_dispatcher(plan_step=plan_step)
+
+    message = _FakeMessage()
+    outcome = await dispatcher.dispatch(
+        chat_id=42, user_text="list downloads", message=message
+    )
+
+    assert outcome == DispatchOutcome.FIRED
+    assert runner.build_calls == 0
+    assert len(runner.plan_next_calls) == 1
+    call = runner.plan_next_calls[0]
+    assert call["user_text"] == "list downloads"
+    assert call["history"] == ()  # Step 1 always passes empty history
+    assert len(call["available_skills"]) == 1
+    assert len(message.replies) == 1
+
+
+async def test_multi_step_respond_kind_returns_pass() -> None:
+    dispatcher, runner = _make_multi_step_dispatcher(
+        plan_step=PlanStep(kind="respond")
+    )
+
+    message = _FakeMessage()
+    outcome = await dispatcher.dispatch(
+        chat_id=42, user_text="thanks", message=message
+    )
+
+    assert outcome == DispatchOutcome.PASS
+    assert message.replies == []
+    assert len(runner.plan_next_calls) == 1
+
+
+async def test_multi_step_threads_recent_turns_into_plan_next() -> None:
+    """The rolling tier3 window must reach plan_next for anaphora resolution."""
+    descriptor = _stub_descriptor()
+    runner = _StubPlanRunner(
+        plan_step=PlanStep(kind="tool_call", tool="files_list", args={"path": "~/Downloads"}),
+    )
+    tier3 = _StubTier3(
+        preload={
+            "777": [
+                _StubTier3Turn("user", "show files in main Desktop folder"),
+                _StubTier3Turn("bot", "Here are the files in your Desktop…"),
+            ],
+        }
+    )
+    dispatcher = HarnessDispatcher(
+        classifier=_StubClassifier("list_files", 0.9),
+        registry=_stub_registry(descriptor),
+        runner=runner,
+        harness=_stub_harness(),
+        synthesizer=_StubSynthesizer(),
+        tier3=tier3,
+        tier1_loader=_StubTier1Loader(),
+        synthesis_model="stub-model",
+        multi_step=True,
+    )
+
+    await dispatcher.dispatch(
+        chat_id=777, user_text="and the same folder again?", message=_FakeMessage()
+    )
+
+    assert len(runner.plan_next_calls) == 1
+    assert runner.plan_next_calls[0]["recent"] == (
+        ("user", "show files in main Desktop folder"),
+        ("bot", "Here are the files in your Desktop…"),
+    )

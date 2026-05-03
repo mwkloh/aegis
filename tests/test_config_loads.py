@@ -230,3 +230,44 @@ def test_config_ignores_malformed_board(aegis_sandbox: Path) -> None:
     reset_config()
     cfg = get_config()
     assert cfg.board.panelists == []
+
+
+def test_harness_defaults_to_single_shot(aegis_sandbox: Path) -> None:
+    """Step 1 of the multi-step plan must NOT change default behaviour."""
+    cfg = get_config()
+    assert cfg.harness.multi_step is False
+    assert cfg.harness.max_steps == 5
+
+
+def test_harness_reads_multi_step_from_json(aegis_sandbox: Path) -> None:
+    config_path = aegis_sandbox / "config.json"
+    config_path.write_text(
+        json.dumps({"harness": {"multi_step": True, "max_steps": 8}}),
+        encoding="utf-8",
+    )
+    reset_config()
+    cfg = get_config()
+    assert cfg.harness.multi_step is True
+    assert cfg.harness.max_steps == 8
+
+
+def test_harness_env_override_flips_multi_step(
+    aegis_sandbox: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`HARNESS_MULTI_STEP=1` from the launchd plist must flip the flag."""
+    monkeypatch.setenv("HARNESS_MULTI_STEP", "1")
+    reset_config()
+    cfg = get_config()
+    assert cfg.harness.multi_step is True
+
+
+def test_harness_ignores_malformed_max_steps(aegis_sandbox: Path) -> None:
+    config_path = aegis_sandbox / "config.json"
+    config_path.write_text(
+        json.dumps({"harness": {"max_steps": "not-an-int"}}),
+        encoding="utf-8",
+    )
+    reset_config()
+    cfg = get_config()
+    assert cfg.harness.max_steps == 5  # falls back to default
+

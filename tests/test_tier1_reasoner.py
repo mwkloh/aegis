@@ -5,8 +5,9 @@ import httpx
 import pytest
 
 from runtime.harness import ToolIntent
+from runtime.harness.contract import ToolResult
 from runtime.llm.clients import ChatRequest, ChatResponse
-from runtime.reasoning.skill_runner import SkillRunner
+from runtime.reasoning.skill_runner import PlanStep, SkillRunner
 from runtime.reasoning.tier1_reasoner import Tier1Reasoner, Tier1ReasonerError
 from runtime.skills import SkillDescriptor
 
@@ -157,6 +158,134 @@ async def test_reason_strips_xml_tags_in_user_text() -> None:
     system_prompt = stub.calls[0].messages[0].content
     assert "<system>" not in system_prompt
     assert "&lt;system&gt;" in system_prompt
+
+
+def _files_list_skill() -> SkillDescriptor:
+    return SkillDescriptor(
+        id="list_files",
+        description="List entries in a directory.",
+        intents=["list_files"],
+        tool="files_list",
+        args_schema={
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+        },
+        requires_tier1=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_plan_next_tool_call_returns_validated_step() -> None:
+    stub = _StubClient(
+        content='{"kind": "tool_call", "tool": "files_list", "args": {"path": "/Users/me/Downloads"}}'
+    )
+    reasoner = Tier1Reasoner(client=stub, model="minimax/minimax-m2.7")
+
+    step = await reasoner.plan_next(
+        user_text="list my downloads",
+        available_skills=[_files_list_skill()],
+    )
+
+    assert step.kind == "tool_call"
+    assert step.tool == "files_list"
+    assert step.args == {"path": "/Users/me/Downloads"}
+
+
+@pytest.mark.asyncio
+async def test_plan_next_respond_kind_terminates() -> None:
+    stub = _StubClient(content='{"kind": "respond"}')
+    reasoner = Tier1Reasoner(client=stub, model="minimax/minimax-m2.7")
+
+    step = await reasoner.plan_next(
+        user_text="thanks",
+        available_skills=[_files_list_skill()],
+    )
+
+    assert step.kind == "respond"
+    assert step.tool is None
+
+
+@pytest.mark.asyncio
+async def test_plan_next_rejects_unknown_tool() -> None:
+    stub = _StubClient(
+        content='{"kind": "tool_call", "tool": "files_delete", "args": {"path": "/x"}}'
+    )
+    reasoner = Tier1Reasoner(client=stub, model="minimax/minimax-m2.7")
+
+    with pytest.raises(Tier1ReasonerError):
+        await reasoner.plan_next(
+            user_text="anything",
+            available_skills=[_files_list_skill()],
+        )
+
+
+@pytest.mark.asyncio
+async def test_plan_next_threads_call_history_into_prompt() -> None:
+    stub = _StubClient(content='{"kind": "respond"}')
+    reasoner = Tier1Reasoner(client=stub, model="minimax/minimax-m2.7")
+    prior_call = ToolIntent(
+        tool="files_list",
+        args={"path": "/Users/me/Downloads"},
+        skill_id="list_files",
+    )
+    prior_result = ToolResult(status="ok", payload={"entries": ["a.txt", "b.pdf"]})
+
+    await reasoner.plan_next(
+        user_text="now open b.pdf",
+        available_skills=[_files_list_skill()],
+        history=[(prior_call, prior_result)],
+    )
+
+    system_prompt = stub.calls[0].messages[0].content
+    assert "files_list" in system_prompt
+    assert "a.txt" in system_prompt
+
+
+@pytest.mark.asyncio
+async def test_plan_next_requires_at_least_one_skill() -> None:
+    stub = _StubClient(content='{"kind": "respond"}')
+    reasoner = Tier1Reasoner(client=stub, model="minimax/minimax-m2.7")
+
+    with pytest.raises(Tier1ReasonerError):
+        await reasoner.plan_next(user_text="anything", available_skills=[])
+
+
+@pytest.mark.asyncio
+async def test_plan_next_wraps_transport_errors() -> None:
+    stub = _StubClient(raises=httpx.ConnectError("refused"))
+    reasoner = Tier1Reasoner(client=stub, model="minimax/minimax-m2.7")
+
+    with pytest.raises(Tier1ReasonerError):
+        await reasoner.plan_next(
+            user_text="hello",
+            available_skills=[_files_list_skill()],
+        )
+
+
+@pytest.mark.asyncio
+async def test_skill_runner_plan_next_degrades_when_no_reasoner() -> None:
+    runner = SkillRunner(tier1=None)
+    step = await runner.plan_next(
+        user_text="anything",
+        available_skills=[_files_list_skill()],
+    )
+    assert isinstance(step, PlanStep)
+    assert step.kind == "respond"
+
+
+@pytest.mark.asyncio
+async def test_skill_runner_plan_next_degrades_on_reasoner_error() -> None:
+    stub = _StubClient(content="garbage")
+    reasoner = Tier1Reasoner(client=stub, model="minimax/minimax-m2.7")
+    runner = SkillRunner(tier1=reasoner)
+
+    step = await runner.plan_next(
+        user_text="anything",
+        available_skills=[_files_list_skill()],
+    )
+
+    assert step.kind == "respond"
 
 
 @pytest.mark.asyncio
