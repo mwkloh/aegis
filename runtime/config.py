@@ -117,6 +117,29 @@ class StorageConfig(BaseModel):
         return Path(v).expanduser()
 
 
+class HarnessConfig(BaseModel):
+    """Tool-use harness behaviour (HarnessDispatcher).
+
+    `multi_step=False` keeps the legacy single-shot dispatch (classify → one
+    tool → synthesise). When True, dispatch routes through `plan_next` so the
+    operator can chain tool calls within one turn (see
+    docs/PLAN_MULTI_STEP_AGENT_LOOP.md).
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    multi_step: bool = Field(
+        default=False,
+        description="Opt-in flag for the multi-step agent loop.",
+    )
+    max_steps: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+        description="Hard cap on tool-call steps per turn when multi_step=True.",
+    )
+
+
 class FilesConfig(BaseModel):
     """Sandboxed filesystem access config for /files and file harness tools."""
 
@@ -182,6 +205,7 @@ class AegisConfig(BaseModel):
     board: BoardConfig = Field(default_factory=BoardConfig)
     files: FilesConfig = Field(default_factory=FilesConfig)
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
+    harness: HarnessConfig = Field(default_factory=HarnessConfig)
 
     @field_validator("aegis_home", "aegis_root")
     @classmethod
@@ -278,6 +302,7 @@ def _coerce(env: dict[str, str], cfg: dict[str, Any]) -> dict[str, Any]:
         "vault_indexing": _coerce_vault_indexing(cfg.get("vaultIndexing")),
         "board": board,
         "files": _coerce_files(cfg.get("files")),
+        "harness": _coerce_harness(cfg.get("harness"), env),
     }
 
 
@@ -373,6 +398,28 @@ def _coerce_files(raw: Any) -> FilesConfig:
         except (ValueError, TypeError):
             pass
     return FilesConfig()
+
+
+def _coerce_harness(raw: Any, env: dict[str, str]) -> HarnessConfig:
+    """Build a `HarnessConfig` from `config.json` → `harness` + env overrides.
+
+    Missing / non-dict raw → defaults (single-shot dispatch). Env override
+    `HARNESS_MULTI_STEP=1` is honoured so the operator can flip the flag from
+    the launchd plist without editing config.json.
+    """
+    raw_dict = raw if isinstance(raw, dict) else {}
+    multi_step_default = bool(raw_dict.get("multi_step", False))
+    multi_step = _env_bool(env.get("HARNESS_MULTI_STEP"), default=multi_step_default)
+    max_steps_raw = raw_dict.get("max_steps", HarnessConfig.model_fields["max_steps"].default)
+    try:
+        max_steps = int(max_steps_raw)
+    except (TypeError, ValueError):
+        max_steps = HarnessConfig.model_fields["max_steps"].default
+    try:
+        return HarnessConfig(multi_step=multi_step, max_steps=max_steps)
+    except Exception:
+        logger.warning("config.harness.invalid", exc_info=True)
+        return HarnessConfig()
 
 
 @lru_cache(maxsize=1)
