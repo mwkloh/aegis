@@ -9,6 +9,7 @@ from typing import Any
 
 from runtime.chat.memory.tier1 import Tier1Loader
 from runtime.chat.memory.tier3 import Tier3Store
+from runtime.chat.reply_verdict import annotate_unverified_claim
 from runtime.harness.adapter import HarnessAdapter
 from runtime.harness.contract import ToolIntent, ToolResult
 from runtime.llm.clients.base import ChatMessage, ChatRequest, ModelClient
@@ -212,6 +213,16 @@ class HarnessDispatcher:
                 "harness_dispatcher.chain_synthesize_done",
                 extra={"reply_chars": len(reply_text), "chain_steps": len(history)},
             )
+            verdict = annotate_unverified_claim(
+                reply_text,
+                verified_tools={call.tool for call, _ in history},
+            )
+            if verdict.was_flagged:
+                logger.info(
+                    "harness_dispatcher.chain_unverified_tool_claim",
+                    extra={"phrases": list(verdict.flagged_phrases)},
+                )
+            reply_text = verdict.annotated_reply
         else:
             logger.info(
                 "harness_dispatcher.runner_build_start",
