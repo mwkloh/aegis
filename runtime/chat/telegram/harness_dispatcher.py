@@ -25,6 +25,13 @@ _SYNTHESIS_PROMPT_PATH = (
     / "prompts"
     / "tool_synthesis.txt"
 )
+_SYNTHESIS_CHAIN_PROMPT_PATH = (
+    Path(__file__).resolve().parent.parent.parent
+    / "reasoning"
+    / "prompts"
+    / "tool_synthesis_chain.txt"
+)
+_MAX_CHAIN_RESULT_CHARS = 1024
 
 __all__ = ["DispatchOutcome", "HarnessDispatcher"]
 
@@ -50,6 +57,47 @@ def _clarify_question(descriptor: SkillDescriptor) -> str:
         fields = " and ".join(required)
         return f"Could you clarify the {fields} for: {descriptor.description}"
     return f"Could you provide more details for: {descriptor.description}"
+
+
+def _render_chain(history: list[tuple[ToolIntent, ToolResult]]) -> str:
+    """Render the (call, result) chain into the chain-synthesis prompt slot.
+
+    Each result payload is clipped to bound prompt length; even a long chain
+    of fat results stays within `max_tokens`.
+    """
+    if not history:
+        return "(no tools ran on this turn)"
+    lines: list[str] = []
+    for idx, (call, result) in enumerate(history, start=1):
+        args_blob = _format_args(call.args)
+        if result.status == "error":
+            payload = f"ERROR: {result.error or '(no detail)'}"
+        else:
+            payload = str(result.payload) if result.payload is not None else "(empty)"
+        if len(payload) > _MAX_CHAIN_RESULT_CHARS:
+            payload = payload[:_MAX_CHAIN_RESULT_CHARS] + "…(truncated)"
+        lines.append(f"{idx}. {call.tool}({args_blob}) → {payload}")
+    return "\n".join(lines)
+
+
+def _format_args(args: dict[str, Any]) -> str:
+    """Compact args repr — sorted keys for stable prompts."""
+    if not args:
+        return ""
+    parts = [f"{k}={args[k]!r}" for k in sorted(args)]
+    return ", ".join(parts)
+
+
+def _last_payload_text(history: list[tuple[ToolIntent, ToolResult]]) -> str:
+    """Synthesis-failure fallback text — most-recent state the operator wants."""
+    if not history:
+        return "(no tools ran)"
+    _, last = history[-1]
+    if last.status == "error" and last.error:
+        return last.error
+    if last.payload is not None:
+        return str(last.payload)
+    return "(empty)"
 
 
 def _clip(text: str) -> str:
@@ -248,6 +296,78 @@ class HarnessDispatcher:
             if isinstance(role, str) and isinstance(text, str):
                 out.append((role, text))
         return tuple(out)
+
+    async def _synthesize_chain(
+        self,
+        user_text: str,
+        history: list[tuple[ToolIntent, ToolResult]],
+        *,
+        chat_id: int,
+    ) -> str:
+        """Render the chain history into a single operator-facing reply.
+
+        Mirrors `_synthesize` (single-shot) but feeds the chain prompt the
+        full ordered list of (call, result) pairs and the verified-tools
+        set. Fallback on synthesizer failure is the LAST tool's payload —
+        that's the most-recent state the operator was waiting on.
+        """
+        logger.info("harness_dispatcher.chain_synthesis.tier1_load_start")
+        try:
+            snap = self._tier1_loader.load(str(chat_id))
+            identity = snap.identity or "AEGIS, an operator-facing assistant"
+        except Exception:
+            logger.exception("harness_dispatcher.chain_synthesis.tier1_load_failed")
+            identity = "AEGIS, an operator-facing assistant"
+        logger.info("harness_dispatcher.chain_synthesis.tier1_load_done")
+
+        chain_text = _render_chain(history)
+        verified_tools = ", ".join(sorted({call.tool for call, _ in history})) or "(none)"
+        last_payload_text = _last_payload_text(history)
+
+        logger.info("harness_dispatcher.chain_synthesis.prompt_read_start")
+        try:
+            prompt_template = _SYNTHESIS_CHAIN_PROMPT_PATH.read_text(encoding="utf-8")
+        except OSError:
+            logger.exception("harness_dispatcher.chain_synthesis.prompt_read_failed")
+            return _clip(last_payload_text)
+        logger.info(
+            "harness_dispatcher.chain_synthesis.prompt_read_done",
+            extra={"chars": len(prompt_template)},
+        )
+
+        system = prompt_template.format(
+            identity=identity,
+            user_text=user_text,
+            tool_chain=chain_text,
+            verified_tools=verified_tools,
+        )
+        request = ChatRequest(
+            model=self._synthesis_model,
+            messages=[
+                ChatMessage(role="system", content=system),
+                ChatMessage(role="user", content=user_text),
+            ],
+            temperature=0.2,
+            max_tokens=2048,
+        )
+        logger.info(
+            "harness_dispatcher.chain_synthesis.chat_start",
+            extra={
+                "model": self._synthesis_model,
+                "chain_steps": len(history),
+                "chain_chars": len(chain_text),
+            },
+        )
+        try:
+            response = await self._synthesizer.chat(request)
+            logger.info(
+                "harness_dispatcher.chain_synthesis.chat_done",
+                extra={"reply_chars": len(response.content)},
+            )
+            return response.content
+        except Exception:
+            logger.exception("harness_dispatcher.chain_synthesis_failed")
+            return _clip(last_payload_text)
 
     async def _synthesize(
         self,
