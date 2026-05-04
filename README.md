@@ -220,7 +220,7 @@ Canonical *operator* state lives outside the repo:
 
 ## License
 
-The current `pyproject.toml` declares the package as `Proprietary`. Before this repo is meaningfully public, that needs to be replaced with an explicit open-source license. *No license is granted by default.*
+[MIT](LICENSE) — see the `LICENSE` file. Do whatever you want with it; just keep the copyright and disclaimer.
 
 ## Acknowledgements
 
