@@ -109,6 +109,7 @@ async def _one_call(
     messages: list[ChatMessage],
     temperature: float,
     max_tokens: int,
+    schema: dict[str, Any],
 ) -> ChatResponse:
     request = ChatRequest(
         model=model,
@@ -116,6 +117,7 @@ async def _one_call(
         temperature=temperature,
         max_tokens=max_tokens,
         response_format="json",
+        response_schema=schema,
     )
     return await client.chat(request)
 
@@ -150,7 +152,7 @@ async def request_structured(
     for attempt_idx in range(max_retries + 1):
         attempts += 1
         resp = await _one_call(
-            client, model, current_messages, temperature, max_tokens
+            client, model, current_messages, temperature, max_tokens, schema
         )
         last_raw = resp.content
         data, kind, reason = _validate(resp.content, schema)
@@ -202,6 +204,7 @@ async def request_structured(
             escalated_messages,
             escalate_to.temperature,
             escalate_to.max_tokens,
+            schema,
         )
         data, kind, reason = _validate(resp.content, schema)
         if kind == "ok" and data is not None:

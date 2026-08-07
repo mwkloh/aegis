@@ -5,7 +5,7 @@ async `chat()` surface so the runtime never branches on provider.
 """
 from __future__ import annotations
 
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -27,6 +27,15 @@ class ChatRequest(BaseModel):
     temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     max_tokens: int = Field(default=512, ge=1, le=8192)
     response_format: Literal["text", "json"] = "text"
+    response_schema: dict[str, Any] | None = Field(
+        default=None,
+        description=(
+            "JSON schema for decoder-enforced structured output. When set, "
+            "takes precedence over response_format on clients that support "
+            "it (Ollama). Clients that do not support it fall back to "
+            "response_format."
+        ),
+    )
 
 
 class ChatResponse(BaseModel):

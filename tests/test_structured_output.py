@@ -236,6 +236,16 @@ async def test_request_uses_json_response_format(tmp_path: Path) -> None:
     assert client.seen[0].response_format == "json"
 
 
+async def test_request_threads_response_schema_to_client(tmp_path: Path) -> None:
+    client = FakeClient(replies=['{"intent":"ask","confidence":0.1}'])
+    await request_structured(
+        client, BASE_MSGS, SCHEMA, model="fake-7b", events=None
+    )
+    assert client.seen[0].response_schema == SCHEMA
+    # response_format stays "json" alongside the schema (fallback path).
+    assert client.seen[0].response_format == "json"
+
+
 async def test_no_events_when_stream_not_passed() -> None:
     # Must not raise even when all retries fail.
     client = FakeClient(replies=["bad", "bad", "bad"])
