@@ -86,9 +86,21 @@ is an optimization, not a trust boundary; a proxy or an old Ollama silently
 ignoring `format` must not weaken anything.
 
 Schema shapes must stay GBNF-friendly (lesson from hermes-agent's
-`schema_sanitizer.py`): no bare `{"type": "object"}` without `properties`, no
-`$ref`, no `anyOf` at the top level. Both existing builders
-(`tier1_reasoner.py:254,283`) already comply — pin this with a test (A-t4).
+`schema_sanitizer.py`): no `$ref`, no `anyOf`/`oneOf`, and — the real
+invariant, established by tracing llama.cpp's `json-schema-to-grammar.cpp`
+during C1 review — **any free-form object node must explicitly declare
+`additionalProperties: true`**. The dangerous shape is present-but-empty
+`properties` with `additionalProperties` unset: that compiles to a grammar
+matching only `{}` (closed), silently starving the model of e.g. tool args.
+A bare `{"type": "object"}` happens to fall through to the open catch-all in
+the current converter, but is converter-version-dependent — declare openness
+explicitly instead of relying on it. Pinned by test A-t4, which asserts
+every empty-`properties` object node carries `additionalProperties: true`.
+(An earlier draft claimed both builders already complied — false: the
+planner's `args` node was bare, fixed in C1. `_build_schema`'s
+empty-`allowed` fallback still emits a bare object; unreachable today since
+every `requires_tier1` skill declares non-empty `args_schema.properties` —
+follow-up, see open question #6.)
 
 #### A3 — `request_structured` threads the schema
 
@@ -688,3 +700,8 @@ Each step ships independently and leaves the system working:
 5. **Ledger retention.** Session shards are append-only JSONL with no
    retention policy. Fine at single-operator volume; revisit if
    `load_tool_calls` scans get slow.
+6. **`_build_schema` empty-`allowed` fallback emits a bare object**
+   (`tier1_reasoner.py`, `else {"type": "object"}` branch) — non-compliant
+   with the GBNF pin but dead code today (every `requires_tier1` skill has
+   non-empty `args_schema.properties`). Fix to an explicitly-open shape the
+   next time that function is touched.
