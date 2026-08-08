@@ -5,6 +5,7 @@ Pydantic validates every field at the boundary.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -318,6 +319,7 @@ def _coerce(env: dict[str, str], cfg: dict[str, Any]) -> dict[str, Any]:
         "board": board,
         "files": _coerce_files(cfg.get("files")),
         "harness": _coerce_harness(cfg.get("harness"), env),
+        "commands": _coerce_commands(cfg.get("commands")),
     }
 
 
@@ -413,6 +415,33 @@ def _coerce_files(raw: Any) -> FilesConfig:
         except (ValueError, TypeError):
             pass
     return FilesConfig()
+
+
+def _coerce_commands(raw: Any) -> CommandsConfig:
+    """Build a `CommandsConfig` from `config.json` → `commands`.
+
+    Missing / non-dict → default (read-only inspection allowlist). Each field
+    degrades independently: an invalid `allowed_binaries`, `timeout_ms`, or
+    `max_output_bytes` falls back to its default rather than failing the whole
+    load, so one bad key can't strand the operator's other overrides.
+    """
+    if not isinstance(raw, dict):
+        return CommandsConfig()
+    kwargs: dict[str, Any] = {}
+    binaries_raw = raw.get("allowed_binaries") or raw.get("allowedBinaries")
+    if isinstance(binaries_raw, list) and all(
+        isinstance(b, str) for b in binaries_raw
+    ):
+        kwargs["allowed_binaries"] = tuple(binaries_raw)
+    for key in ("timeout_ms", "max_output_bytes"):
+        if key in raw:
+            with contextlib.suppress(TypeError, ValueError):
+                kwargs[key] = int(raw[key])
+    try:
+        return CommandsConfig(**kwargs)
+    except Exception:
+        logger.warning("config.commands.invalid", exc_info=True)
+        return CommandsConfig()
 
 
 def _coerce_harness(raw: Any, env: dict[str, str]) -> HarnessConfig:
