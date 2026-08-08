@@ -2,8 +2,6 @@
 """Unit tests for the /files slash handler."""
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from runtime.chat.telegram.dispatch import Handler, IncomingMessage, ParsedCommand
@@ -81,12 +79,12 @@ def _cmd(name: str, *args: str) -> ParsedCommand:
     return ParsedCommand(name=name, args=tuple(args))
 
 
-@pytest.fixture()
+@pytest.fixture
 def stub() -> _StubClient:
     return _StubClient()
 
 
-@pytest.fixture()
+@pytest.fixture
 def handler(stub: _StubClient) -> Handler:
     return files_handler(client=stub)  # type: ignore[arg-type]
 
@@ -106,7 +104,9 @@ def test_unknown_subverb_returns_usage(handler: Handler) -> None:
 # ── ls ────────────────────────────────────────────────────────────────────────
 
 def test_ls_formats_file_entry(handler: Handler, stub: _StubClient) -> None:
-    stub.entries = [DirEntry(name="report.pdf", path="/x/report.pdf", type="file", size=2048, modified=_NOW)]
+    stub.entries = [
+        DirEntry(name="report.pdf", path="/x/report.pdf", type="file", size=2048, modified=_NOW)
+    ]
     result = handler(_msg(), _cmd("/files", "ls", "/x"))
     assert "[f]" in result
     assert "report.pdf" in result

@@ -38,7 +38,7 @@ from typing import Any, Protocol
 
 from telegram.constants import ChatAction
 
-from memory.embeddings import Bgem3Embedder, Embedder, FakeEmbedder, build_embedder
+from memory.embeddings import build_embedder
 from runtime.chat.memory.cold_storage import ColdStorageReader
 from runtime.chat.memory.context_builder import ContextBuilder
 from runtime.chat.memory.recall import RecallPolicy, VaultBodyLoader
@@ -1123,7 +1123,7 @@ def build_board_stack(
     )
 
 
-def build_application(  # noqa: PLR0912, PLR0915 - top-level assembly seam; each step is one statement
+def build_application(
     cfg: AegisConfig,
     *,
     dispatcher: Dispatcher | None = None,

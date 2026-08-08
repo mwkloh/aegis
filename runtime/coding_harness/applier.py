@@ -262,7 +262,7 @@ def _fail(
     )
 
 
-def apply_patch(  # noqa: PLR0911,PLR0912 - one return per verdict branch, intentional
+def apply_patch(
     repo_root: Path,
     patch_path: Path,
     *,

@@ -1,5 +1,7 @@
 # AEGIS
 
+[![CI](https://github.com/mwkloh/aegis/actions/workflows/ci.yml/badge.svg)](https://github.com/mwkloh/aegis/actions/workflows/ci.yml)
+
 > **Local-first, guarded cognitive system.** A personal AI assistant whose tool execution is correct *by architecture*, not by model capability — built to run usefully on small open-weights models (2B–13B; tested down to Gemma4:e2B) with frontier APIs as optional accelerators.
 
 > ⚠️ **Status: experimental, single-operator R&D.** This repo is one person's running notebook for an idea — that the reliability of AI assistants comes from structure (gates, planes, contracts) more than from raw model intelligence. It is **not** a packaged product. APIs change without notice, the test suite assumes a specific operator workflow, and the canonical state lives outside the repo at `~/.aegis/`. Read it as a design exploration, not a drop-in tool.

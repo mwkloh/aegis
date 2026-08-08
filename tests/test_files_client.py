@@ -9,8 +9,6 @@ from unittest.mock import patch
 import pytest
 
 from runtime.files.client import (
-    MAX_READ_BYTES,
-    DirEntry,
     FileInfo,
     FilesClient,
     FileTooBig,
@@ -20,7 +18,7 @@ from runtime.files.client import (
 pytestmark = pytest.mark.unit
 
 
-@pytest.fixture()
+@pytest.fixture
 def client(tmp_path: Path) -> FilesClient:
     return FilesClient(allowed_roots=[tmp_path])
 
@@ -68,7 +66,9 @@ def test_validate_denies_dotdot_relative(client: FilesClient) -> None:
         client._validate("../ava-selfie.png")
 
 
-def test_validate_allows_tilde(client: FilesClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_validate_allows_tilde(
+    client: FilesClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # Redirect ~ to tmp_path so the resolved path lands inside an allowed root.
     monkeypatch.setenv("HOME", str(tmp_path))
     (tmp_path / "note.txt").write_text("ok")
@@ -123,11 +123,11 @@ def test_read_file_returns_content(client: FilesClient, tmp_path: Path) -> None:
 def test_read_file_too_big(client: FilesClient, tmp_path: Path) -> None:
     p = tmp_path / "big.bin"
     p.write_text("x")
-    import runtime.files.client as mod
     from unittest.mock import patch
-    with patch.object(mod, "MAX_READ_BYTES", 0):
-        with pytest.raises(FileTooBig):
-            client.read_file(str(p))
+
+    import runtime.files.client as mod
+    with patch.object(mod, "MAX_READ_BYTES", 0), pytest.raises(FileTooBig):
+        client.read_file(str(p))
 
 
 def test_read_file_denied_outside_root(client: FilesClient) -> None:

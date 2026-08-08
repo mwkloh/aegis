@@ -10,13 +10,13 @@ from __future__ import annotations
 
 import os
 import time
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
-from runtime.chat.telegram.handlers import health_handler
 from runtime.chat.telegram.dispatch import IncomingMessage, ParsedCommand
+from runtime.chat.telegram.handlers import health_handler
 from runtime.scheduler.store import ScheduledJobStore
 
 pytestmark = pytest.mark.unit

@@ -187,7 +187,10 @@ def _files_list_skill() -> SkillDescriptor:
 @pytest.mark.asyncio
 async def test_plan_next_tool_call_returns_validated_step() -> None:
     stub = _StubClient(
-        content='{"kind": "tool_call", "tool": "files_list", "args": {"path": "/Users/me/Downloads"}}'
+        content=(
+            '{"kind": "tool_call", "tool": "files_list", '
+            '"args": {"path": "/Users/me/Downloads"}}'
+        )
     )
     reasoner = Tier1Reasoner(client=stub, model="minimax/minimax-m2.7")
 

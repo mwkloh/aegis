@@ -4,6 +4,7 @@ from __future__ import annotations
 import pytest
 
 from runtime.board.config import BoardConfig, PanelistConfig, ResearchConfig
+from runtime.chat.telegram.long_running import InFlightRegistry
 from runtime.config import (
     AegisConfig,
     ModelConfig,
@@ -12,7 +13,6 @@ from runtime.config import (
     TelegramConfig,
     VaultIndexingConfig,
 )
-from runtime.chat.telegram.long_running import InFlightRegistry
 
 pytestmark = pytest.mark.unit
 
@@ -41,8 +41,8 @@ def _cfg_with_research(*, brave_key: str | None) -> AegisConfig:
 
 
 def test_build_board_stack_wires_researcher_when_key_present() -> None:
-    from runtime.chat.telegram.bot import build_board_stack
     from runtime.chat.telegram.board_handler import BoardRunner
+    from runtime.chat.telegram.bot import build_board_stack
 
     cfg = _cfg_with_research(brave_key="BSA-test")
     runner = build_board_stack(cfg, registry=InFlightRegistry())
@@ -51,8 +51,8 @@ def test_build_board_stack_wires_researcher_when_key_present() -> None:
 
 
 def test_build_board_stack_researcher_is_none_when_no_research_config() -> None:
-    from runtime.chat.telegram.bot import build_board_stack
     from runtime.chat.telegram.board_handler import BoardRunner
+    from runtime.chat.telegram.bot import build_board_stack
 
     cfg = _cfg_with_research(brave_key=None)
     runner = build_board_stack(cfg, registry=InFlightRegistry())

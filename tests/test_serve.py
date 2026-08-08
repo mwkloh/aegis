@@ -8,10 +8,9 @@ Covers:
 """
 from __future__ import annotations
 
-import importlib
 import sys
+from collections.abc import Generator
 from pathlib import Path
-from typing import Generator
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -79,7 +78,7 @@ class TestServeValidation:
     def test_returns_1_when_bot_token_missing(self, tmp_path: Path) -> None:
         """main() should fail-fast with exit 1 when bot_token is None."""
         cfg = _cfg(tmp_path, token=None)
-        import runtime.serve as serve  # noqa: PLC0415
+        import runtime.serve as serve
         with patch.object(serve, "get_config", return_value=cfg):
             result = serve.main()
         assert result == 1
@@ -87,7 +86,7 @@ class TestServeValidation:
     def test_returns_1_when_allowlist_empty(self, tmp_path: Path) -> None:
         """main() should fail-fast with exit 1 when user_allowlist is empty."""
         cfg = _cfg(tmp_path, allowlist=())
-        import runtime.serve as serve  # noqa: PLC0415
+        import runtime.serve as serve
         with patch.object(serve, "get_config", return_value=cfg):
             result = serve.main()
         assert result == 1
@@ -100,7 +99,7 @@ class TestServeHappyPath:
         mock_app = MagicMock()
         mock_build = MagicMock(return_value=mock_app)
 
-        import runtime.serve as serve  # noqa: PLC0415
+        import runtime.serve as serve
         with (
             patch.object(serve, "get_config", return_value=cfg),
             patch.object(serve, "build_application", mock_build),
@@ -120,7 +119,7 @@ class TestServeImportError:
         cfg = _cfg(tmp_path)
         mock_build = MagicMock(side_effect=ImportError("python-telegram-bot not installed"))
 
-        import runtime.serve as serve  # noqa: PLC0415
+        import runtime.serve as serve
         with (
             patch.object(serve, "get_config", return_value=cfg),
             patch.object(serve, "build_application", mock_build),
@@ -132,7 +131,7 @@ class TestServeImportError:
     def test_returns_2_when_build_application_is_none(self, tmp_path: Path) -> None:
         """main() returns 2 when build_application is None (optional dep absent)."""
         cfg = _cfg(tmp_path)
-        import runtime.serve as serve  # noqa: PLC0415
+        import runtime.serve as serve
         with (
             patch.object(serve, "get_config", return_value=cfg),
             patch.object(serve, "build_application", None),
@@ -148,7 +147,7 @@ class TestServeKeyboardInterrupt:
         mock_app = MagicMock()
         mock_app.run_polling.side_effect = KeyboardInterrupt
         mock_build = MagicMock(return_value=mock_app)
-        import runtime.serve as serve  # noqa: PLC0415
+        import runtime.serve as serve
         with (
             patch.object(serve, "get_config", return_value=cfg),
             patch.object(serve, "build_application", mock_build),

@@ -161,7 +161,11 @@ class FilesConfig(BaseModel):
     def _expand_roots(cls, v: object) -> list[Path]:
         if not isinstance(v, list):
             return []
-        return [Path(str(r)).expanduser() for r in v if isinstance(r, (str, Path)) and str(r).strip()]
+        return [
+            Path(str(r)).expanduser()
+            for r in v
+            if isinstance(r, (str, Path)) and str(r).strip()
+        ]
 
 
 class CommandsConfig(BaseModel):

@@ -74,7 +74,10 @@ _DEFAULT_CLAIM_PATTERNS: tuple[tuple[str | None, re.Pattern[str]], ...] = tuple(
         (None, r"\bI(?:'ve| have)? (?:just )?(?:did|done)\b"),
         (None, r"\bI(?:'ve| have)? (?:just )?(?:completed|finished|cleaned up|cleared)\b"),
         # Specific-verb claims — pinned to a tool id.
-        ("files_write", r"\bI(?:'ve| have)? (?:just )?(?:created|wrote|written|generated|saved) \b"),
+        (
+            "files_write",
+            r"\bI(?:'ve| have)? (?:just )?(?:created|wrote|written|generated|saved) \b",
+        ),
         ("files_delete", r"\bI(?:'ve| have)? (?:just )?(?:deleted|removed|dropped) \b"),
         ("files_move", r"\bI(?:'ve| have)? (?:just )?(?:moved|renamed) \b"),
         ("files_open", r"\bI(?:'ve| have)? (?:just )?opened \b"),

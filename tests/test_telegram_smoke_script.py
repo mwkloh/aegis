@@ -32,7 +32,7 @@ pytestmark = pytest.mark.unit
 def _cfg(
     tmp_path: Path,
     *,
-    token: str | None = "tg-token",  # noqa: S107
+    token: str | None = "tg-token",
     allowlist: tuple[int, ...] = (12345,),
     api_key: str | None = "sk-test",
 ) -> AegisConfig:

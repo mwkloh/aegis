@@ -10,7 +10,7 @@ import re
 import shutil
 import subprocess
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
@@ -57,7 +57,7 @@ def _glob_to_regex(pattern: str) -> re.Pattern[str]:
 
 
 def _iso(ts: float) -> str:
-    return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+    return datetime.fromtimestamp(ts, tz=UTC).isoformat()
 
 
 class FilesClient:
@@ -105,7 +105,9 @@ class FilesClient:
                 size = 0
                 modified = None
                 kind = "other"
-            entries.append(DirEntry(name=item.name, path=str(item), type=kind, size=size, modified=modified))
+            entries.append(
+                DirEntry(name=item.name, path=str(item), type=kind, size=size, modified=modified)
+            )
             if recursive and kind == "directory":
                 entries.extend(self._collect_entries(item, recursive=True))
         return entries
@@ -143,16 +145,17 @@ class FilesClient:
         self._walk_search(dirpath, regex, kind, results)
         return sorted(results)
 
-    def _walk_search(self, current: Path, regex: re.Pattern[str], kind: str, results: list[str]) -> None:
+    def _walk_search(
+        self, current: Path, regex: re.Pattern[str], kind: str, results: list[str]
+    ) -> None:
         try:
             for item in current.iterdir():
-                if regex.match(item.name):
-                    if (
-                        kind == "any"
-                        or (kind == "file" and item.is_file())
-                        or (kind == "directory" and item.is_dir())
-                    ):
-                        results.append(str(item))
+                if regex.match(item.name) and (
+                    kind == "any"
+                    or (kind == "file" and item.is_file())
+                    or (kind == "directory" and item.is_dir())
+                ):
+                    results.append(str(item))
                 if item.is_dir():
                     self._walk_search(item, regex, kind, results)
         except PermissionError as exc:
@@ -228,15 +231,15 @@ class FilesClient:
                 )
             argv += ["-a", app]
         argv.append(str(p))
-        subprocess.run(argv, check=True)
+        subprocess.run(argv, check=True)  # noqa: S603  # argv list, no shell — infrastructure call
 
 
 __all__ = [
-    "DirEntry",
-    "FileInfo",
-    "FilesClient",
-    "FileTooBig",
     "MAX_READ_BYTES",
     "MAX_WRITE_BYTES",
+    "DirEntry",
+    "FileInfo",
+    "FileTooBig",
+    "FilesClient",
     "PathDenied",
 ]

@@ -133,7 +133,7 @@ class _StrictMap(dict[str, str]):
         raise KeyError(key)
 
 
-async def run_tool(  # noqa: PLR0911 - one return per verdict branch, intentional
+async def run_tool(
     spec: ToolSpec,
     args: dict[str, Any],
     *,

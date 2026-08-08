@@ -7,6 +7,18 @@ stability guarantees.
 
 ## [Unreleased]
 
+### Changed
+- **Lint debt cleared** — `ruff check .` and `bandit` (via `[tool.bandit]` in
+  `pyproject.toml`) now pass clean. Genuine issues were fixed (line length,
+  one-line statements, magic-value constants, a docstring en-dash); deliberate
+  patterns were centralized in config with justification (argv-no-shell
+  subprocess, the `PASS` enum, opinionated complexity thresholds, test-only
+  conventions). `make lint` is green.
+- **CI added** — `.github/workflows/ci.yml` runs `make lint` + `make test-unit`
+  + `make test-e2e` as blocking checks on every PR and push to `main`; `make
+  type` (mypy --strict) runs non-blocking until its ~7 pre-existing errors are
+  cleared. See `docs/MAINTAINING.md`.
+
 ## [0.0.2] - 2026-08-08
 
 Phase 11 — capability floor + evidence ledger. Lifts AEGIS from "chatbot with

@@ -79,6 +79,7 @@ _SYNTHESIS_CHAIN_PROMPT_PATH = (
     / "tool_synthesis_chain.txt"
 )
 _MAX_CHAIN_RESULT_CHARS = 1024
+_GUARD_MIN_STEP = 2  # destructive-tool guard applies from step 2 onward
 
 __all__ = ["DESTRUCTIVE_TOOLS", "DispatchOutcome", "HarnessDispatcher"]
 
@@ -86,7 +87,7 @@ __all__ = ["DESTRUCTIVE_TOOLS", "DispatchOutcome", "HarnessDispatcher"]
 class DispatchOutcome(enum.Enum):
     FIRED = "fired"
     CLARIFY = "clarify"
-    PASS = "pass"
+    PASS = "pass"  # noqa: S105  # enum value, not a credential
 
 
 @dataclass(frozen=True)
@@ -724,7 +725,7 @@ class HarnessDispatcher:
                 rationale=f"multi-step planner: step {step_no}",
             )
 
-            if plan.tool in DESTRUCTIVE_TOOLS and step_no >= 2:
+            if plan.tool in DESTRUCTIVE_TOOLS and step_no >= _GUARD_MIN_STEP:
                 logger.info(
                     "harness_dispatcher.destructive_guard_triggered",
                     extra={"tool": plan.tool, "step": step_no},

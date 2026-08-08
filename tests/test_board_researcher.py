@@ -1,9 +1,9 @@
 """Unit tests for BraveSearchClient and BoardResearcher."""
 from __future__ import annotations
 
+import httpx
 import pytest
 import respx
-import httpx
 
 from runtime.board.researcher import (
     BoardResearcher,
