@@ -1912,6 +1912,157 @@ async def test_confirmation_consumed_once_second_yes_does_not_reexecute(
     assert len(accepted) == 1  # not two
 
 
+async def test_confirmation_ttl_boundary_at_exactly_120s_is_accepted(
+    tmp_path: Path,
+) -> None:
+    """`age <= _CONFIRMATION_TTL_S` is inclusive — exactly 120s must still
+    accept, not just anything strictly under."""
+    events = EventStream(tmp_path / "sessions")
+    clock = _MutableClock(datetime(2026, 1, 1, tzinfo=UTC))
+    registry, harness = _destructive_setup("files_delete")
+    dispatcher = _make_loop_dispatcher(
+        runner=_guard_trip_runner(),
+        registry=registry,
+        harness=harness,
+        events=events,
+        clock=clock,
+    )
+    await dispatcher.dispatch(
+        chat_id=42, user_text="find and delete a.md", message=_FakeMessage()
+    )
+
+    clock.now = clock.now + timedelta(seconds=120)  # exactly at the TTL boundary
+    message2 = _FakeMessage()
+    outcome = await dispatcher.dispatch(chat_id=42, user_text="yes", message=message2)
+
+    assert outcome == DispatchOutcome.FIRED
+    assert [c.tool for c in harness.calls] == ["files_search", "files_delete"]
+
+
+async def test_confirmation_execute_synthesis_failure_falls_back_to_raw_payload(
+    tmp_path: Path,
+) -> None:
+    """`_execute_confirmed` must inherit the same synthesis-failure fallback
+    as the single-shot path (`_synthesize`'s own try/except): a raising
+    synthesizer still yields a reply (the clipped raw tool payload) rather
+    than losing the turn, and the ledger record + ACCEPTED event are
+    unaffected by the synthesis failure. Pins the code-reuse — a future
+    rewrite of `_execute_confirmed` that stops calling `_synthesize` would
+    silently lose this fallback."""
+    events = EventStream(tmp_path / "sessions")
+    registry, harness = _destructive_setup("files_delete")
+    dispatcher = _make_loop_dispatcher(
+        runner=_guard_trip_runner(),
+        registry=registry,
+        harness=harness,
+        events=events,
+        synthesizer=_RaisingSynthesizer(),
+    )
+    await dispatcher.dispatch(
+        chat_id=42, user_text="find and delete a.md", message=_FakeMessage()
+    )
+
+    message2 = _FakeMessage()
+    outcome = await dispatcher.dispatch(chat_id=42, user_text="yes", message=message2)
+
+    assert outcome == DispatchOutcome.FIRED
+    assert len(message2.replies) == 1
+    # Fallback is the raw tool payload (files_delete's stub returns
+    # {"removed": <path>}) — not a synthesized sentence.
+    assert "removed" in message2.replies[0]
+    assert len(message2.replies[0]) <= 3500
+
+    records = load_tool_calls(events)
+    delete_records = [r for r in records if r.tool == "files_delete"]
+    assert len(delete_records) == 1
+
+    accepted = [
+        e for e in _raw_events(events) if e["type"] == "harness.confirmation_accepted"
+    ]
+    assert len(accepted) == 1
+
+
+async def test_confirmation_guard_send_failure_does_not_arm_pending(
+    tmp_path: Path,
+) -> None:
+    """If sending the confirmation prompt itself raises (e.g. a Telegram API
+    error), no pending intent may be armed. Otherwise a later UNRELATED
+    message that happens to match an affirmative ("yes", "go ahead" are
+    common words) would silently execute a destructive tool the operator
+    was never shown a prompt for."""
+    events = EventStream(tmp_path / "sessions")
+    registry, harness = _destructive_setup("files_delete")
+    classifier = _StubClassifier("search_files", 0.9)
+    dispatcher = _make_loop_dispatcher(
+        runner=_guard_trip_runner(),
+        registry=registry,
+        harness=harness,
+        events=events,
+        classifier=classifier,
+    )
+
+    async def _raising_reply(text: str) -> None:
+        raise RuntimeError("telegram api error")
+
+    with pytest.raises(RuntimeError, match="telegram api error"):
+        await dispatcher.dispatch(
+            chat_id=42,
+            user_text="find and delete a.md",
+            message=_FakeMessage(),
+            reply=_raising_reply,
+        )
+
+    assert 42 not in dispatcher._pending
+    requested = [
+        e for e in _raw_events(events) if e["type"] == "harness.confirmation_requested"
+    ]
+    assert requested == []  # never armed — send never succeeded
+
+    # A following "yes" is just an ordinary message: classifier consulted,
+    # destructive tool never executes.
+    message2 = _FakeMessage()
+    await dispatcher.dispatch(chat_id=42, user_text="yes", message=message2)
+
+    assert classifier.calls[-1] == "yes"
+    assert [c.tool for c in harness.calls] == ["files_search"]  # delete never ran
+
+
+async def test_confirmation_accepted_survives_event_stream_append_failure() -> None:
+    """`EventStream.append` does unguarded file I/O and can raise (disk
+    full, permissions, ...). HARNESS_CONFIRMATION_ACCEPTED fires AFTER a
+    destructive tool has already mutated disk — an unguarded raise there
+    must not propagate out of `dispatch()`: the operator still needs a
+    reply about an action that already happened."""
+
+    class _RaisingEventStream:
+        session_id = "raising-session"
+        path = Path("/nonexistent/raising.jsonl")
+
+        def append(self, event_type: Any, payload: dict[str, Any]) -> None:
+            raise OSError("disk full (simulated)")
+
+    registry, harness = _destructive_setup("files_delete")
+    dispatcher = _make_loop_dispatcher(
+        runner=_guard_trip_runner(),
+        registry=registry,
+        harness=harness,
+        events=_RaisingEventStream(),  # type: ignore[arg-type]
+    )
+    await dispatcher.dispatch(
+        chat_id=42, user_text="find and delete a.md", message=_FakeMessage()
+    )
+    # Pending is stored regardless of the (also-swallowed) REQUESTED event
+    # append failure — arming happens before the event append, per Fix 1.
+    assert 42 in dispatcher._pending
+
+    message2 = _FakeMessage()
+    outcome = await dispatcher.dispatch(chat_id=42, user_text="yes", message=message2)
+
+    assert outcome == DispatchOutcome.FIRED
+    assert [c.tool for c in harness.calls] == ["files_search", "files_delete"]
+    assert len(message2.replies) == 1
+
+
 # ---------------------------------------------------------------------------
 # Existing behavior untouched: no pending state ⇒ dispatch runs exactly as
 # before (regression guard for the new entry check added at the top of

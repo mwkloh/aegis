@@ -231,8 +231,22 @@ class HarnessDispatcher:
         return self._clock() if self._clock is not None else datetime.now(tz=UTC)
 
     def _append_event(self, event_type: EventType, payload: dict[str, Any]) -> None:
-        if self._events is not None:
+        """Log one structural event, if an EventStream is wired.
+
+        `EventStream.append` does unguarded file I/O and can raise (disk
+        full, permissions, ...). Some call sites fire AFTER a destructive
+        tool has already mutated disk (e.g. HARNESS_CONFIRMATION_ACCEPTED
+        in `_execute_confirmed`) — an unguarded raise there would propagate
+        out of `dispatch()` and leave the operator with no reply about an
+        action that DID happen. Telemetry must never be able to break a
+        chat turn, so this is wrapped total, like `_record_tool_call`.
+        """
+        if self._events is None:
+            return
+        try:
             self._events.append(event_type, payload)
+        except Exception:
+            logger.warning("harness_dispatcher.event_append_failed", exc_info=True)
 
     def _record_tool_call(
         self,
@@ -440,6 +454,15 @@ class HarnessDispatcher:
                 # see the exact tool id and args, not an LLM paraphrase. Hold
                 # the intent so an explicit "yes" follow-up (within TTL) can
                 # run it without re-planning (Phase 11 Track D, D1).
+                #
+                # Arm the pending confirmation ONLY after `_send` succeeds. If
+                # the send raises (e.g. a Telegram API error), the operator
+                # never saw the prompt — storing the pending intent anyway
+                # would let a later UNRELATED message that happens to match
+                # an affirmative ("yes", "go ahead") silently execute a
+                # destructive tool the operator was never shown.
+                reply_text = _format_destructive_confirmation(chain.guarded_intent)
+                await _send(reply_text)
                 self._pending[chat_id] = _PendingConfirmation(
                     intent=chain.guarded_intent,
                     skill_id=descriptor.id,
@@ -450,8 +473,6 @@ class HarnessDispatcher:
                     EventType.HARNESS_CONFIRMATION_REQUESTED,
                     {"tool": chain.guarded_intent.tool, "skill_id": descriptor.id},
                 )
-                reply_text = _format_destructive_confirmation(chain.guarded_intent)
-                await _send(reply_text)
                 self._tier3.append(str(chat_id), "user", user_text)
                 self._tier3.append(str(chat_id), "bot", reply_text)
                 logger.info("harness_dispatcher.dispatch_complete_guarded")
