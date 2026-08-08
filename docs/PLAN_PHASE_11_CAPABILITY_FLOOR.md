@@ -231,9 +231,18 @@ def _now(self) -> datetime:
     return self._clock() if self._clock is not None else datetime.now(tz=UTC)
 
 def _append_event(self, event_type: EventType, payload: dict[str, Any]) -> None:
-    if self._events is not None:
+    if self._events is None:
+        return
+    try:
         self._events.append(event_type, payload)
+    except Exception:
+        logger.warning("harness_dispatcher.event_append_failed", exc_info=True)
 ```
+
+(`EventStream.append` does real file I/O and can raise; an event write must
+never break a turn — especially not the ACCEPTED event that fires after a
+destructive tool has already run. Same telemetry-vs-product rule as
+`_record_tool_call`.)
 
 In both the single-shot path and `_run_multi_step`, immediately after
 `self._harness.execute(tool_intent)`:
@@ -437,7 +446,13 @@ HARNESS_CONFIRMATION_DECLINED = "harness.confirmation_declined"
 Pins: exact-match affirmatives only (no model in the confirmation loop — a
 2B model must not be the judge of its own destructive action); pop-before-
 check so a pending intent is consumed exactly once; TTL hard-coded, not
-config (a forgotten confirmation should die, not linger).
+config (a forgotten confirmation should die, not linger); **arm only after
+delivery** — the pending intent (and its REQUESTED event) is stored only
+after the confirmation prompt has been successfully sent. Nothing that
+changes future dispatch behavior may be committed before the operator-facing
+message that explains it has been delivered; otherwise a failed send leaves
+an invisible armed confirmation that a later unrelated "go ahead" would
+fire.
 
 #### D2 — `files_write` tool
 
