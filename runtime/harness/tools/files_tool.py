@@ -13,7 +13,7 @@ _MAX_TOOL_CHARS = 3500
 def make_files_tools(
     client: FilesClient,
 ) -> dict[str, Callable[[dict[str, Any]], dict[str, Any]]]:
-    """Return the five harness callables closed over `client`."""
+    """Return the six harness callables closed over `client`."""
 
     def _wrap(fn: Callable[[dict[str, Any]], dict[str, Any]]) -> Callable[[dict[str, Any]], dict[str, Any]]:
         @functools.wraps(fn)
@@ -62,12 +62,17 @@ def make_files_tools(
         target = path if not app else f"{path} with {app}"
         return {"result": f"Opened {target}."}
 
+    def files_write(args: dict[str, Any]) -> dict[str, Any]:
+        result = client.write_file(args["path"], args["content"])
+        return {"result": f"Wrote {result['bytes_written']} bytes to {result['path']}."}
+
     return {
         "files_list": _wrap(files_list),
         "files_read": _wrap(files_read),
         "files_stat": _wrap(files_stat),
         "files_search": _wrap(files_search),
         "files_open": _wrap(files_open),
+        "files_write": _wrap(files_write),
     }
 
 

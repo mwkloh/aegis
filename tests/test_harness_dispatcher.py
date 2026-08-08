@@ -15,8 +15,10 @@ from runtime.chat.memory.tier3 import Tier3Store
 from runtime.chat.reply_verdict import UNVERIFIED_BANNER
 from runtime.chat.telegram.harness_dispatcher import DispatchOutcome, HarnessDispatcher
 from runtime.events import EventStream
+from runtime.files.client import FilesClient
 from runtime.harness.adapter import HarnessAdapter
 from runtime.harness.contract import ToolIntent, ToolResult
+from runtime.harness.tools.files_tool import make_files_tools
 from runtime.intent.classifier import IntentClassification
 from runtime.llm.clients.base import ChatResponse
 from runtime.reasoning.skill_runner import PlanStep, SkillRunner
@@ -1196,6 +1198,89 @@ async def test_destructive_guard_covers_all_destructive_tools(dtool: str) -> Non
     assert outcome == DispatchOutcome.FIRED
     assert [c.tool for c in harness.calls] == ["files_search"]
     assert dtool in message.replies[0]
+
+
+async def test_destructive_guard_composes_with_real_files_write(tmp_path: Path) -> None:
+    """D1 (confirmation guard) + D2 (files_write) integration.
+
+    The guard holds a REAL `files_write` step proposed at step 2 (no stub
+    standing in for the tool); confirming with "yes" then executes the
+    actual wrapped `FilesClient.write_file` against a tmp root and the file
+    lands on disk. Proves the full destructive-tool composition end to end,
+    not guard-only or tool-only in isolation.
+    """
+    root = tmp_path / "root"
+    root.mkdir()
+    files_client = FilesClient(allowed_roots=[root])
+    file_tools = make_files_tools(files_client)
+
+    harness = _RecordingHarness(
+        tools={
+            "files_search": lambda args: {"matches": []},
+            "files_write": file_tools["files_write"],  # the REAL wrapper
+        }
+    )
+
+    search_skill = SkillDescriptor(
+        id="search_files",
+        description="Search for files matching a glob.",
+        intents=["search_files"],
+        tool="files_search",
+        args_schema={"type": "object", "properties": {"glob": {"type": "string"}}},
+        requires_tier1=True,
+    )
+    write_skill = SkillDescriptor(
+        id="write_file",
+        description="Write text content to a file.",
+        intents=["write_file"],
+        tool="files_write",
+        args_schema={
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "content": {"type": "string"},
+            },
+        },
+        requires_tier1=True,
+    )
+    registry = _MultiSkillRegistry([search_skill, write_skill], primary_intent="search_files")
+
+    target = root / "notes.txt"
+    runner = _StubPlanRunner(
+        plan_steps=[
+            PlanStep(kind="tool_call", tool="files_search", args={"glob": "*.md"}),
+            PlanStep(
+                kind="tool_call",
+                tool="files_write",
+                args={"path": str(target), "content": "hello world"},
+            ),
+            PlanStep(kind="respond"),
+        ],
+    )
+
+    class _ExplodingSynth:
+        async def chat(self, request: Any) -> Any:
+            raise AssertionError("synthesizer must not run before confirmation")
+
+    dispatcher = _make_loop_dispatcher(
+        runner=runner, registry=registry, harness=harness, synthesizer=_ExplodingSynth(),
+    )
+
+    outcome = await dispatcher.dispatch(
+        chat_id=42, user_text="find and write notes.txt", message=_FakeMessage()
+    )
+
+    assert outcome == DispatchOutcome.FIRED
+    assert [c.tool for c in harness.calls] == ["files_search"]  # write NOT run yet
+    assert not target.exists()
+
+    message2 = _FakeMessage()
+    outcome2 = await dispatcher.dispatch(chat_id=42, user_text="yes", message=message2)
+
+    assert outcome2 == DispatchOutcome.FIRED
+    assert [c.tool for c in harness.calls] == ["files_search", "files_write"]
+    assert target.exists()
+    assert target.read_text(encoding="utf-8") == "hello world"
 
 
 # ---------------------------------------------------------------------------

@@ -37,6 +37,23 @@ def test_for_intent_resolves_to_descriptor(tmp_path: Path) -> None:
     assert registry.for_intent("nope") is None
 
 
+def test_loads_write_file_descriptor(tmp_path: Path) -> None:
+    registry = _seeded_registry(tmp_path)
+    write_file = registry.get("write_file")
+    assert write_file is not None
+    assert write_file.tool == "files_write"
+    assert "write_file" in write_file.intents
+    assert "save_file" in write_file.intents
+    assert write_file.requires_tier1 is True
+    # GBNF pin: args_schema.properties must be non-empty.
+    props = write_file.args_schema.get("properties")
+    assert isinstance(props, dict)
+    assert props  # non-empty
+    assert {"path", "content"} <= props.keys()
+    assert registry.for_intent("write_file") is write_file
+    assert registry.for_intent("save_file") is write_file
+
+
 def test_rejects_unknown_keys(tmp_path: Path) -> None:
     bad = tmp_path / "bad.yaml"
     bad.write_text(

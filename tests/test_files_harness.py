@@ -23,6 +23,7 @@ class _StubClient:
             created=_NOW, modified=_NOW, accessed=_NOW, mode="100644",
         )
         self.search_results: list[str] = []
+        self.write_result: dict[str, Any] = {"path": "/x/written.txt", "bytes_written": 7}
         self.raise_on_next: Exception | None = None
 
     def _maybe_raise(self) -> None:
@@ -46,6 +47,10 @@ class _StubClient:
     def search(self, directory: str, pattern: str, *, kind: str = "any") -> list[str]:
         self._maybe_raise()
         return self.search_results
+
+    def write_file(self, path: str, content: str) -> dict[str, Any]:
+        self._maybe_raise()
+        return self.write_result
 
 
 @pytest.fixture()
@@ -100,6 +105,25 @@ def test_files_search_no_matches(tools: dict) -> None:
     assert "No matches" in result["result"]
 
 
+def test_files_write_returns_confirmation(tools: dict, stub: _StubClient) -> None:
+    stub.write_result = {"path": "/x/notes.txt", "bytes_written": 42}
+    result = tools["files_write"]({"path": "/x/notes.txt", "content": "hello"})
+    assert "42" in result["result"]
+    assert "/x/notes.txt" in result["result"]
+
+
+def test_files_write_path_denied_raises_runtime_error(tools: dict, stub: _StubClient) -> None:
+    stub.raise_on_next = PathDenied("outside roots")
+    with pytest.raises(RuntimeError, match="outside roots"):
+        tools["files_write"]({"path": "/etc/passwd", "content": "pwned"})
+
+
+def test_files_write_file_too_big_raises_runtime_error(tools: dict, stub: _StubClient) -> None:
+    stub.raise_on_next = FileTooBig("too big")
+    with pytest.raises(RuntimeError, match="too big"):
+        tools["files_write"]({"path": "/x/huge.bin", "content": "x" * 10})
+
+
 def test_path_denied_raises_runtime_error(tools: dict, stub: _StubClient) -> None:
     stub.raise_on_next = PathDenied("outside roots")
     with pytest.raises(RuntimeError, match="outside roots"):
@@ -118,11 +142,12 @@ def test_oserror_raises_runtime_error(tools: dict, stub: _StubClient) -> None:
         tools["files_list"]({"path": "/x"})
 
 
-def test_make_files_tools_returns_five_callables(tools: dict) -> None:
+def test_make_files_tools_returns_six_callables(tools: dict) -> None:
     assert set(tools.keys()) == {
         "files_list",
         "files_read",
         "files_stat",
         "files_search",
         "files_open",
+        "files_write",
     }

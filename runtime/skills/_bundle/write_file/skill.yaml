@@ -1,0 +1,26 @@
+id: write_file
+version: 0.1.0
+description: Write text content to a file inside an allowed folder.
+intents:
+  - write_file
+  - save_file
+tool: files_write
+args_schema:
+  type: object
+  properties:
+    path:
+      type: string
+      minLength: 1
+      maxLength: 512
+      description: >-
+        Absolute path for the file (e.g. /Users/michaelloh/Desktop/notes.txt).
+        '~' is allowed. Must be inside an allowed folder.
+    content:
+      type: string
+      minLength: 0
+      maxLength: 65536
+      description: The exact text content to write.
+  required:
+    - path
+    - content
+requires_tier1: true
