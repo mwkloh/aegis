@@ -271,16 +271,23 @@ class HarnessDispatcher:
             verified = {r.tool for r in records}
         else:
             verified = {call.tool for call, res in history if res.status == "ok"}
-        failed = [call.tool for call, res in history if res.status != "ok"]
+        # A tool that failed on an early step and then succeeded on a later
+        # retry (first-class in the multi-step loop — see `_run_multi_step`'s
+        # docstring) is NOT a failure: its later verification supersedes the
+        # earlier error. Only tools whose failure was never superseded by a
+        # verified call are reported.
+        failed = sorted(
+            {call.tool for call, res in history if res.status != "ok"} - verified
+        )
         if failed:
             summary = (
-                f"{summary}\n\n⚠️ Note: {', '.join(sorted(set(failed)))} did not "
+                f"{summary}\n\n⚠️ Note: {', '.join(failed)} did not "
                 f"complete successfully — the summary above may overstate what "
                 f"was done."
             )
             self._append_event(
                 EventType.HARNESS_COMPLETION_GATED,
-                {"turn_id": turn_id, "failed_tools": sorted(set(failed))},
+                {"turn_id": turn_id, "failed_tools": failed},
             )
         verdict = annotate_unverified_claim(summary, verified_tools=verified)
         if verdict.was_flagged:
@@ -504,7 +511,12 @@ class HarnessDispatcher:
                 plan.tool,
             )
             if plan.kind == "task_complete":
-                summary = plan.summary or ""
+                # A 2B planner can emit task_complete with no summary (or an
+                # all-whitespace one) after a successful tool call — an empty
+                # reply text would crash the send path (python-telegram-bot
+                # rejects empty message text). Default to a minimal claim so
+                # the gate always has non-empty text to check/annotate.
+                summary = (plan.summary or "").strip() or "Done."
                 if not history:
                     # Nothing was done this turn — same as respond-with-no-
                     # history: the caller falls through to PASS.

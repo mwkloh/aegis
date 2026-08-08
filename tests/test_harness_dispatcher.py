@@ -1527,3 +1527,134 @@ async def test_task_complete_events_none_falls_back_to_history() -> None:
     reply = message.replies[0]
     assert "Searched and read the file." in reply
     assert "⚠️ Note: files_read did not complete successfully" in reply
+
+
+# ---------------------------------------------------------------------------
+# Completion gate review follow-ups (quality review of ca7c5f9).
+# ---------------------------------------------------------------------------
+
+
+async def test_task_complete_blank_summary_defaults_to_done() -> None:
+    """A 2B planner can emit task_complete with NO summary at all after a
+    successful tool call. `plan.summary or ""` alone would yield an empty
+    reply text, which crashes the send path (python-telegram-bot rejects
+    empty message text). The gate must default to a minimal non-empty
+    claim instead."""
+    runner = _StubPlanRunner(
+        plan_steps=[
+            PlanStep(kind="tool_call", tool="files_search", args={"glob": "*.md"}),
+            PlanStep(kind="task_complete"),  # summary=None
+        ],
+    )
+    registry, harness = _two_skill_setup()
+    dispatcher = _make_loop_dispatcher(
+        runner=runner, registry=registry, harness=harness
+    )
+    message = _FakeMessage()
+
+    outcome = await dispatcher.dispatch(
+        chat_id=1, user_text="find md files", message=message
+    )
+
+    assert outcome == DispatchOutcome.FIRED
+    assert len(message.replies) == 1
+    assert message.replies[0]  # non-empty — no crash
+    assert "Done." in message.replies[0]
+
+
+async def test_task_complete_recovered_tool_not_branded_failure(
+    tmp_path: Path,
+) -> None:
+    """A tool that fails on step 1 and succeeds on a later retry (varied
+    args, so the ledger records the success under a different argv_hash
+    rather than being deduped by the failed call's idempotency key) must
+    NOT be reported as a failure: its later verification supersedes the
+    earlier error. No ⚠️ warning, no HARNESS_COMPLETION_GATED event, and
+    the tool is NOT treated as unverified by the claim-annotation gate."""
+    events = EventStream(tmp_path / "sessions")
+    registry, _ = _two_skill_setup()
+
+    def _search(args: dict) -> dict:
+        if args.get("glob") == "*":
+            raise PermissionError("denied")
+        return {"matches": ["/tmp/a.md"]}
+
+    harness = _RecordingHarness(tools={"files_search": _search})
+    runner = _StubPlanRunner(
+        plan_steps=[
+            PlanStep(kind="tool_call", tool="files_search", args={"glob": "*"}),
+            PlanStep(kind="tool_call", tool="files_search", args={"glob": "*.md"}),
+            PlanStep(kind="task_complete", summary="Found the markdown files."),
+        ],
+    )
+    dispatcher = _make_loop_dispatcher(
+        runner=runner, registry=registry, harness=harness, events=events
+    )
+    message = _FakeMessage()
+
+    outcome = await dispatcher.dispatch(
+        chat_id=1, user_text="find md files", message=message
+    )
+
+    assert outcome == DispatchOutcome.FIRED
+    assert len(message.replies) == 1
+    reply = message.replies[0]
+    assert reply == "Found the markdown files."
+    assert "⚠️" not in reply
+
+    raw_events = [
+        json.loads(line)
+        for line in events.path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    gated = [e for e in raw_events if e["type"] == "harness.completion_gated"]
+    assert gated == []
+
+
+async def test_task_complete_verified_set_scoped_to_current_turn_id(
+    tmp_path: Path,
+) -> None:
+    """The completion gate's ledger query must scope to THIS turn's
+    turn_id. A tool verified on a PRIOR turn must not count as evidence
+    for a later turn's task_complete claim — proves the exclusion the
+    whole gate hinges on."""
+    events = EventStream(tmp_path / "sessions")
+    registry, harness = _two_skill_setup()
+    runner = _StubPlanRunner(
+        plan_steps=[
+            # Turn 1: search runs, then respond — records files_search
+            # under turn 1's turn_id.
+            PlanStep(kind="tool_call", tool="files_search", args={"glob": "*.md"}),
+            PlanStep(kind="respond"),
+            # Turn 2: only files_read runs, then task_complete claims a
+            # files_search action — that tool never ran on THIS turn.
+            PlanStep(kind="tool_call", tool="files_read", args={"path": "/tmp/a.md"}),
+            PlanStep(
+                kind="task_complete",
+                summary="Done — I searched for the file you wanted.",
+            ),
+        ],
+    )
+    dispatcher = _make_loop_dispatcher(
+        runner=runner, registry=registry, harness=harness, events=events
+    )
+
+    turn1_outcome = await dispatcher.dispatch(
+        chat_id=1, user_text="find md files", message=_FakeMessage()
+    )
+    assert turn1_outcome == DispatchOutcome.FIRED
+
+    message2 = _FakeMessage()
+    turn2_outcome = await dispatcher.dispatch(
+        chat_id=1, user_text="now read it", message=message2
+    )
+
+    assert turn2_outcome == DispatchOutcome.FIRED
+    assert len(message2.replies) == 1
+    assert message2.replies[0].startswith(UNVERIFIED_BANNER)
+    assert "searched" in message2.replies[0].lower()
+
+    # Sanity: two distinct turn_ids were recorded across the two dispatches.
+    records = load_tool_calls(events)
+    imp_ids = {r.imp_id for r in records}
+    assert len(imp_ids) == 2
