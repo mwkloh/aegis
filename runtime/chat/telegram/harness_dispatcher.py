@@ -20,7 +20,12 @@ from runtime.harness.contract import ToolIntent, ToolResult
 from runtime.llm.clients.base import ChatMessage, ChatRequest, ModelClient
 from runtime.reasoning.skill_runner import SkillRunner
 from runtime.skills.registry import SkillDescriptor, SkillRegistry
-from runtime.tools.record import compute_argv_hash, record_tool_call, verdict_for_result
+from runtime.tools.record import (
+    compute_argv_hash,
+    load_tool_calls,
+    record_tool_call,
+    verdict_for_result,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -66,10 +71,15 @@ class DispatchOutcome(enum.Enum):
 class _ChainResult:
     """Outcome of `_run_multi_step`. `guarded_intent` is set when the
     destructive guard intercepted a planner step beyond step 1; `history`
-    holds whatever ran successfully BEFORE the interception."""
+    holds whatever ran successfully BEFORE the interception.
+    `completion_summary` is set when the planner emitted `task_complete`
+    with non-empty history — it carries the gate-checked summary text
+    (Track C, C2), and its presence tells the caller to skip chain
+    synthesis and reply with this text directly."""
 
     history: list[tuple[ToolIntent, ToolResult]] = field(default_factory=list)
     guarded_intent: ToolIntent | None = None
+    completion_summary: str | None = None
 
 
 def _format_destructive_confirmation(intent: ToolIntent) -> str:
@@ -239,6 +249,47 @@ class HarnessDispatcher:
         except Exception:
             logger.warning("harness_dispatcher.ledger_record_failed", exc_info=True)
 
+    def _gate_completion(
+        self,
+        summary: str,
+        history: list[tuple[ToolIntent, ToolResult]],
+        turn_id: str,
+    ) -> str:
+        """Check the claimed summary against this turn's evidence.
+
+        Evidence = ledger records for turn_id with verdict == "verified"
+        (falls back to in-memory history when no EventStream is wired).
+        A summary claiming tools that have no verified record gets the
+        existing unverified-claim annotation; it is never silently trusted.
+        """
+        if self._events is not None:
+            records = [
+                r
+                for r in load_tool_calls(self._events)
+                if r.imp_id == turn_id and r.verdict == "verified"
+            ]
+            verified = {r.tool for r in records}
+        else:
+            verified = {call.tool for call, res in history if res.status == "ok"}
+        failed = [call.tool for call, res in history if res.status != "ok"]
+        if failed:
+            summary = (
+                f"{summary}\n\n⚠️ Note: {', '.join(sorted(set(failed)))} did not "
+                f"complete successfully — the summary above may overstate what "
+                f"was done."
+            )
+            self._append_event(
+                EventType.HARNESS_COMPLETION_GATED,
+                {"turn_id": turn_id, "failed_tools": sorted(set(failed))},
+            )
+        verdict = annotate_unverified_claim(summary, verified_tools=verified)
+        if verdict.was_flagged:
+            logger.info(
+                "harness_dispatcher.completion_unverified_tool_claim",
+                extra={"phrases": list(verdict.flagged_phrases)},
+            )
+        return verdict.annotated_reply
+
     async def dispatch(
         self,
         *,
@@ -314,29 +365,38 @@ class HarnessDispatcher:
                 self._tier3.append(str(chat_id), "bot", reply_text)
                 logger.info("harness_dispatcher.dispatch_complete_guarded")
                 return DispatchOutcome.FIRED
-            history = chain.history
-            if not history:
-                # Planner immediately said "respond" — nothing ran, no synthesis,
-                # no tier3 write. Mirrors the legacy `tool == 'respond'` PASS.
-                return DispatchOutcome.PASS
-            logger.info("harness_dispatcher.chain_synthesize_start")
-            reply_text = await self._synthesize_chain(
-                user_text, history, chat_id=chat_id
-            )
-            logger.info(
-                "harness_dispatcher.chain_synthesize_done",
-                extra={"reply_chars": len(reply_text), "chain_steps": len(history)},
-            )
-            verdict = annotate_unverified_claim(
-                reply_text,
-                verified_tools={call.tool for call, _ in history},
-            )
-            if verdict.was_flagged:
-                logger.info(
-                    "harness_dispatcher.chain_unverified_tool_claim",
-                    extra={"phrases": list(verdict.flagged_phrases)},
+            if chain.completion_summary is not None:
+                # Planner claimed task_complete — the gate already checked the
+                # summary against this turn's evidence (ledger or history) and
+                # annotated it if needed. Use it directly as the reply; do NOT
+                # run chain synthesis, which would be a second model call that
+                # could re-hallucinate over the same (or gated) evidence.
+                reply_text = chain.completion_summary
+                logger.info("harness_dispatcher.completion_gate_reply")
+            else:
+                history = chain.history
+                if not history:
+                    # Planner immediately said "respond" — nothing ran, no synthesis,
+                    # no tier3 write. Mirrors the legacy `tool == 'respond'` PASS.
+                    return DispatchOutcome.PASS
+                logger.info("harness_dispatcher.chain_synthesize_start")
+                reply_text = await self._synthesize_chain(
+                    user_text, history, chat_id=chat_id
                 )
-            reply_text = verdict.annotated_reply
+                logger.info(
+                    "harness_dispatcher.chain_synthesize_done",
+                    extra={"reply_chars": len(reply_text), "chain_steps": len(history)},
+                )
+                verdict = annotate_unverified_claim(
+                    reply_text,
+                    verified_tools={call.tool for call, _ in history},
+                )
+                if verdict.was_flagged:
+                    logger.info(
+                        "harness_dispatcher.chain_unverified_tool_claim",
+                        extra={"phrases": list(verdict.flagged_phrases)},
+                    )
+                reply_text = verdict.annotated_reply
         else:
             logger.info(
                 "harness_dispatcher.runner_build_start",
@@ -392,10 +452,11 @@ class HarnessDispatcher:
 
         Calls `runner.plan_next` up to `self._max_steps` times, executing
         each `tool_call` and threading the resulting history into the next
-        plan call. Terminations: `kind == "respond"`, step cap reached, an
-        empty available-skills set, or the destructive guard tripping. Tool
-        errors are appended to history like any other result — the planner
-        sees them on the next call and can decide to recover or respond.
+        plan call. Terminations: `kind == "respond"`, `kind == "task_complete"`,
+        step cap reached, an empty available-skills set, or the destructive
+        guard tripping. Tool errors are appended to history like any other
+        result — the planner sees them on the next call and can decide to
+        recover or respond.
 
         Destructive guard: a `tool_call` for a tool in `DESTRUCTIVE_TOOLS`
         is allowed at step 1 (the operator's explicit opening request) but
@@ -403,7 +464,16 @@ class HarnessDispatcher:
         `_ChainResult.guarded_intent`; the caller is responsible for
         shipping a deterministic confirmation prompt.
 
-        See docs/PLAN_MULTI_STEP_AGENT_LOOP.md.
+        Completion gate (Track C, C2): a `task_complete` step with non-empty
+        history is checked against this turn's evidence via
+        `_gate_completion` and returned as `_ChainResult.completion_summary`
+        — the caller replies with it directly, skipping chain synthesis. A
+        `task_complete` with EMPTY history (nothing ran yet) breaks the loop
+        with no summary, same as `respond` with no history, so the caller's
+        PASS-on-empty-history path handles it unchanged.
+
+        See docs/PLAN_MULTI_STEP_AGENT_LOOP.md and
+        docs/PLAN_PHASE_11_CAPABILITY_FLOOR.md Track C.
         """
         available = list(self._registry.all())
         history: list[tuple[ToolIntent, ToolResult]] = []
@@ -433,6 +503,15 @@ class HarnessDispatcher:
                 plan.kind,
                 plan.tool,
             )
+            if plan.kind == "task_complete":
+                summary = plan.summary or ""
+                if not history:
+                    # Nothing was done this turn — same as respond-with-no-
+                    # history: the caller falls through to PASS.
+                    break
+                gated = self._gate_completion(summary, history, turn_id)
+                return _ChainResult(history=history, completion_summary=gated)
+
             if plan.kind != "tool_call" or plan.tool is None:
                 break
 

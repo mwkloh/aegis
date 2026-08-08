@@ -1,6 +1,7 @@
 """Unit tests for HarnessDispatcher — all stubs, no network, no filesystem."""
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -9,6 +10,7 @@ import pytest
 
 from runtime.chat.memory.tier1 import Tier1Loader, Tier1Snapshot
 from runtime.chat.memory.tier3 import Tier3Store
+from runtime.chat.reply_verdict import UNVERIFIED_BANNER
 from runtime.chat.telegram.harness_dispatcher import DispatchOutcome, HarnessDispatcher
 from runtime.events import EventStream
 from runtime.harness.adapter import HarnessAdapter
@@ -99,6 +101,19 @@ class _StubSynthesizer:
 class _RaisingSynthesizer:
     async def chat(self, request: Any) -> ChatResponse:
         raise RuntimeError("openrouter down")
+
+
+class _RecordingSynthesizer:
+    """Synthesizer stub that counts calls — used to prove the completion
+    gate skips chain synthesis entirely rather than just ignoring output."""
+
+    def __init__(self, reply: str = "should never be used") -> None:
+        self._reply = reply
+        self.calls = 0
+
+    async def chat(self, request: Any) -> ChatResponse:
+        self.calls += 1
+        return ChatResponse(content=self._reply, model="stub", tokens_in=0, tokens_out=0)
 
 
 @dataclass
@@ -1336,21 +1351,19 @@ async def test_events_none_by_default_does_not_record() -> None:
 
 
 # ---------------------------------------------------------------------------
-# task_complete plan kind (Track C, C1) — schema + prompt only.
+# task_complete completion gate (Track C, C2).
 #
-# C1 does NOT change `_run_multi_step`. This test pins the pre-C2 safety
-# property from docs/PLAN_PHASE_11_CAPABILITY_FLOOR.md's rollout note: the
-# existing `plan.kind != "tool_call" or plan.tool is None` break condition
-# already treats `task_complete` exactly like `respond` (both have
-# `tool=None`), so a planner that starts emitting `task_complete` cannot
-# change dispatch behavior until the completion gate (C2) lands.
+# `task_complete` no longer falls through to chain synthesis: `_gate_completion`
+# checks the claimed summary against this turn's evidence (ledger when an
+# EventStream is wired, else in-memory history) and the gated text becomes
+# the reply directly. See docs/PLAN_PHASE_11_CAPABILITY_FLOOR.md Track C.
 # ---------------------------------------------------------------------------
 
 
-async def test_multi_step_task_complete_breaks_loop_like_respond() -> None:
-    """Planner: search → task_complete. Loop breaks exactly as it would for
-    `respond`; chain synthesis still runs from the 1-step accumulated
-    history."""
+async def test_multi_step_task_complete_gates_and_skips_chain_synthesis() -> None:
+    """Planner: search → task_complete. C2 supersedes the C1 pin: the gated
+    summary becomes the reply directly and chain synthesis never runs."""
+    recorder = _RecordingSynthesizer()
     runner = _StubPlanRunner(
         plan_steps=[
             PlanStep(kind="tool_call", tool="files_search", args={"glob": "*.md"}),
@@ -1359,17 +1372,158 @@ async def test_multi_step_task_complete_breaks_loop_like_respond() -> None:
     )
     registry, harness = _two_skill_setup()
     dispatcher = _make_loop_dispatcher(
-        runner=runner, registry=registry, harness=harness
+        runner=runner, registry=registry, harness=harness, synthesizer=recorder
     )
+    message = _FakeMessage()
 
     outcome = await dispatcher.dispatch(
-        chat_id=1, user_text="find md files", message=_FakeMessage()
+        chat_id=1, user_text="find md files", message=message
     )
 
     assert outcome == DispatchOutcome.FIRED
     assert len(harness.calls) == 1
     # Loop broke on task_complete — no third plan_next call was made.
     assert len(runner.plan_next_calls) == 2
-    # Synthesis saw exactly the one tool call's history (pre-C2 safety
-    # property: task_complete's summary is NOT trusted or surfaced yet).
-    assert len(runner.plan_next_calls[1]["history"]) == 1
+    # Chain synthesis (the stub synthesizer) was never invoked.
+    assert recorder.calls == 0
+    # Reply is the gated summary verbatim — no unverified claim, no failed
+    # tools, so no annotation is added.
+    assert message.replies == ["Found the markdown files."]
+
+
+async def test_task_complete_empty_history_returns_pass() -> None:
+    """task_complete with nothing run yet behaves exactly like respond with
+    no history: PASS, no reply, no tier3 write."""
+    runner = _StubPlanRunner(
+        plan_steps=[PlanStep(kind="task_complete", summary="Nothing to report.")],
+    )
+    registry, harness = _two_skill_setup()
+    tier3 = _StubTier3()
+    dispatcher = _make_loop_dispatcher(
+        runner=runner, registry=registry, harness=harness, tier3=tier3
+    )
+    message = _FakeMessage()
+
+    outcome = await dispatcher.dispatch(
+        chat_id=1, user_text="thanks", message=message
+    )
+
+    assert outcome == DispatchOutcome.PASS
+    assert harness.calls == []
+    assert message.replies == []
+    assert tier3.turns == []
+
+
+async def test_task_complete_failed_tool_gets_warning_and_emits_gated_event(
+    tmp_path: Path,
+) -> None:
+    """A failed tool in history must annotate the summary with the ⚠️ note
+    AND emit HARNESS_COMPLETION_GATED — verified via a real EventStream."""
+    events = EventStream(tmp_path / "sessions")
+    registry, _ = _two_skill_setup()
+
+    def _boom(args: dict) -> dict:
+        raise PermissionError("denied")
+
+    harness = _RecordingHarness(
+        tools={
+            "files_search": _boom,
+            "files_read": lambda args: {"content": "x"},
+        }
+    )
+    runner = _StubPlanRunner(
+        plan_steps=[
+            PlanStep(kind="tool_call", tool="files_search", args={"glob": "*"}),
+            PlanStep(kind="task_complete", summary="Searched for the files."),
+        ],
+    )
+    dispatcher = _make_loop_dispatcher(
+        runner=runner, registry=registry, harness=harness, events=events
+    )
+    message = _FakeMessage()
+
+    outcome = await dispatcher.dispatch(
+        chat_id=1, user_text="find x", message=message
+    )
+
+    assert outcome == DispatchOutcome.FIRED
+    assert len(message.replies) == 1
+    reply = message.replies[0]
+    assert "Searched for the files." in reply
+    assert "⚠️ Note: files_search did not complete successfully" in reply
+
+    raw_events = [
+        json.loads(line)
+        for line in events.path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    gated = [e for e in raw_events if e["type"] == "harness.completion_gated"]
+    assert len(gated) == 1
+    assert gated[0]["payload"]["failed_tools"] == ["files_search"]
+
+
+async def test_task_complete_ledger_backed_verified_set_flags_unran_tool_claim(
+    tmp_path: Path,
+) -> None:
+    """With events wired, the gate's verified set comes from this turn's
+    ledger records: a summary claiming an unexecuted tool (files_delete,
+    which never ran) gets the unverified-claim annotation."""
+    events = EventStream(tmp_path / "sessions")
+    registry, harness = _two_skill_setup()
+    runner = _StubPlanRunner(
+        plan_steps=[
+            PlanStep(kind="tool_call", tool="files_search", args={"glob": "*.md"}),
+            PlanStep(
+                kind="task_complete",
+                summary="Done — I deleted the file you asked about.",
+            ),
+        ],
+    )
+    dispatcher = _make_loop_dispatcher(
+        runner=runner, registry=registry, harness=harness, events=events
+    )
+    message = _FakeMessage()
+
+    outcome = await dispatcher.dispatch(
+        chat_id=1, user_text="find and delete a.md", message=message
+    )
+
+    assert outcome == DispatchOutcome.FIRED
+    assert len(message.replies) == 1
+    assert message.replies[0].startswith(UNVERIFIED_BANNER)
+    assert "deleted the file" in message.replies[0]
+
+
+async def test_task_complete_events_none_falls_back_to_history() -> None:
+    """No EventStream wired — the gate's verified/failed sets must come from
+    in-memory history, and the failed-tool annotation still fires."""
+
+    def _boom(args: dict) -> dict:
+        raise PermissionError("denied")
+
+    harness = _RecordingHarness(
+        tools={
+            "files_search": lambda args: {"matches": ["/tmp/a.md"]},
+            "files_read": _boom,
+        }
+    )
+    registry, _ = _two_skill_setup()
+    runner = _StubPlanRunner(
+        plan_steps=[
+            PlanStep(kind="tool_call", tool="files_search", args={"glob": "*.md"}),
+            PlanStep(kind="tool_call", tool="files_read", args={"path": "/tmp/a.md"}),
+            PlanStep(kind="task_complete", summary="Searched and read the file."),
+        ],
+    )
+    dispatcher = _make_loop_dispatcher(runner=runner, registry=registry, harness=harness)
+    assert dispatcher._events is None
+    message = _FakeMessage()
+
+    outcome = await dispatcher.dispatch(
+        chat_id=1, user_text="find and read", message=message
+    )
+
+    assert outcome == DispatchOutcome.FIRED
+    reply = message.replies[0]
+    assert "Searched and read the file." in reply
+    assert "⚠️ Note: files_read did not complete successfully" in reply

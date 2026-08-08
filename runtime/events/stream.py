@@ -57,6 +57,8 @@ class EventType(StrEnum):
     SCHEDULER_JOB_FAILED = "scheduler.job_failed"
     SCHEDULER_SKIPPED_BUSY = "scheduler.skipped_busy"
     SCHEDULER_SKIPPED_STALE = "scheduler.skipped_stale"
+    # Phase 11 Track C — task_complete completion gate.
+    HARNESS_COMPLETION_GATED = "harness.completion_gated"
 
 
 class EventStream:

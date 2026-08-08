@@ -324,6 +324,7 @@ def test_build_planner_schema_includes_task_complete_and_summary() -> None:
 
     assert schema["properties"]["kind"]["enum"] == ["tool_call", "respond", "task_complete"]
     assert schema["properties"]["summary"]["type"] == "string"
+    assert schema["properties"]["summary"]["maxLength"] == 2048
     assert schema["additionalProperties"] is False
 
 
@@ -341,16 +342,21 @@ def _iter_schema_nodes(node: Any) -> list[dict[str, Any]]:
 
 
 def test_schemas_are_gbnf_compatible() -> None:
-    """A-t4: neither schema builder emits $ref / anyOf / oneOf / a bare
-    `{"type": "object"}` without `properties` anywhere in the tree — all
-    forms that break llama.cpp-style JSON-schema-to-grammar converters
-    (lesson from hermes-agent's schema_sanitizer.py, cited in
-    docs/PLAN_PHASE_11_CAPABILITY_FLOOR.md A2). An object node with EMPTY
-    `properties` must also declare `"additionalProperties": True` — without
-    it, llama.cpp's json-schema-to-grammar converter compiles the node to a
-    grammar that matches ONLY `{}`, silently closing what was meant to be a
-    free-form object the moment the schema reaches Ollama's `format`
-    constraint. Nodes with non-empty `properties` are fine as-is."""
+    """A-t4: for the two schemas built here (`_build_schema` fed a non-empty
+    `allowed` set via `_ask_question()`, and `_build_planner_schema`), every
+    object node reached in the tree declares `$ref`/`anyOf`/`oneOf`-free
+    shapes and, when `properties` is non-empty, is fine as-is; when it is
+    present-but-EMPTY it must also declare `"additionalProperties": True` —
+    without it, llama.cpp's json-schema-to-grammar converter compiles the
+    node to a grammar that matches ONLY `{}`, silently closing what was
+    meant to be a free-form object the moment the schema reaches Ollama's
+    `format` constraint (lesson from hermes-agent's schema_sanitizer.py,
+    cited in docs/PLAN_PHASE_11_CAPABILITY_FLOOR.md A2).
+
+    NOTE: `_build_schema`'s empty-`allowed` fallback (a bare
+    `{"type": "object"}` with no `properties` key at all) is NOT exercised
+    by this test — `_ask_question()` declares a non-empty `args_schema`, so
+    that branch is dead code today. See plan open question #6."""
     reply_schema = _build_schema(_allowed_keys(_ask_question()))
     planner_schema = _build_planner_schema([_files_list_skill()])
 

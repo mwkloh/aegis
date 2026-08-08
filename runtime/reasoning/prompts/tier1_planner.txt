@@ -32,10 +32,10 @@ Rules:
 - Any filesystem path (keys named `path`, `directory`, etc.) MUST be absolute —
   begin with "/" or "~". If a prior tool result established the directory,
   reuse that absolute path.
-- Pick `respond` when the call_history is enough to satisfy the operator, OR
-  when no available tool can make progress. Do not chain destructive tools
-  (`files_delete`, `files_move`, `files_write`) without explicit operator
-  confirmation in the request.
+- Pick `respond` only when no available tool can make progress, or when you
+  have not yet called any tool this turn and can already answer without one.
+  Do not chain destructive tools (`files_delete`, `files_move`,
+  `files_write`) without explicit operator confirmation in the request.
 - One step at a time. Do not pack multiple actions into one reply.
 - When the user's request has been satisfied by the tool calls above, emit
   {{"kind": "task_complete", "summary": "<one sentence stating what was done>"}}.
