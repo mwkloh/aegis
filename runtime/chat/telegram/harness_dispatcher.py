@@ -175,6 +175,17 @@ def _last_payload_text(history: list[tuple[ToolIntent, ToolResult]]) -> str:
     return "(empty)"
 
 
+def _history_verified_tools(history: list[tuple[ToolIntent, ToolResult]]) -> set[str]:
+    """Tools that actually succeeded on this turn, from in-memory history.
+
+    Shared by `_gate_completion` (both its no-ledger and ledger-read-failed
+    branches) and `dispatch()`'s respond-path verdict gate — a failed tool
+    must never count as "verified" regardless of which of those call sites
+    is asking (Phase 11 whole-branch review, C3/I3).
+    """
+    return {call.tool for call, res in history if res.status == "ok"}
+
+
 def _clip(text: str) -> str:
     """Bound raw tool output used as a synthesis-failure fallback.
 
@@ -299,19 +310,27 @@ class HarnessDispatcher:
         """Check the claimed summary against this turn's evidence.
 
         Evidence = ledger records for turn_id with verdict == "verified"
-        (falls back to in-memory history when no EventStream is wired).
+        (falls back to in-memory history when no EventStream is wired, OR
+        when the ledger read itself raises — a disk error on a
+        task_complete turn must never escape `dispatch()`; there is no PTB
+        error handler catching it. See `chat/pipeline.py::_gate_reply` for
+        the sibling pattern this mirrors; Phase 11 whole-branch review C3).
         A summary claiming tools that have no verified record gets the
         existing unverified-claim annotation; it is never silently trusted.
         """
         if self._events is not None:
-            records = [
-                r
-                for r in load_tool_calls(self._events)
-                if r.imp_id == turn_id and r.verdict == "verified"
-            ]
-            verified = {r.tool for r in records}
+            try:
+                records = [
+                    r
+                    for r in load_tool_calls(self._events)
+                    if r.imp_id == turn_id and r.verdict == "verified"
+                ]
+                verified = {r.tool for r in records}
+            except Exception:
+                logger.exception("harness_dispatcher.gate_completion_read_failed")
+                verified = _history_verified_tools(history)
         else:
-            verified = {call.tool for call, res in history if res.status == "ok"}
+            verified = _history_verified_tools(history)
         # A tool that failed on an early step and then succeeded on a later
         # retry (first-class in the multi-step loop — see `_run_multi_step`'s
         # docstring) is NOT a failure: its later verification supersedes the
@@ -501,7 +520,7 @@ class HarnessDispatcher:
                 )
                 verdict = annotate_unverified_claim(
                     reply_text,
-                    verified_tools={call.tool for call, _ in history},
+                    verified_tools=_history_verified_tools(history),
                 )
                 if verdict.was_flagged:
                     logger.info(

@@ -1032,6 +1032,50 @@ async def test_multi_step_chain_synthesis_runs_verdict_gate() -> None:
     assert "deleted the file" in message.replies[0]
 
 
+async def test_multi_step_respond_path_verified_tools_excludes_failed_tool() -> None:
+    """The respond-path verdict gate (non-task_complete chain) must exclude
+    a tool that FAILED this turn from its verified-tools set — otherwise a
+    model can dodge `_gate_completion`'s stricter scrutiny by emitting
+    `respond` instead of `task_complete` and still get a false claim about
+    the failed tool trusted (Phase 11 whole-branch review, I3). Mirrors
+    `test_multi_step_chain_synthesis_runs_verdict_gate` above but the
+    claimed tool actually errored, rather than never having run at all."""
+    registry, _ = _two_skill_setup()
+
+    def _boom(args: dict[str, Any]) -> dict[str, Any]:
+        raise PermissionError("denied")
+
+    harness = _RecordingHarness(
+        tools={
+            "files_search": _boom,
+            "files_read": lambda args: {"content": "hello"},
+        }
+    )
+    runner = _StubPlanRunner(
+        plan_steps=[
+            PlanStep(kind="tool_call", tool="files_search", args={"glob": "*.md"}),
+            PlanStep(kind="respond"),
+        ],
+    )
+    rogue = _StubSynthesizer(reply="Done — I searched the files for you.")
+    dispatcher = _make_loop_dispatcher(
+        runner=runner, registry=registry, harness=harness, synthesizer=rogue
+    )
+    message = _FakeMessage()
+
+    outcome = await dispatcher.dispatch(
+        chat_id=1, user_text="find md", message=message
+    )
+
+    assert outcome == DispatchOutcome.FIRED
+    assert len(message.replies) == 1
+    # files_search errored this turn — a status-blind verified set (the
+    # pre-fix bug) would still count it "verified", letting "I searched"
+    # through unflagged.
+    assert message.replies[0].startswith(UNVERIFIED_BANNER)
+    assert "searched the files" in message.replies[0]
+
+
 # ---------------------------------------------------------------------------
 # Destructive-tool guard — Step 4 of docs/PLAN_MULTI_STEP_AGENT_LOOP.md.
 # Allowed at step 1 (operator's explicit opening request); intercepted at
@@ -1629,6 +1673,104 @@ async def test_task_complete_events_none_falls_back_to_history() -> None:
     reply = message.replies[0]
     assert "Searched and read the file." in reply
     assert "⚠️ Note: files_read did not complete successfully" in reply
+
+
+async def test_task_complete_ledger_read_failure_falls_back_to_history() -> None:
+    """`_gate_completion`'s ledger read must be guarded like every other
+    ledger read in this module (Phase 11 whole-branch review, C3) — a disk
+    error on a task_complete turn must not escape `dispatch()` (bot.py
+    re-raises; there is no PTB error handler). Falls back to the in-memory
+    history-derived verified set, same as the events=None path exercised
+    above. Mirrors `chat/pipeline.py::_gate_reply`'s guarded read."""
+
+    class _RaisingLoadEventStream:
+        session_id = "raising-session"
+
+        @property
+        def path(self) -> Path:
+            raise OSError("disk full (simulated)")
+
+        def append(self, event_type: Any, payload: dict[str, Any]) -> None:
+            raise OSError("disk full (simulated)")
+
+    registry, harness = _two_skill_setup()
+    runner = _StubPlanRunner(
+        plan_steps=[
+            PlanStep(kind="tool_call", tool="files_search", args={"glob": "*.md"}),
+            PlanStep(kind="task_complete", summary="Searched for the files."),
+        ],
+    )
+    dispatcher = _make_loop_dispatcher(
+        runner=runner,
+        registry=registry,
+        harness=harness,
+        events=_RaisingLoadEventStream(),  # type: ignore[arg-type]
+    )
+    message = _FakeMessage()
+
+    outcome = await dispatcher.dispatch(
+        chat_id=1, user_text="find md files", message=message
+    )
+
+    assert outcome == DispatchOutcome.FIRED
+    assert len(message.replies) == 1
+    # files_search ran and succeeded — the history fallback finds it
+    # verified, so the plain summary ships with no unverified-claim banner
+    # and no exception ever escaped the ledger read.
+    assert message.replies[0] == "Searched for the files."
+
+
+async def test_task_complete_identical_args_retry_still_warns_oq7(tmp_path: Path) -> None:
+    """OQ7 pin (Phase 11 whole-branch review, I2) — do NOT change
+    record.py's idempotency key to make this test pass differently; that
+    fix is tracked separately for a later phase.
+
+    `_gate_completion`'s ledger-backed verified set is scoped by
+    `record_tool_call`'s composite key `(session, imp_id, skill, tool,
+    argv_hash)`. When a tool fails then succeeds with IDENTICAL args in
+    the same turn, the successful retry's argv_hash matches the
+    already-recorded failed attempt's key, so `record_tool_call` returns
+    `"skipped_idempotent"` and writes nothing — the ledger ends up with
+    ONLY the failed record. The gate's `failed - verified` compensation
+    only works when a retry uses DIFFERENT args; for identical args it
+    still warns, even though the retry actually succeeded. This is a
+    known, conservative-direction over-warning (spurious, not a
+    false-negative) — pinning current behaviour, not endorsing it."""
+    events = EventStream(tmp_path / "sessions")
+    registry, _ = _two_skill_setup()
+
+    call_count = {"n": 0}
+
+    def _flaky_search(args: dict[str, Any]) -> dict[str, Any]:
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise PermissionError("denied")
+        return {"matches": ["/tmp/a.md"]}
+
+    harness = _RecordingHarness(tools={"files_search": _flaky_search})
+    runner = _StubPlanRunner(
+        plan_steps=[
+            PlanStep(kind="tool_call", tool="files_search", args={"glob": "*.md"}),
+            PlanStep(kind="tool_call", tool="files_search", args={"glob": "*.md"}),
+            PlanStep(kind="task_complete", summary="Found the markdown files."),
+        ],
+    )
+    dispatcher = _make_loop_dispatcher(
+        runner=runner, registry=registry, harness=harness, events=events
+    )
+    message = _FakeMessage()
+
+    outcome = await dispatcher.dispatch(
+        chat_id=1, user_text="find md files", message=message
+    )
+
+    assert outcome == DispatchOutcome.FIRED
+    assert call_count["n"] == 2  # failed once, then succeeded, identical args
+    records = load_tool_calls(events)
+    assert len(records) == 1  # the successful retry was skipped-idempotent
+    assert records[0].verdict == "tool_error"
+    reply = message.replies[0]
+    assert "⚠️ Note: files_search did not complete successfully" in reply
 
 
 # ---------------------------------------------------------------------------

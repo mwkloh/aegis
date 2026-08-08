@@ -170,9 +170,13 @@ class CommandsConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     allowed_binaries: tuple[str, ...] = Field(
-        default=("ls", "cat", "head", "tail", "wc", "grep", "find", "file"),
+        default=("ls", "cat", "head", "tail", "wc", "grep", "file"),
         description="Binaries the model may invoke as argv[0]. Read-only "
-        "inspection tools by default; operators extend deliberately.",
+        "inspection tools by default; operators extend deliberately. "
+        "`find` is deliberately excluded — its -delete/-exec/-execdir/-ok "
+        "flags allow arbitrary deletion/execution with no confirmation "
+        "(run_command is not in DESTRUCTIVE_TOOLS); add it back only if "
+        "you accept that risk.",
     )
     timeout_ms: int = Field(default=15_000, ge=100, le=120_000)
     max_output_bytes: int = Field(default=32_768, ge=1024, le=262_144)

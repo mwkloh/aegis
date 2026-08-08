@@ -6,6 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from runtime.config import CommandsConfig
+from runtime.files.client import FilesClient
 from runtime.harness import DEFAULT_TOOLS, HarnessAdapter, ToolIntent
 from runtime.harness.tools.command_tool import make_command_tool
 
@@ -51,13 +52,15 @@ def test_has_tool_returns_false_for_unknown() -> None:
     assert HarnessAdapter().has_tool("nonexistent") is False
 
 
-# --- run_command wiring shape (Phase 11 D3) ----------------------------------
+# --- run_command wiring shape (Phase 11 D3, C2) -------------------------------
 # Mirrors the merge in runtime/chat/telegram/bot.py's build_harness_dispatcher:
-# HarnessAdapter(tools={**DEFAULT_TOOLS, "run_command": make_command_tool(cfg.commands)}).
+# HarnessAdapter(tools={**DEFAULT_TOOLS,
+#     "run_command": make_command_tool(cfg.commands, files_client)}).
 
 
 def test_harness_adapter_with_merged_run_command_has_tool(tmp_path: Path) -> None:
-    tools = {**DEFAULT_TOOLS, "run_command": make_command_tool(CommandsConfig())}
+    files_client = FilesClient(allowed_roots=[tmp_path])
+    tools = {**DEFAULT_TOOLS, "run_command": make_command_tool(CommandsConfig(), files_client)}
     harness = HarnessAdapter(tools=tools)
 
     assert harness.has_tool("run_command") is True
@@ -66,7 +69,8 @@ def test_harness_adapter_with_merged_run_command_has_tool(tmp_path: Path) -> Non
 
 def test_harness_adapter_executes_run_command_end_to_end(tmp_path: Path) -> None:
     (tmp_path / "hello.txt").write_text("hi", encoding="utf-8")
-    tools = {**DEFAULT_TOOLS, "run_command": make_command_tool(CommandsConfig())}
+    files_client = FilesClient(allowed_roots=[tmp_path])
+    tools = {**DEFAULT_TOOLS, "run_command": make_command_tool(CommandsConfig(), files_client)}
     harness = HarnessAdapter(tools=tools)
     intent = ToolIntent(
         tool="run_command",

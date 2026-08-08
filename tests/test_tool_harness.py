@@ -366,3 +366,40 @@ def test_verdict_for_result_ok_maps_to_verified() -> None:
 def test_verdict_for_result_error_maps_to_tool_error() -> None:
     result = InProcessToolResult(status="error", error="denied")
     assert verdict_for_result(result) == "tool_error"
+
+
+# --- verdict_for_result reconciles the tool's own payload verdict (C4) -------
+# run_command never raises on a non-zero exit — it returns status="ok" with
+# its own payload["verdict"] == "exit_nonzero". Ignoring that would record a
+# FAILED command as "verified" and the completion gate would never flag it.
+
+
+def test_verdict_for_result_uses_run_command_shaped_exit_nonzero_payload() -> None:
+    result = InProcessToolResult(
+        status="ok",
+        payload={
+            "argv": ["grep", "nope", "/tmp/haystack.txt"],
+            "exit_code": 1,
+            "stdout_tail": "",
+            "verdict": "exit_nonzero",
+        },
+    )
+    assert verdict_for_result(result) == "exit_nonzero"
+
+
+def test_verdict_for_result_payload_verdict_verified_still_maps_to_verified() -> None:
+    result = InProcessToolResult(
+        status="ok",
+        payload={"argv": ["ls"], "exit_code": 0, "verdict": "verified"},
+    )
+    assert verdict_for_result(result) == "verified"
+
+
+def test_verdict_for_result_payload_without_verdict_key_maps_to_verified() -> None:
+    result = InProcessToolResult(status="ok", payload={"entries": ["a"]})
+    assert verdict_for_result(result) == "verified"
+
+
+def test_verdict_for_result_invalid_payload_verdict_falls_back_to_status_mapping() -> None:
+    result = InProcessToolResult(status="ok", payload={"verdict": "not_a_real_verdict"})
+    assert verdict_for_result(result) == "verified"

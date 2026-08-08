@@ -14,7 +14,7 @@ pytestmark = pytest.mark.unit
 
 def test_commands_config_defaults() -> None:
     cfg = CommandsConfig()
-    assert cfg.allowed_binaries == ("ls", "cat", "head", "tail", "wc", "grep", "find", "file")
+    assert cfg.allowed_binaries == ("ls", "cat", "head", "tail", "wc", "grep", "file")
     assert cfg.timeout_ms == 15_000
     assert cfg.max_output_bytes == 32_768
 
