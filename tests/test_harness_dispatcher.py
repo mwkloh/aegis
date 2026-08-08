@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -31,8 +33,10 @@ pytestmark = pytest.mark.unit
 class _StubClassifier:
     def __init__(self, intent: str, confidence: float) -> None:
         self._result = IntentClassification(intent=intent, confidence=confidence)
+        self.calls: list[str] = []
 
     async def classify(self, text: str) -> IntentClassification:
+        self.calls.append(text)
         return self._result
 
 
@@ -153,6 +157,16 @@ class _FakeMessage:
 
     async def reply_text(self, text: str) -> None:
         self.replies.append(text)
+
+
+@dataclass
+class _MutableClock:
+    """Injectable clock for TTL tests — advance `.now` between dispatches."""
+
+    now: datetime
+
+    def __call__(self) -> datetime:
+        return self.now
 
 
 def _make_dispatcher(
@@ -806,11 +820,13 @@ def _make_loop_dispatcher(
     tier3: _StubTier3 | None = None,
     max_steps: int = 5,
     events: EventStream | None = None,
+    clock: Callable[[], datetime] | None = None,
+    classifier: Any = None,
 ) -> HarnessDispatcher:
     if registry is None or harness is None:
         registry, harness = _two_skill_setup()
     return HarnessDispatcher(
-        classifier=_StubClassifier("search_files", 0.9),
+        classifier=classifier or _StubClassifier("search_files", 0.9),
         registry=registry,
         runner=runner,
         harness=harness,
@@ -821,6 +837,7 @@ def _make_loop_dispatcher(
         multi_step=True,
         max_steps=max_steps,
         events=events,
+        clock=clock,
     )
 
 
@@ -1658,3 +1675,257 @@ async def test_task_complete_verified_set_scoped_to_current_turn_id(
     records = load_tool_calls(events)
     imp_ids = {r.imp_id for r in records}
     assert len(imp_ids) == 2
+
+
+# ---------------------------------------------------------------------------
+# Pending-confirmation state for the destructive guard — Phase 11 Track D,
+# D1. A guarded intent is held (in-memory, per chat_id) rather than dropped;
+# an explicit "yes" within the TTL executes it without re-planning. See
+# docs/PLAN_PHASE_11_CAPABILITY_FLOOR.md Track D.
+# ---------------------------------------------------------------------------
+
+
+def _raw_events(events: EventStream) -> list[dict[str, Any]]:
+    return [
+        json.loads(line)
+        for line in events.path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+
+def _guard_trip_runner() -> _StubPlanRunner:
+    """search (step 1) → files_delete (step 2, guarded) → respond."""
+    return _StubPlanRunner(
+        plan_steps=[
+            PlanStep(kind="tool_call", tool="files_search", args={"glob": "*.md"}),
+            PlanStep(kind="tool_call", tool="files_delete", args={"path": "/tmp/a.md"}),
+            PlanStep(kind="respond"),
+        ],
+    )
+
+
+async def test_confirmation_guard_stores_pending_and_emits_requested_event(
+    tmp_path: Path,
+) -> None:
+    events = EventStream(tmp_path / "sessions")
+    registry, harness = _destructive_setup("files_delete")
+    dispatcher = _make_loop_dispatcher(
+        runner=_guard_trip_runner(), registry=registry, harness=harness, events=events
+    )
+    message = _FakeMessage()
+
+    outcome = await dispatcher.dispatch(
+        chat_id=42, user_text="find and delete a.md", message=message
+    )
+
+    assert outcome == DispatchOutcome.FIRED
+    assert [c.tool for c in harness.calls] == ["files_search"]  # delete NOT run yet
+    assert len(message.replies) == 1
+    reply = message.replies[0]
+    assert "files_delete" in reply
+
+    pending = dispatcher._pending.get(42)
+    assert pending is not None
+    assert pending.intent.tool == "files_delete"
+    assert pending.intent.args == {"path": "/tmp/a.md"}
+    # skill_id is the descriptor CLASSIFIED for this turn ("search_files" —
+    # the same skill_id `_run_multi_step` used for every call in the chain),
+    # not the guarded tool's own id.
+    assert pending.skill_id == "search_files"
+    assert pending.user_text == "find and delete a.md"
+
+    requested = [
+        e for e in _raw_events(events) if e["type"] == "harness.confirmation_requested"
+    ]
+    assert len(requested) == 1
+    assert requested[0]["payload"] == {"tool": "files_delete", "skill_id": "search_files"}
+
+
+async def test_confirmation_yes_within_ttl_executes_once(tmp_path: Path) -> None:
+    events = EventStream(tmp_path / "sessions")
+    clock = _MutableClock(datetime(2026, 1, 1, tzinfo=UTC))
+    registry, harness = _destructive_setup("files_delete")
+    dispatcher = _make_loop_dispatcher(
+        runner=_guard_trip_runner(),
+        registry=registry,
+        harness=harness,
+        events=events,
+        clock=clock,
+    )
+    await dispatcher.dispatch(
+        chat_id=42, user_text="find and delete a.md", message=_FakeMessage()
+    )
+    assert [c.tool for c in harness.calls] == ["files_search"]
+
+    clock.now = clock.now + timedelta(seconds=5)
+    message2 = _FakeMessage()
+    outcome = await dispatcher.dispatch(chat_id=42, user_text="yes", message=message2)
+
+    assert outcome == DispatchOutcome.FIRED
+    assert [c.tool for c in harness.calls] == ["files_search", "files_delete"]
+    assert 42 not in dispatcher._pending
+    assert len(message2.replies) == 1
+
+    records = load_tool_calls(events)
+    delete_records = [r for r in records if r.tool == "files_delete"]
+    assert len(delete_records) == 1
+
+    accepted = [
+        e for e in _raw_events(events) if e["type"] == "harness.confirmation_accepted"
+    ]
+    assert len(accepted) == 1
+    assert accepted[0]["payload"] == {"tool": "files_delete", "skill_id": "search_files"}
+
+
+@pytest.mark.parametrize("affirmative_text", ["  YES  ", "  yes\n", "Yes"])
+async def test_confirmation_whitespace_case_variants_accepted(
+    tmp_path: Path, affirmative_text: str
+) -> None:
+    events = EventStream(tmp_path / "sessions")
+    clock = _MutableClock(datetime(2026, 1, 1, tzinfo=UTC))
+    registry, harness = _destructive_setup("files_delete")
+    dispatcher = _make_loop_dispatcher(
+        runner=_guard_trip_runner(),
+        registry=registry,
+        harness=harness,
+        events=events,
+        clock=clock,
+    )
+    await dispatcher.dispatch(
+        chat_id=42, user_text="find and delete a.md", message=_FakeMessage()
+    )
+
+    message2 = _FakeMessage()
+    outcome = await dispatcher.dispatch(
+        chat_id=42, user_text=affirmative_text, message=message2
+    )
+
+    assert outcome == DispatchOutcome.FIRED
+    assert [c.tool for c in harness.calls] == ["files_search", "files_delete"]
+
+
+async def test_confirmation_declined_falls_through_to_normal_dispatch(
+    tmp_path: Path,
+) -> None:
+    events = EventStream(tmp_path / "sessions")
+    clock = _MutableClock(datetime(2026, 1, 1, tzinfo=UTC))
+    registry, harness = _destructive_setup("files_delete")
+    classifier = _StubClassifier("search_files", 0.9)
+    dispatcher = _make_loop_dispatcher(
+        runner=_guard_trip_runner(),
+        registry=registry,
+        harness=harness,
+        events=events,
+        clock=clock,
+        classifier=classifier,
+    )
+    await dispatcher.dispatch(
+        chat_id=42, user_text="find and delete a.md", message=_FakeMessage()
+    )
+    assert classifier.calls == ["find and delete a.md"]
+
+    message2 = _FakeMessage()
+    outcome = await dispatcher.dispatch(chat_id=42, user_text="no thanks", message=message2)
+
+    # Declined — falls through to NORMAL dispatch: the classifier is
+    # consulted again for the follow-up text itself.
+    assert classifier.calls == ["find and delete a.md", "no thanks"]
+    assert 42 not in dispatcher._pending
+    assert [c.tool for c in harness.calls] == ["files_search"]  # delete never ran
+    assert outcome == DispatchOutcome.PASS  # remaining queued step is "respond"
+
+    declined = [
+        e for e in _raw_events(events) if e["type"] == "harness.confirmation_declined"
+    ]
+    assert len(declined) == 1
+    assert declined[0]["payload"] == {"tool": "files_delete", "expired": False}
+
+
+async def test_confirmation_expired_falls_through_and_declines(tmp_path: Path) -> None:
+    events = EventStream(tmp_path / "sessions")
+    clock = _MutableClock(datetime(2026, 1, 1, tzinfo=UTC))
+    registry, harness = _destructive_setup("files_delete")
+    classifier = _StubClassifier("search_files", 0.9)
+    dispatcher = _make_loop_dispatcher(
+        runner=_guard_trip_runner(),
+        registry=registry,
+        harness=harness,
+        events=events,
+        clock=clock,
+        classifier=classifier,
+    )
+    await dispatcher.dispatch(
+        chat_id=42, user_text="find and delete a.md", message=_FakeMessage()
+    )
+
+    clock.now = clock.now + timedelta(seconds=121)  # just past the 120s TTL
+    message2 = _FakeMessage()
+    outcome = await dispatcher.dispatch(chat_id=42, user_text="yes", message=message2)
+
+    assert 42 not in dispatcher._pending
+    assert [c.tool for c in harness.calls] == ["files_search"]  # delete NEVER executed
+    assert outcome == DispatchOutcome.PASS
+    # Falls through to normal dispatch — classifier consulted for "yes" too.
+    assert classifier.calls == ["find and delete a.md", "yes"]
+
+    declined = [
+        e for e in _raw_events(events) if e["type"] == "harness.confirmation_declined"
+    ]
+    assert len(declined) == 1
+    assert declined[0]["payload"] == {"tool": "files_delete", "expired": True}
+
+
+async def test_confirmation_consumed_once_second_yes_does_not_reexecute(
+    tmp_path: Path,
+) -> None:
+    events = EventStream(tmp_path / "sessions")
+    clock = _MutableClock(datetime(2026, 1, 1, tzinfo=UTC))
+    registry, harness = _destructive_setup("files_delete")
+    classifier = _StubClassifier("search_files", 0.9)
+    dispatcher = _make_loop_dispatcher(
+        runner=_guard_trip_runner(),
+        registry=registry,
+        harness=harness,
+        events=events,
+        clock=clock,
+        classifier=classifier,
+    )
+    await dispatcher.dispatch(
+        chat_id=42, user_text="find and delete a.md", message=_FakeMessage()
+    )
+    await dispatcher.dispatch(chat_id=42, user_text="yes", message=_FakeMessage())
+    assert [c.tool for c in harness.calls] == ["files_search", "files_delete"]
+    assert classifier.calls == ["find and delete a.md"]  # accepted path skips classify
+
+    message3 = _FakeMessage()
+    await dispatcher.dispatch(chat_id=42, user_text="yes", message=message3)
+
+    # Pending was already consumed by the first "yes" — this second "yes" is
+    # just an ordinary message: classifier is consulted, and files_delete is
+    # NOT executed again.
+    assert classifier.calls == ["find and delete a.md", "yes"]
+    assert [c.tool for c in harness.calls] == ["files_search", "files_delete"]
+
+    accepted = [
+        e for e in _raw_events(events) if e["type"] == "harness.confirmation_accepted"
+    ]
+    assert len(accepted) == 1  # not two
+
+
+# ---------------------------------------------------------------------------
+# Existing behavior untouched: no pending state ⇒ dispatch runs exactly as
+# before (regression guard for the new entry check added at the top of
+# `dispatch()`).
+# ---------------------------------------------------------------------------
+
+
+async def test_no_pending_confirmation_does_not_affect_normal_dispatch() -> None:
+    dispatcher = _make_dispatcher(classifier=_StubClassifier("list_files", 0.9))
+    message = _FakeMessage()
+
+    outcome = await dispatcher.dispatch(
+        chat_id=99, user_text="list my downloads", message=message
+    )
+
+    assert outcome == DispatchOutcome.FIRED
+    assert dispatcher._pending == {}

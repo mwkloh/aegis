@@ -59,6 +59,10 @@ class EventType(StrEnum):
     SCHEDULER_SKIPPED_STALE = "scheduler.skipped_stale"
     # Phase 11 Track C — task_complete completion gate.
     HARNESS_COMPLETION_GATED = "harness.completion_gated"
+    # Phase 11 Track D — destructive-guard pending confirmation.
+    HARNESS_CONFIRMATION_REQUESTED = "harness.confirmation_requested"
+    HARNESS_CONFIRMATION_ACCEPTED = "harness.confirmation_accepted"
+    HARNESS_CONFIRMATION_DECLINED = "harness.confirmation_declined"
 
 
 class EventStream:

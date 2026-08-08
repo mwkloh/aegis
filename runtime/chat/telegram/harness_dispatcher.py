@@ -44,6 +44,28 @@ DESTRUCTIVE_TOOLS: frozenset[str] = frozenset({
     "files_move",
     "files_write",
 })
+
+
+@dataclass(frozen=True)
+class _PendingConfirmation:
+    """A destructive intent the guard intercepted, held for one follow-up turn.
+
+    `user_text` is the ORIGINAL request that produced `intent` (not the
+    later "yes") — `_execute_confirmed` needs it to feed `_synthesize`'s
+    "the operator asked" prompt slot and to mirror the single-shot path's
+    tier3 write. In-memory only, keyed by chat_id on the dispatcher
+    instance — single-operator scope, lost on restart by design.
+    """
+
+    intent: ToolIntent
+    skill_id: str
+    user_text: str
+    created_at: datetime
+
+
+_CONFIRMATION_TTL_S = 120
+_AFFIRMATIVES = frozenset({"yes", "y", "confirm", "do it", "go ahead"})
+
 _SYNTHESIS_PROMPT_PATH = (
     Path(__file__).resolve().parent.parent.parent
     / "reasoning"
@@ -199,6 +221,11 @@ class HarnessDispatcher:
         # call site/test working unmodified — recording is opt-in.
         self._events = events
         self._clock = clock
+        # Destructive-guard confirmation state (Phase 11 Track D, D1). In-memory
+        # only, keyed by chat_id: single-operator scope, lost on restart by
+        # design. Popped-before-checked in `dispatch()` so a pending intent is
+        # consumed exactly once regardless of outcome.
+        self._pending: dict[int, _PendingConfirmation] = {}
 
     def _now(self) -> datetime:
         return self._clock() if self._clock is not None else datetime.now(tz=UTC)
@@ -297,6 +324,39 @@ class HarnessDispatcher:
             )
         return verdict.annotated_reply
 
+    async def _try_confirmed_dispatch(
+        self,
+        *,
+        chat_id: int,
+        user_text: str,
+        message: Any,
+        reply: Callable[[str], Awaitable[None]] | None,
+    ) -> DispatchOutcome | None:
+        """Pop and resolve any pending destructive-guard confirmation.
+
+        Pop-before-check: whatever happens next (accepted, declined, or
+        expired), a pending intent is consumed exactly once. No LLM call in
+        this path — a 2B model must not judge its own destructive action.
+
+        Returns the outcome of running the confirmed intent, or `None` if
+        there was nothing pending, or it was declined/expired — `None`
+        tells `dispatch()` to fall through to normal handling of `user_text`
+        (which may be an unrelated request, not a confirmation at all).
+        """
+        pending = self._pending.pop(chat_id, None)
+        if pending is None:
+            return None
+        age = (self._now() - pending.created_at).total_seconds()
+        if age <= _CONFIRMATION_TTL_S and user_text.strip().casefold() in _AFFIRMATIVES:
+            return await self._execute_confirmed(
+                pending, chat_id=chat_id, message=message, reply=reply
+            )
+        self._append_event(
+            EventType.HARNESS_CONFIRMATION_DECLINED,
+            {"tool": pending.intent.tool, "expired": age > _CONFIRMATION_TTL_S},
+        )
+        return None
+
     async def dispatch(
         self,
         *,
@@ -315,6 +375,18 @@ class HarnessDispatcher:
                 await message.reply_text(text)
 
         logger.info("harness_dispatcher.dispatch_start", extra={"chat_id": chat_id})
+
+        # Destructive-guard confirmation check — BEFORE classification. A
+        # non-None result means a pending intent from a prior turn was
+        # accepted and executed; None means there was nothing pending, or it
+        # was declined/expired — either way, fall through to normal dispatch
+        # below (the message may be an unrelated request).
+        confirmed_outcome = await self._try_confirmed_dispatch(
+            chat_id=chat_id, user_text=user_text, message=message, reply=reply
+        )
+        if confirmed_outcome is not None:
+            return confirmed_outcome
+
         # Minted once per dispatch call — never stored as instance state, since
         # dispatches for different chats/turns can interleave. Scopes every
         # tool-invocation record from this turn to one composite-key prefix
@@ -365,7 +437,19 @@ class HarnessDispatcher:
             if chain.guarded_intent is not None:
                 # Destructive guard tripped beyond step 1. Skip synthesis and
                 # ship a deterministic confirmation prompt — the operator must
-                # see the exact tool id and args, not an LLM paraphrase.
+                # see the exact tool id and args, not an LLM paraphrase. Hold
+                # the intent so an explicit "yes" follow-up (within TTL) can
+                # run it without re-planning (Phase 11 Track D, D1).
+                self._pending[chat_id] = _PendingConfirmation(
+                    intent=chain.guarded_intent,
+                    skill_id=descriptor.id,
+                    user_text=user_text,
+                    created_at=self._now(),
+                )
+                self._append_event(
+                    EventType.HARNESS_CONFIRMATION_REQUESTED,
+                    {"tool": chain.guarded_intent.tool, "skill_id": descriptor.id},
+                )
                 reply_text = _format_destructive_confirmation(chain.guarded_intent)
                 await _send(reply_text)
                 self._tier3.append(str(chat_id), "user", user_text)
@@ -445,6 +529,58 @@ class HarnessDispatcher:
         self._tier3.append(str(chat_id), "user", user_text)
         self._tier3.append(str(chat_id), "bot", reply_text)
         logger.info("harness_dispatcher.dispatch_complete")
+        return DispatchOutcome.FIRED
+
+    async def _execute_confirmed(
+        self,
+        pending: _PendingConfirmation,
+        *,
+        chat_id: int,
+        message: Any,
+        reply: Callable[[str], Awaitable[None]] | None = None,
+    ) -> DispatchOutcome:
+        """Run a destructive intent the operator just confirmed with "yes".
+
+        Mirrors the single-shot execute→record→synthesize→send→tier3 path
+        in `dispatch()`, but the intent and its originating `user_text` come
+        from `pending` instead of a fresh classify/build round — the whole
+        point of holding the confirmation is to skip re-planning a 2B model
+        already committed to via the guarded intent.
+        """
+
+        async def _send(text: str) -> None:
+            if reply is not None:
+                await reply(text)
+            else:
+                await message.reply_text(text)
+
+        turn_id = f"turn-{chat_id}-{uuid.uuid4().hex[:8]}"
+        logger.info(
+            "harness_dispatcher.confirmed_execute_start",
+            extra={"tool": pending.intent.tool, "skill_id": pending.skill_id},
+        )
+        result = self._harness.execute(pending.intent)
+        logger.info(
+            "harness_dispatcher.confirmed_execute_done",
+            extra={"status": result.status},
+        )
+        self._record_tool_call(
+            turn_id=turn_id,
+            skill_id=pending.skill_id,
+            tool_intent=pending.intent,
+            result=result,
+        )
+        self._append_event(
+            EventType.HARNESS_CONFIRMATION_ACCEPTED,
+            {"tool": pending.intent.tool, "skill_id": pending.skill_id},
+        )
+        reply_text = await self._synthesize(
+            pending.user_text, pending.intent, result, chat_id=chat_id
+        )
+        await _send(reply_text)
+        self._tier3.append(str(chat_id), "user", pending.user_text)
+        self._tier3.append(str(chat_id), "bot", reply_text)
+        logger.info("harness_dispatcher.confirmed_dispatch_complete")
         return DispatchOutcome.FIRED
 
     async def _run_multi_step(

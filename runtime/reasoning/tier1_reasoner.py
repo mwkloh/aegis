@@ -65,9 +65,9 @@ class PlanStep(BaseModel):
     `kind="tool_call"` → execute (`tool`, `args`) and call planner again.
     `kind="respond"` → terminate the loop; synthesise the final reply.
     `kind="task_complete"` → terminate the loop; `summary` states what was
-    done, grounded in the tool results already in the chain history. Until
-    the completion gate (Track C, C2) lands, the dispatcher treats this
-    identically to `respond` — see docs/PLAN_PHASE_11_CAPABILITY_FLOOR.md.
+    done, grounded in the tool results already in the chain history. The
+    dispatcher gates task_complete summaries against the turn's evidence
+    ledger (C2) — see docs/PLAN_PHASE_11_CAPABILITY_FLOOR.md.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
