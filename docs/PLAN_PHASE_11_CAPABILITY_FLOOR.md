@@ -608,9 +608,27 @@ requires_tier1: true
 ```
 
 `run_command` stays **out of** `DESTRUCTIVE_TOOLS`: the allowlist is the
-containment (read-only defaults), and an operator who adds `rm` to
-`allowed_binaries` has made an explicit config-reviewed choice. The
-`SubprocessRunner`-based `run_tool` harness (`runtime/tools/harness.py`) is
+containment, and an operator who adds `rm` to `allowed_binaries` has made an
+explicit config-reviewed choice.
+
+**Containment hardening (whole-branch review).** Two gaps found that
+bare-binary allowlisting alone did not close, and were fixed before merge:
+- `find` is **not** a default binary. It looked like an inspection tool but
+  carries `-delete`/`-exec`/`-execdir`/`-ok` — a write/exec vector that runs
+  unconfirmed (run_command isn't guarded). Only `argv[0]` is allowlist-
+  checked, so a dangerous flag on a "safe" binary bypasses everything.
+  Default is now `("ls","cat","head","tail","wc","grep","file")`.
+- Read binaries had **no path containment** — `cat ~/.aegis/.env` exfiltrated
+  the bot's own secrets, bypassing the `allowed_roots` sandbox `files_read`
+  enforces. Now every **path-shaped** `argv` token (starts with `/`, `~`,
+  `./`, `../`, or contains `/`) is validated through the same
+  `FilesClient._validate` as `files_read`; a `..` traversal segment is
+  rejected outright. Residual (documented, accepted): a **bare** relative
+  token with no slash resolves against process cwd and is not validated — the
+  sharp vectors (absolute, home, traversal) are all closed. `make_command_tool`
+  therefore takes the `FilesClient` as a second argument.
+
+The `SubprocessRunner`-based `run_tool` harness (`runtime/tools/harness.py`) is
 not reused here — it is async and template-driven where this path is sync
 and argv-driven; unifying them is open question #2, not a blocker.
 
@@ -735,11 +753,16 @@ Each step ships independently and leaves the system working:
    `record_tool_call`'s composite key is `(session_id, imp_id, skill, tool,
    argv_hash)` — a fail→succeed retry with *identical* args persists only
    the first (failed) verdict; the success is deduped as
-   `skipped_idempotent`. The gate compensates (`failed - verified` set
-   difference), but this MUST be resolved (key gains the verdict, or
-   last-write-wins semantics) before the hard-block upgrade in open
-   question #3 is enabled — blocking on a stale failed verdict would reject
-   legitimately-completed turns.
+   `skipped_idempotent`. The `failed - verified` compensation in
+   `_gate_completion` only rescues the **different-args** retry (both records
+   land under distinct `argv_hash`). For the **identical-args** case the
+   success never enters the ledger `verified` set, so the gate appends the
+   ⚠️ warning *today*, in annotate-only mode — a spurious over-warning
+   (conservative direction, not a hidden lie), pinned by
+   `test_task_complete_identical_args_retry_still_warns_oq7`. This MUST be
+   resolved (key gains the verdict, or last-write-wins semantics) before the
+   hard-block upgrade in open question #3 — under hard-block the same stale
+   failed verdict would *reject* a legitimately-completed turn.
 8. **files_write resets permission bits on overwrite.** The atomic
    tmp+rename path creates a fresh inode, so a `0o600` file comes back
    `0o644` (umask default) after an overwrite. One-line fix
