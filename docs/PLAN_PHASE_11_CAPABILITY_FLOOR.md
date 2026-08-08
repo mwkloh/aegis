@@ -227,25 +227,34 @@ In both the single-shot path and `_run_multi_step`, immediately after
 `self._harness.execute(tool_intent)`:
 
 ```python
-if self._events is not None:
-    record_tool_call(
-        self._events,
-        imp_id=turn_id,
-        skill=descriptor.id,
-        tool=tool_intent.tool,
-        argv_hash=compute_argv_hash(
-            [tool_intent.tool, json.dumps(tool_intent.args, sort_keys=True)]
-        ),
-        verdict=verdict_for_result(result),
-        outcome_bytes=len(json.dumps(result.payload, ensure_ascii=False)),
-    )
+record_tool_call(
+    self._events,
+    imp_id=turn_id,
+    skill=descriptor.id,
+    tool=tool_intent.tool,
+    argv_hash=compute_argv_hash(
+        [tool_intent.tool, json.dumps(tool_intent.args, sort_keys=True, default=str)]
+    ),
+    verdict=verdict_for_result(result),
+    outcome_bytes=len(
+        json.dumps(result.payload, ensure_ascii=False, default=str).encode("utf-8")
+    ),
+)
 ```
+
+(As built, the None-guard and the call above live inside a single
+`_record_tool_call` helper whose whole body is wrapped in
+`try/except Exception: logger.warning(...)`.)
 
 `turn_id` is minted once per `dispatch` call:
 `turn_id = f"turn-{chat_id}-{uuid.uuid4().hex[:8]}"`. It scopes the ledger
 query in Track C's gate to *this turn's* evidence — the freshness property.
-`record_tool_call` is already idempotent on the composite key and never
-raises on malformed prior lines; the never-raise pin holds.
+Serialization must be total: `args`/`payload` are `dict[str, Any]`, so both
+`json.dumps` calls take `default=str` (a set/Path/datetime leaf must degrade
+to a string, not raise), `outcome_bytes` counts real UTF-8 bytes, and the
+helper never lets a recording failure escape into the turn — recording is
+telemetry; the turn is the product. (`record_tool_call` itself is idempotent
+on the composite key and skips malformed prior lines.)
 
 Invariant carried from `record.py`: **structural only** — `argv_hash` and
 `outcome_bytes`, never argv contents or stdout bodies, in the event stream.
@@ -254,8 +263,10 @@ Invariant carried from `record.py`: **structural only** — `argv_hash` and
 
 `build_harness_dispatcher` (`runtime/chat/telegram/bot.py:813-895`) accepts
 and forwards `events`; the construction site passes the bot's existing
-`EventStream` (built at `bot.py:1163`). CLI path (`runtime/chat/cli.py`)
-likewise forwards its stream when constructing a dispatcher.
+shared `EventStream` (built at `bot.py:~1165`, before the dispatcher).
+The CLI path needs no wiring: `runtime/chat/cli.py` builds a `Pipeline`
+around a raw `HarnessAdapter` and never constructs a `HarnessDispatcher`
+(a stale assumption in an earlier draft of this plan said otherwise).
 
 ### Track C — Explicit completion + gate
 
