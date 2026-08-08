@@ -5,7 +5,8 @@ answer goes through this wrapper. Local and frontier models both
 benefit — the flow is:
 
 1. Call the primary `client` with `response_format="json"`.
-2. Parse the response body as JSON.
+2. Parse the response body as JSON. On JSON parse failure, attempt
+   deterministic repair (`repair_json`) before declaring `invalid_json`.
 3. Validate against `schema` (draft-2020-12 JSON schema).
 4. On parse/validate failure, append a corrective system message
    containing the failure reason + the schema, and retry up to
@@ -257,6 +258,9 @@ async def request_structured(
         data, kind, reason, repaired = _validate(resp.content, schema)
         if kind == "ok" and data is not None:
             if repaired and events is not None:
+                # Deliberate: logs the model that actually produced the
+                # repaired content (escalated), unlike LLM_STRUCTURED_FAILED
+                # which always logs the primary model.
                 events.append(
                     EventType.LLM_JSON_REPAIRED,
                     {"call_site": call_site, "model": escalate_to.model},

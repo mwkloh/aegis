@@ -192,6 +192,42 @@ async def test_escalation_recovers_after_primary_fails(tmp_path: Path) -> None:
     assert escalated_req.response_schema == SCHEMA
 
 
+async def test_escalation_recovers_with_repairable_content(tmp_path: Path) -> None:
+    # Primary exhausts retries on genuinely broken content; the escalated
+    # client's reply is a near-miss (fenced JSON) that repair_json should
+    # salvage on the escalated call itself.
+    primary = FakeClient(replies=["nope", "still nope", "never"])
+    smart = FakeClient(
+        replies=['```json\n{"intent":"ask","confidence":0.7}\n```']
+    )
+    events = EventStream(tmp_path)
+    data, outcome = await request_structured(
+        primary,
+        BASE_MSGS,
+        SCHEMA,
+        model="fast-7b",
+        max_retries=2,
+        escalate_to=EscalationTarget(client=smart, model="smart-70b"),
+        events=events,
+        call_site="test.escalate_repair",
+    )
+    assert data == {"intent": "ask", "confidence": 0.7}
+    assert outcome.escalated is True
+    assert outcome.repaired is True
+    assert outcome.error_kind == "ok"
+    assert outcome.final_model == "smart-70b"
+
+    records = _read_events(events.path)
+    repaired_events = [r for r in records if r["type"] == "llm.json_repaired"]
+    assert len(repaired_events) == 1
+    # Locks in the deliberate attribution choice: the repaired event logs
+    # the escalated model, since that's the client whose output was salvaged.
+    assert repaired_events[0]["payload"] == {
+        "call_site": "test.escalate_repair",
+        "model": "smart-70b",
+    }
+
+
 async def test_escalation_also_fails(tmp_path: Path) -> None:
     primary = FakeClient(replies=["bad", "bad"])
     smart = FakeClient(replies=["still bad"])
