@@ -8,8 +8,10 @@ from typing import Any
 
 import pytest
 
+from runtime.harness.contract import ToolResult as InProcessToolResult
 from runtime.skills.registry import ToolSpec
 from runtime.tools import STDOUT_TAIL_BYTES, run_tool
+from runtime.tools.record import verdict_for_result
 
 pytestmark = pytest.mark.unit
 
@@ -351,3 +353,16 @@ def test_result_is_frozen(tmp_path: Path) -> None:
 
     with pytest.raises((AttributeError, Exception)):
         result.verdict = "exit_nonzero"  # type: ignore[misc]
+
+
+# --- verdict_for_result (B1) --------------------------------------------------
+
+
+def test_verdict_for_result_ok_maps_to_verified() -> None:
+    result = InProcessToolResult(status="ok", payload={"entries": ["a"]})
+    assert verdict_for_result(result) == "verified"
+
+
+def test_verdict_for_result_error_maps_to_tool_error() -> None:
+    result = InProcessToolResult(status="error", error="denied")
+    assert verdict_for_result(result) == "tool_error"

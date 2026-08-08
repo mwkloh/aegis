@@ -2,20 +2,25 @@
 from __future__ import annotations
 
 import enum
+import json
 import logging
+import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from runtime.chat.memory.tier1 import Tier1Loader
 from runtime.chat.memory.tier3 import Tier3Store
 from runtime.chat.reply_verdict import annotate_unverified_claim
+from runtime.events import EventStream, EventType
 from runtime.harness.adapter import HarnessAdapter
 from runtime.harness.contract import ToolIntent, ToolResult
 from runtime.llm.clients.base import ChatMessage, ChatRequest, ModelClient
 from runtime.reasoning.skill_runner import SkillRunner
 from runtime.skills.registry import SkillDescriptor, SkillRegistry
+from runtime.tools.record import compute_argv_hash, record_tool_call, verdict_for_result
 
 logger = logging.getLogger(__name__)
 
@@ -163,6 +168,8 @@ class HarnessDispatcher:
         synthesis_model: str,
         multi_step: bool = False,
         max_steps: int = 5,
+        events: EventStream | None = None,
+        clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._classifier = classifier
         self._registry = registry
@@ -178,6 +185,46 @@ class HarnessDispatcher:
         # those land. See docs/PLAN_MULTI_STEP_AGENT_LOOP.md.
         self._multi_step = multi_step
         self._max_steps = max_steps
+        # Evidence ledger (Phase 11 Track B). `None` keeps every existing
+        # call site/test working unmodified — recording is opt-in.
+        self._events = events
+        self._clock = clock
+
+    def _now(self) -> datetime:
+        return self._clock() if self._clock is not None else datetime.now(tz=UTC)
+
+    def _append_event(self, event_type: EventType, payload: dict[str, Any]) -> None:
+        if self._events is not None:
+            self._events.append(event_type, payload)
+
+    def _record_tool_call(
+        self,
+        *,
+        turn_id: str,
+        skill_id: str,
+        tool_intent: ToolIntent,
+        result: ToolResult,
+    ) -> None:
+        """Log one executed tool call to the evidence ledger, if wired.
+
+        Structural only — argv_hash and outcome_bytes, never args contents
+        or payload bodies. `record_tool_call` is idempotent on its
+        composite key and does not raise on malformed prior shard lines;
+        this never blocks the chat turn.
+        """
+        if self._events is None:
+            return
+        record_tool_call(
+            self._events,
+            imp_id=turn_id,
+            skill=skill_id,
+            tool=tool_intent.tool,
+            argv_hash=compute_argv_hash(
+                [tool_intent.tool, json.dumps(tool_intent.args, sort_keys=True)]
+            ),
+            verdict=verdict_for_result(result),
+            outcome_bytes=len(json.dumps(result.payload, ensure_ascii=False)),
+        )
 
     async def dispatch(
         self,
@@ -197,6 +244,11 @@ class HarnessDispatcher:
                 await message.reply_text(text)
 
         logger.info("harness_dispatcher.dispatch_start", extra={"chat_id": chat_id})
+        # Minted once per dispatch call — never stored as instance state, since
+        # dispatches for different chats/turns can interleave. Scopes every
+        # tool-invocation record from this turn to one composite-key prefix
+        # so a later completion gate can query "this turn's evidence" alone.
+        turn_id = f"turn-{chat_id}-{uuid.uuid4().hex[:8]}"
         try:
             classification = await self._classifier.classify(user_text)
         except Exception:
@@ -237,6 +289,7 @@ class HarnessDispatcher:
                 descriptor=descriptor,
                 user_text=user_text,
                 recent=recent,
+                turn_id=turn_id,
             )
             if chain.guarded_intent is not None:
                 # Destructive guard tripped beyond step 1. Skip synthesis and
@@ -294,6 +347,12 @@ class HarnessDispatcher:
             logger.info(
                 "harness_dispatcher.harness_execute_done", extra={"status": result.status}
             )
+            self._record_tool_call(
+                turn_id=turn_id,
+                skill_id=descriptor.id,
+                tool_intent=tool_intent,
+                result=result,
+            )
             logger.info("harness_dispatcher.synthesize_start")
             reply_text = await self._synthesize(user_text, tool_intent, result, chat_id=chat_id)
             logger.info(
@@ -314,6 +373,7 @@ class HarnessDispatcher:
         descriptor: SkillDescriptor,
         user_text: str,
         recent: tuple[tuple[str, str], ...],
+        turn_id: str,
     ) -> _ChainResult:
         """Bounded multi-step planner loop (Steps 2 + 4).
 
@@ -387,6 +447,12 @@ class HarnessDispatcher:
             logger.info(
                 "harness_dispatcher.harness_execute_done",
                 extra={"step": step_no, "status": result.status},
+            )
+            self._record_tool_call(
+                turn_id=turn_id,
+                skill_id=descriptor.id,
+                tool_intent=tool_intent,
+                result=result,
             )
             history.append((tool_intent, result))
 

@@ -817,6 +817,7 @@ def build_harness_dispatcher(
     tier3: Tier3Store,
     tier1_loader: Tier1Loader,
     files_client: object | None = None,
+    events: EventStream | None = None,
 ) -> Any | None:
     """Build a HarnessDispatcher or return None if any hard dependency is unavailable."""
     from runtime.chat.telegram.harness_dispatcher import HarnessDispatcher  # noqa: PLC0415
@@ -892,6 +893,7 @@ def build_harness_dispatcher(
         synthesis_model=cfg.models.smart,
         multi_step=cfg.harness.multi_step,
         max_steps=cfg.harness.max_steps,
+        events=events,
     )
 
 
@@ -1306,6 +1308,7 @@ def build_application(  # noqa: PLR0912, PLR0915 - top-level assembly seam; each
         tier3=_shared_tier3,
         tier1_loader=_shared_tier1,
         files_client=files_client,
+        events=events,
     )
 
     async def _post_init(application: Any) -> None:

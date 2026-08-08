@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -9,12 +10,14 @@ import pytest
 from runtime.chat.memory.tier1 import Tier1Loader, Tier1Snapshot
 from runtime.chat.memory.tier3 import Tier3Store
 from runtime.chat.telegram.harness_dispatcher import DispatchOutcome, HarnessDispatcher
+from runtime.events import EventStream
 from runtime.harness.adapter import HarnessAdapter
 from runtime.harness.contract import ToolIntent, ToolResult
 from runtime.intent.classifier import IntentClassification
 from runtime.llm.clients.base import ChatResponse
 from runtime.reasoning.skill_runner import PlanStep, SkillRunner
 from runtime.skills.registry import SkillDescriptor, SkillRegistry
+from runtime.tools.record import load_tool_calls
 
 pytestmark = pytest.mark.unit
 
@@ -787,6 +790,7 @@ def _make_loop_dispatcher(
     synthesizer: Any = None,
     tier3: _StubTier3 | None = None,
     max_steps: int = 5,
+    events: EventStream | None = None,
 ) -> HarnessDispatcher:
     if registry is None or harness is None:
         registry, harness = _two_skill_setup()
@@ -801,6 +805,7 @@ def _make_loop_dispatcher(
         synthesis_model="stub-model",
         multi_step=True,
         max_steps=max_steps,
+        events=events,
     )
 
 
@@ -1159,3 +1164,144 @@ async def test_destructive_guard_covers_all_destructive_tools(dtool: str) -> Non
     assert outcome == DispatchOutcome.FIRED
     assert [c.tool for c in harness.calls] == ["files_search"]
     assert dtool in message.replies[0]
+
+
+# ---------------------------------------------------------------------------
+# Evidence ledger wiring (B2) — real EventStream backed by tmp_path.
+# `aegis_sandbox` (conftest, autouse) already points AEGIS_HOME/AEGIS_ROOT at
+# tmp_path; we build the EventStream against its own tmp_path subdir directly
+# rather than relying on any AEGIS-config-derived sessions dir.
+# ---------------------------------------------------------------------------
+
+
+async def test_multi_step_records_one_tool_call_per_step_same_turn_id(
+    tmp_path: Path,
+) -> None:
+    events = EventStream(tmp_path / "sessions")
+    registry, harness = _two_skill_setup()
+    runner = _StubPlanRunner(
+        plan_steps=[
+            PlanStep(kind="tool_call", tool="files_search", args={"glob": "*.md"}),
+            PlanStep(kind="tool_call", tool="files_read", args={"path": "/tmp/a.md"}),
+            PlanStep(kind="respond"),
+        ],
+    )
+    dispatcher = _make_loop_dispatcher(
+        runner=runner, registry=registry, harness=harness, events=events
+    )
+
+    outcome = await dispatcher.dispatch(
+        chat_id=42, user_text="find and read", message=_FakeMessage()
+    )
+
+    assert outcome == DispatchOutcome.FIRED
+    records = load_tool_calls(events)
+    assert len(records) == 2
+    assert [r.tool for r in records] == ["files_search", "files_read"]
+    # Every record from this dispatch shares one turn_id (imp_id).
+    imp_ids = {r.imp_id for r in records}
+    assert len(imp_ids) == 1
+    (imp_id,) = imp_ids
+    assert imp_id.startswith("turn-42-")
+
+
+async def test_multi_step_records_every_step_including_errors(tmp_path: Path) -> None:
+    events = EventStream(tmp_path / "sessions")
+    registry, _ = _two_skill_setup()
+
+    def _boom(args: dict) -> dict:
+        raise PermissionError("denied")
+
+    harness = _RecordingHarness(
+        tools={
+            "files_search": _boom,
+            "files_read": lambda args: {"content": "x"},
+        }
+    )
+    runner = _StubPlanRunner(
+        plan_steps=[
+            PlanStep(kind="tool_call", tool="files_search", args={"glob": "*"}),
+            PlanStep(kind="respond"),
+        ],
+    )
+    dispatcher = _make_loop_dispatcher(
+        runner=runner, registry=registry, harness=harness, events=events
+    )
+
+    await dispatcher.dispatch(chat_id=1, user_text="find x", message=_FakeMessage())
+
+    records = load_tool_calls(events)
+    assert len(records) == 1
+    assert records[0].tool == "files_search"
+    assert records[0].verdict == "tool_error"
+
+
+async def test_single_shot_records_verified_on_success(tmp_path: Path) -> None:
+    events = EventStream(tmp_path / "sessions")
+    dispatcher = _make_dispatcher(
+        classifier=_StubClassifier("list_files", 0.9),
+    )
+    dispatcher._events = events
+
+    await dispatcher.dispatch(
+        chat_id=123, user_text="list my downloads", message=_FakeMessage()
+    )
+
+    records = load_tool_calls(events)
+    assert len(records) == 1
+    assert records[0].tool == "files_list"
+    assert records[0].verdict == "verified"
+
+
+async def test_single_shot_records_tool_error_on_failure(tmp_path: Path) -> None:
+    def _raise_perm(*_: object) -> dict:
+        raise PermissionError("denied")
+
+    error_harness = HarnessAdapter(tools={"files_list": _raise_perm})
+    events = EventStream(tmp_path / "sessions")
+    dispatcher = _make_dispatcher(
+        classifier=_StubClassifier("list_files", 0.9),
+        harness=error_harness,
+    )
+    dispatcher._events = events
+
+    await dispatcher.dispatch(
+        chat_id=123, user_text="list my downloads", message=_FakeMessage()
+    )
+
+    records = load_tool_calls(events)
+    assert len(records) == 1
+    assert records[0].tool == "files_list"
+    assert records[0].verdict == "tool_error"
+
+
+async def test_two_dispatches_produce_two_turn_ids(tmp_path: Path) -> None:
+    events = EventStream(tmp_path / "sessions")
+    dispatcher = _make_dispatcher(
+        classifier=_StubClassifier("list_files", 0.9),
+    )
+    dispatcher._events = events
+
+    await dispatcher.dispatch(
+        chat_id=123, user_text="list my downloads", message=_FakeMessage()
+    )
+    await dispatcher.dispatch(
+        chat_id=123, user_text="list my downloads again", message=_FakeMessage()
+    )
+
+    records = load_tool_calls(events)
+    assert len(records) == 2
+    imp_ids = {r.imp_id for r in records}
+    assert len(imp_ids) == 2
+
+
+async def test_events_none_by_default_does_not_record() -> None:
+    # Default constructor path (no `events=`) must dispatch exactly as before —
+    # no EventStream means no ledger writes and no behavior change.
+    dispatcher = _make_dispatcher(classifier=_StubClassifier("list_files", 0.9))
+    message = _FakeMessage()
+    outcome = await dispatcher.dispatch(
+        chat_id=123, user_text="list my downloads", message=message
+    )
+    assert outcome == DispatchOutcome.FIRED
+    assert dispatcher._events is None
