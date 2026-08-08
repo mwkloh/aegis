@@ -54,6 +54,22 @@ def test_loads_write_file_descriptor(tmp_path: Path) -> None:
     assert registry.for_intent("save_file") is write_file
 
 
+def test_loads_run_command_descriptor(tmp_path: Path) -> None:
+    registry = _seeded_registry(tmp_path)
+    run_command = registry.get("run_command")
+    assert run_command is not None
+    assert run_command.tool == "run_command"
+    assert "run_command" in run_command.intents
+    assert "shell_command" in run_command.intents
+    assert run_command.requires_tier1 is True
+    props = run_command.args_schema.get("properties")
+    assert isinstance(props, dict)
+    assert props  # non-empty
+    assert "argv" in props
+    assert registry.for_intent("run_command") is run_command
+    assert registry.for_intent("shell_command") is run_command
+
+
 def test_rejects_unknown_keys(tmp_path: Path) -> None:
     bad = tmp_path / "bad.yaml"
     bad.write_text(

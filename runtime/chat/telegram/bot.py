@@ -823,6 +823,7 @@ def build_harness_dispatcher(
     from runtime.chat.telegram.harness_dispatcher import HarnessDispatcher  # noqa: PLC0415
     from runtime.harness import DEFAULT_TOOLS  # noqa: PLC0415
     from runtime.harness.adapter import HarnessAdapter  # noqa: PLC0415
+    from runtime.harness.tools.command_tool import make_command_tool  # noqa: PLC0415
     from runtime.harness.tools.files_tool import make_files_tools  # noqa: PLC0415
     from runtime.intent.classifier import ModelBackedClassifier  # noqa: PLC0415
     from runtime.reasoning.skill_runner import SkillRunner  # noqa: PLC0415
@@ -864,7 +865,13 @@ def build_harness_dispatcher(
         except Exception:
             logger.exception("harness_dispatcher.file_tools_failed")
 
-    harness = HarnessAdapter(tools={**DEFAULT_TOOLS, **_file_tools})
+    harness = HarnessAdapter(
+        tools={
+            **DEFAULT_TOOLS,
+            **_file_tools,
+            "run_command": make_command_tool(cfg.commands),
+        }
+    )
 
     _file_tool_names = {"files_list", "files_read", "files_stat", "files_search"}
     if not any(harness.has_tool(t) for t in _file_tool_names):

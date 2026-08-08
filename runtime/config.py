@@ -163,6 +163,20 @@ class FilesConfig(BaseModel):
         return [Path(str(r)).expanduser() for r in v if isinstance(r, (str, Path)) and str(r).strip()]
 
 
+class CommandsConfig(BaseModel):
+    """Argv-only command runner (run_command tool). No shell, ever."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    allowed_binaries: tuple[str, ...] = Field(
+        default=("ls", "cat", "head", "tail", "wc", "grep", "find", "file"),
+        description="Binaries the model may invoke as argv[0]. Read-only "
+        "inspection tools by default; operators extend deliberately.",
+    )
+    timeout_ms: int = Field(default=15_000, ge=100, le=120_000)
+    max_output_bytes: int = Field(default=32_768, ge=1024, le=262_144)
+
+
 def _bundle_dir() -> Path:
     """Absolute path to the built-in skill seed bundle inside the repo."""
     return Path(__file__).resolve().parent / "skills" / "_bundle"
@@ -206,6 +220,7 @@ class AegisConfig(BaseModel):
     files: FilesConfig = Field(default_factory=FilesConfig)
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
     harness: HarnessConfig = Field(default_factory=HarnessConfig)
+    commands: CommandsConfig = Field(default_factory=CommandsConfig)
 
     @field_validator("aegis_home", "aegis_root")
     @classmethod
