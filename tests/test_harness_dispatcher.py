@@ -1660,6 +1660,62 @@ async def test_task_complete_failed_tool_gets_warning_and_emits_gated_event(
     assert gated[0]["payload"]["failed_tools"] == ["files_search"]
 
 
+async def test_task_complete_soft_failed_run_command_gets_warning_and_gated_event(
+    tmp_path: Path,
+) -> None:
+    """The `failed` set must also defer to `verdict_for_result`, not a bare
+    status check. A `run_command` soft-failure (status="ok" + payload
+    verdict="exit_nonzero") must appear in the ⚠️ warning and the
+    HARNESS_COMPLETION_GATED `failed_tools` payload — otherwise it drops out
+    of BOTH `verified` and `failed`, getting only the generic unverified
+    banner and never the specific 'that command failed' note (Phase 11
+    review follow-up: symmetric to the _history_verified_tools fix)."""
+    events = EventStream(tmp_path / "sessions")
+    registry, _ = _two_skill_setup()
+
+    def _soft_fail_search(args: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "argv": ["grep", "nope", "/tmp/haystack.txt"],
+            "exit_code": 1,
+            "stdout_tail": "",
+            "verdict": "exit_nonzero",
+        }
+
+    harness = _RecordingHarness(
+        tools={
+            "files_search": _soft_fail_search,
+            "files_read": lambda args: {"content": "x"},
+        }
+    )
+    runner = _StubPlanRunner(
+        plan_steps=[
+            PlanStep(kind="tool_call", tool="files_search", args={"glob": "*"}),
+            PlanStep(kind="task_complete", summary="Searched for the files."),
+        ],
+    )
+    dispatcher = _make_loop_dispatcher(
+        runner=runner, registry=registry, harness=harness, events=events
+    )
+    message = _FakeMessage()
+
+    outcome = await dispatcher.dispatch(
+        chat_id=1, user_text="find x", message=message
+    )
+
+    assert outcome == DispatchOutcome.FIRED
+    reply = message.replies[0]
+    assert "⚠️ Note: files_search did not complete successfully" in reply
+
+    raw_events = [
+        json.loads(line)
+        for line in events.path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    gated = [e for e in raw_events if e["type"] == "harness.completion_gated"]
+    assert len(gated) == 1
+    assert gated[0]["payload"]["failed_tools"] == ["files_search"]
+
+
 async def test_task_complete_ledger_backed_verified_set_flags_unran_tool_claim(
     tmp_path: Path,
 ) -> None:

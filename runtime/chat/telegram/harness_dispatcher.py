@@ -346,7 +346,12 @@ class HarnessDispatcher:
         # earlier error. Only tools whose failure was never superseded by a
         # verified call are reported.
         failed = sorted(
-            {call.tool for call, res in history if res.status != "ok"} - verified
+            {
+                call.tool
+                for call, res in history
+                if verdict_for_result(res) != "verified"
+            }
+            - verified
         )
         if failed:
             summary = (
