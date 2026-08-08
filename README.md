@@ -82,8 +82,20 @@ The codebase is split into **three planes**, enforced by import-graph tests:
 ### Bounded multi-step tool loop
 The planner can chain tools (e.g. `files_search` → `files_read` → respond) but is hard-capped at `cfg.harness.max_steps` (default 5). Termination conditions: planner returns `kind=respond`, step cap hit, registry empty, or destructive-guard interception. See `runtime/chat/telegram/harness_dispatcher.py:_run_multi_step`.
 
-### Destructive guard
-Mutating tools are allowed at step 1 (the operator's explicit opening request) but intercepted at step 2+ with a deterministic message that surfaces the exact tool id and args — no LLM paraphrase between the model and the operator. Implemented as a `frozenset` lookup, not a prompt instruction, so it can't be jailbroken by clever phrasing.
+### Destructive guard + confirmation flow
+Mutating tools are allowed at step 1 (the operator's explicit opening request) but intercepted at step 2+ with a deterministic message that surfaces the exact tool id and args — no LLM paraphrase between the model and the operator. Implemented as a `frozenset` lookup, not a prompt instruction, so it can't be jailbroken by clever phrasing. On interception the harness holds the pending intent and executes it only on an **exact-match** affirmative follow-up ("yes", "confirm", "go ahead") within a 120s TTL — no model in the confirmation loop, and the intent is armed only *after* the prompt is delivered, so a failed send can't leave an invisible pending action. See `runtime/chat/telegram/harness_dispatcher.py`.
+
+### Evidence ledger
+Every tool the harness executes leaves a structural proof record — skill, tool, an argv hash, a byte count, and a classified verdict (`verified` / `exit_nonzero` / `tool_error` / …) — appended to the session event shard, scoped to the turn. No argv contents or output bodies are stored. This is the substrate the completion gate reads. See `runtime/tools/record.py`.
+
+### Completion gate
+When the planner declares it's done (`kind=task_complete`), the harness checks the claimed summary against the turn's *verified* ledger evidence rather than trusting the model. A tool that failed (including a soft failure like a non-zero `run_command` exit) never counts as verified, and an unrecovered failure appends an honest "⚠️ this did not complete successfully" note to the reply. Annotate-not-block for now — the `harness.completion_gated` events measure how often a hard block would fire before one is turned on. This is the direct counter to a small model lying about completion.
+
+### Schema-constrained decoding
+For local models via Ollama, tool-call and plan JSON is constrained in the decoder itself (a JSON schema passed as Ollama's `format`, compiled to a GBNF grammar) so malformed output is impossible rather than merely discouraged — the single biggest reliability lever for 2B-class models. A deterministic `repair_json()` pass salvages wrapper noise (markdown fences, prose, trailing commas) before spending a corrective retry. Client-side schema validation stays the trust boundary; the decoder constraint is an optimization that can never weaken it.
+
+### Guarded file writes and command runner
+`files_write` writes text inside the configured sandbox roots (atomic tmp-then-rename, 256 KiB cap, symlink-escape rejected) and rides the confirmation flow above. `run_command` runs a read-only inspection command as an **argv list** — no shell, ever — against an operator-defined binary allowlist (`ls`, `cat`, `grep`, … by default; `find` deliberately excluded); path arguments are validated against the same sandbox roots as `files_read`, so it can't read the bot's own secrets. Both are opt-in and off by default.
 
 ### Reply verdict gate
 Pure-function regex check against ~15 first-person claim patterns ("I've deleted", "I ran", "I created"), suppressed by negation/offer patterns ("I would", "I can"). Tool-pinned: "I deleted X" only fires the gate if `files_delete` is *not* in the verified-tools set for this turn. Fully unit-tested; conservative by design (prefers false negatives over annotation noise).
@@ -177,6 +189,15 @@ make security       # bandit + semgrep
 
 ---
 
+## Maintaining and releasing
+
+The repeatable change → verify → PR → release loop is documented in
+[`docs/MAINTAINING.md`](docs/MAINTAINING.md); notable changes per version are in
+[`CHANGELOG.md`](CHANGELOG.md). The short version: branch, change it test-first,
+`make test` must be green, PR it, and tag a release from a clean `main`.
+
+---
+
 ## Repository layout
 
 ```
@@ -214,7 +235,9 @@ Canonical *operator* state lives outside the repo:
 - **Experimental and unstable.** Schemas, tool ids, gate patterns, and configuration shape change as the design is iterated. There is no semver contract.
 - **Single-operator assumptions.** Authentication is a numeric Telegram user-id allowlist. There is no multi-tenant isolation, no RBAC, no audit-export tooling for compliance contexts. Do not point this at strangers.
 - **macOS-shaped.** The deploy story (`launchd`, tmux, TCC), the file-tool sandbox, and the doctor checks assume macOS. Linux probably works for the runtime but is untested.
-- **The gates are conservative, not infallible.** The verdict-gate regex set is curated to lean toward false negatives (missed flags) over false positives (annotation noise). The destructive guard only catches the listed tool ids — adding a new mutating tool requires adding it to `DESTRUCTIVE_TOOLS` *and* writing a unit test. Read `runtime/chat/reply_verdict.py` and `runtime/chat/telegram/harness_dispatcher.py` before trusting either layer in a new context.
+- **The gates are conservative, not infallible.** The verdict-gate regex set is curated to lean toward false negatives (missed flags) over false positives (annotation noise). The destructive guard only catches the listed tool ids — adding a new mutating tool requires adding it to `DESTRUCTIVE_TOOLS` *and* writing a unit test. The completion gate annotates rather than blocks (see open questions in `docs/PLAN_PHASE_11_CAPABILITY_FLOOR.md`). Read `runtime/chat/reply_verdict.py` and `runtime/chat/telegram/harness_dispatcher.py` before trusting any layer in a new context.
+- **The confirmation flow and multi-step tools require `harness.multi_step`.** The destructive guard, the confirmation flow, and chained tool use only run when the multi-step loop is enabled (`harness.multi_step=true` or `HARNESS_MULTI_STEP=1`). In the default single-shot mode a directly-requested `files_write` executes as the operator's stated step-1 intent without confirmation.
+- **`run_command` containment is an allowlist plus path-sandboxing, not a jail.** It refuses non-allowlisted binaries and validates absolute/`~` path arguments against the sandbox roots, but it is not a full sandbox: a bare relative token with no separator resolves against the process working directory. Extend `commands.allowed_binaries` deliberately — adding `find`, `rm`, or an interpreter re-opens execution vectors the defaults exclude.
 - **Local-model dependency.** With Ollama down, the harness dispatcher logs `harness_dispatcher.disabled` and the bot falls back to plain chat. Multi-step tool use requires a working local classifier.
 - **Solo project, solo issue tracker.** Issues live as markdown files under `.scratch/<feature>/` in this repo, not on GitHub Issues. Triage labels and conventions are documented in `docs/agents/`.
 
