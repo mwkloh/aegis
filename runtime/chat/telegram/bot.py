@@ -817,11 +817,14 @@ def build_harness_dispatcher(
     tier3: Tier3Store,
     tier1_loader: Tier1Loader,
     files_client: object | None = None,
+    events: EventStream | None = None,
 ) -> Any | None:
     """Build a HarnessDispatcher or return None if any hard dependency is unavailable."""
     from runtime.chat.telegram.harness_dispatcher import HarnessDispatcher  # noqa: PLC0415
+    from runtime.files.client import FilesClient  # noqa: PLC0415
     from runtime.harness import DEFAULT_TOOLS  # noqa: PLC0415
     from runtime.harness.adapter import HarnessAdapter  # noqa: PLC0415
+    from runtime.harness.tools.command_tool import make_command_tool  # noqa: PLC0415
     from runtime.harness.tools.files_tool import make_files_tools  # noqa: PLC0415
     from runtime.intent.classifier import ModelBackedClassifier  # noqa: PLC0415
     from runtime.reasoning.skill_runner import SkillRunner  # noqa: PLC0415
@@ -863,7 +866,25 @@ def build_harness_dispatcher(
         except Exception:
             logger.exception("harness_dispatcher.file_tools_failed")
 
-    harness = HarnessAdapter(tools={**DEFAULT_TOOLS, **_file_tools})
+    # run_command sandboxes path-shaped argv[1:] tokens through the same
+    # containment files_read uses (Phase 11 whole-branch review, C2) — with
+    # no FilesClient there's no way to enforce that sandbox, so the tool is
+    # left unwired entirely rather than fail open on path arguments.
+    _command_tools: dict[str, Any] = {}
+    if isinstance(files_client, FilesClient):
+        _command_tools["run_command"] = make_command_tool(cfg.commands, files_client)
+    else:
+        logger.warning(
+            "harness_dispatcher.run_command_disabled", extra={"reason": "no_files_client"}
+        )
+
+    harness = HarnessAdapter(
+        tools={
+            **DEFAULT_TOOLS,
+            **_file_tools,
+            **_command_tools,
+        }
+    )
 
     _file_tool_names = {"files_list", "files_read", "files_stat", "files_search"}
     if not any(harness.has_tool(t) for t in _file_tool_names):
@@ -892,6 +913,7 @@ def build_harness_dispatcher(
         synthesis_model=cfg.models.smart,
         multi_step=cfg.harness.multi_step,
         max_steps=cfg.harness.max_steps,
+        events=events,
     )
 
 
@@ -1306,6 +1328,7 @@ def build_application(  # noqa: PLR0912, PLR0915 - top-level assembly seam; each
         tier3=_shared_tier3,
         tier1_loader=_shared_tier1,
         files_client=files_client,
+        events=events,
     )
 
     async def _post_init(application: Any) -> None:

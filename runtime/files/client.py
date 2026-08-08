@@ -12,11 +12,12 @@ import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 logger = logging.getLogger(__name__)
 
 MAX_READ_BYTES = 10 * 1024 * 1024  # 10 MB — mirrors MCP server cap
+MAX_WRITE_BYTES = 256 * 1024  # 256 KiB — a chat-driven write has no business being bigger
 _SEARCH_KIND = frozenset({"file", "directory", "any"})
 _APP_NAME_RE = re.compile(r"^[A-Za-z0-9 _.-]+$")
 _APP_NAME_MAX_LEN = 64
@@ -162,11 +163,32 @@ class FilesClient:
 
     # ── Destructive ops ───────────────────────────────────────────────────────
 
-    def write_file(self, path: str, content: str, *, create_dirs: bool = True) -> None:
+    def write_file(self, path: str, content: str) -> dict[str, Any]:
+        """Write text to a file inside a configured root.
+
+        Parent directories are NOT created — writing into a missing directory
+        is an error (the OS raises `FileNotFoundError`), not a mkdir. Content
+        is capped at `MAX_WRITE_BYTES` (encoded size) — a chat-driven write
+        has no business being bigger. Written atomically via a tmp sibling
+        + rename so a crash mid-write never truncates the original nor
+        leaves a half-file at `path` (mirrors the idiom in
+        `runtime/skills/installer.py`).
+        """
         filepath = self._validate(path)
-        if create_dirs:
-            filepath.parent.mkdir(parents=True, exist_ok=True)
-        filepath.write_text(content, encoding="utf-8")
+        encoded = content.encode("utf-8")
+        if len(encoded) > MAX_WRITE_BYTES:
+            raise FileTooBig(
+                f"'{filepath}' content is {len(encoded)} bytes (max {MAX_WRITE_BYTES})"
+            )
+        existed = filepath.exists()
+        tmp = filepath.with_suffix(filepath.suffix + ".tmp")
+        try:
+            tmp.write_bytes(encoded)
+            tmp.replace(filepath)
+        except OSError:
+            tmp.unlink(missing_ok=True)
+            raise
+        return {"path": str(filepath), "bytes_written": len(encoded), "overwrote": existed}
 
     def move(self, src: str, dst: str) -> None:
         src_path = self._validate(src)
@@ -209,4 +231,12 @@ class FilesClient:
         subprocess.run(argv, check=True)
 
 
-__all__ = ["DirEntry", "FileInfo", "FilesClient", "FileTooBig", "MAX_READ_BYTES", "PathDenied"]
+__all__ = [
+    "DirEntry",
+    "FileInfo",
+    "FilesClient",
+    "FileTooBig",
+    "MAX_READ_BYTES",
+    "MAX_WRITE_BYTES",
+    "PathDenied",
+]

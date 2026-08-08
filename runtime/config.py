@@ -5,6 +5,7 @@ Pydantic validates every field at the boundary.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -163,6 +164,24 @@ class FilesConfig(BaseModel):
         return [Path(str(r)).expanduser() for r in v if isinstance(r, (str, Path)) and str(r).strip()]
 
 
+class CommandsConfig(BaseModel):
+    """Argv-only command runner (run_command tool). No shell, ever."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    allowed_binaries: tuple[str, ...] = Field(
+        default=("ls", "cat", "head", "tail", "wc", "grep", "file"),
+        description="Binaries the model may invoke as argv[0]. Read-only "
+        "inspection tools by default; operators extend deliberately. "
+        "`find` is deliberately excluded — its -delete/-exec/-execdir/-ok "
+        "flags allow arbitrary deletion/execution with no confirmation "
+        "(run_command is not in DESTRUCTIVE_TOOLS); add it back only if "
+        "you accept that risk.",
+    )
+    timeout_ms: int = Field(default=15_000, ge=100, le=120_000)
+    max_output_bytes: int = Field(default=32_768, ge=1024, le=262_144)
+
+
 def _bundle_dir() -> Path:
     """Absolute path to the built-in skill seed bundle inside the repo."""
     return Path(__file__).resolve().parent / "skills" / "_bundle"
@@ -206,6 +225,7 @@ class AegisConfig(BaseModel):
     files: FilesConfig = Field(default_factory=FilesConfig)
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
     harness: HarnessConfig = Field(default_factory=HarnessConfig)
+    commands: CommandsConfig = Field(default_factory=CommandsConfig)
 
     @field_validator("aegis_home", "aegis_root")
     @classmethod
@@ -303,6 +323,7 @@ def _coerce(env: dict[str, str], cfg: dict[str, Any]) -> dict[str, Any]:
         "board": board,
         "files": _coerce_files(cfg.get("files")),
         "harness": _coerce_harness(cfg.get("harness"), env),
+        "commands": _coerce_commands(cfg.get("commands")),
     }
 
 
@@ -398,6 +419,33 @@ def _coerce_files(raw: Any) -> FilesConfig:
         except (ValueError, TypeError):
             pass
     return FilesConfig()
+
+
+def _coerce_commands(raw: Any) -> CommandsConfig:
+    """Build a `CommandsConfig` from `config.json` → `commands`.
+
+    Missing / non-dict → default (read-only inspection allowlist). Each field
+    degrades independently: an invalid `allowed_binaries`, `timeout_ms`, or
+    `max_output_bytes` falls back to its default rather than failing the whole
+    load, so one bad key can't strand the operator's other overrides.
+    """
+    if not isinstance(raw, dict):
+        return CommandsConfig()
+    kwargs: dict[str, Any] = {}
+    binaries_raw = raw.get("allowed_binaries") or raw.get("allowedBinaries")
+    if isinstance(binaries_raw, list) and all(
+        isinstance(b, str) for b in binaries_raw
+    ):
+        kwargs["allowed_binaries"] = tuple(binaries_raw)
+    for key in ("timeout_ms", "max_output_bytes"):
+        if key in raw:
+            with contextlib.suppress(TypeError, ValueError):
+                kwargs[key] = int(raw[key])
+    try:
+        return CommandsConfig(**kwargs)
+    except Exception:
+        logger.warning("config.commands.invalid", exc_info=True)
+        return CommandsConfig()
 
 
 def _coerce_harness(raw: Any, env: dict[str, str]) -> HarnessConfig:

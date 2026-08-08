@@ -1,14 +1,23 @@
 """Tests for `Tier1Reasoner` and the skill runner's graceful degradation."""
 from __future__ import annotations
 
+from typing import Any
+
 import httpx
 import pytest
+from pydantic import ValidationError
 
 from runtime.harness import ToolIntent
 from runtime.harness.contract import ToolResult
 from runtime.llm.clients import ChatRequest, ChatResponse
 from runtime.reasoning.skill_runner import PlanStep, SkillRunner
-from runtime.reasoning.tier1_reasoner import Tier1Reasoner, Tier1ReasonerError
+from runtime.reasoning.tier1_reasoner import (
+    Tier1Reasoner,
+    Tier1ReasonerError,
+    _allowed_keys,
+    _build_planner_schema,
+    _build_schema,
+)
 from runtime.skills import SkillDescriptor
 
 
@@ -302,3 +311,115 @@ async def test_skill_runner_tier0_path_unchanged() -> None:
     intent = await runner.build(echo, "echo hello")
     assert intent.tool == "echo"
     assert intent.args == {"message": "hello"}
+
+
+# ---------------------------------------------------------------------------
+# task_complete plan kind (Track C, C1) —
+# docs/PLAN_PHASE_11_CAPABILITY_FLOOR.md
+# ---------------------------------------------------------------------------
+
+
+def test_build_planner_schema_includes_task_complete_and_summary() -> None:
+    schema = _build_planner_schema([_files_list_skill()])
+
+    assert schema["properties"]["kind"]["enum"] == ["tool_call", "respond", "task_complete"]
+    assert schema["properties"]["summary"]["type"] == "string"
+    assert schema["properties"]["summary"]["maxLength"] == 2048
+    assert schema["additionalProperties"] is False
+
+
+def _iter_schema_nodes(node: Any) -> list[dict[str, Any]]:
+    """Flatten every dict node reachable in a JSON-schema tree."""
+    nodes: list[dict[str, Any]] = []
+    if isinstance(node, dict):
+        nodes.append(node)
+        for value in node.values():
+            nodes.extend(_iter_schema_nodes(value))
+    elif isinstance(node, list):
+        for item in node:
+            nodes.extend(_iter_schema_nodes(item))
+    return nodes
+
+
+def test_schemas_are_gbnf_compatible() -> None:
+    """A-t4: for the two schemas built here (`_build_schema` fed a non-empty
+    `allowed` set via `_ask_question()`, and `_build_planner_schema`), every
+    object node reached in the tree declares `$ref`/`anyOf`/`oneOf`-free
+    shapes and, when `properties` is non-empty, is fine as-is; when it is
+    present-but-EMPTY it must also declare `"additionalProperties": True` —
+    without it, llama.cpp's json-schema-to-grammar converter compiles the
+    node to a grammar that matches ONLY `{}`, silently closing what was
+    meant to be a free-form object the moment the schema reaches Ollama's
+    `format` constraint (lesson from hermes-agent's schema_sanitizer.py,
+    cited in docs/PLAN_PHASE_11_CAPABILITY_FLOOR.md A2).
+
+    NOTE: `_build_schema`'s empty-`allowed` fallback (a bare
+    `{"type": "object"}` with no `properties` key at all) is NOT exercised
+    by this test — `_ask_question()` declares a non-empty `args_schema`, so
+    that branch is dead code today. See plan open question #6."""
+    reply_schema = _build_schema(_allowed_keys(_ask_question()))
+    planner_schema = _build_planner_schema([_files_list_skill()])
+
+    for schema in (reply_schema, planner_schema):
+        for node in _iter_schema_nodes(schema):
+            assert "$ref" not in node
+            assert "anyOf" not in node
+            assert "oneOf" not in node
+            if node.get("type") == "object":
+                assert "properties" in node, f"bare object without properties: {node!r}"
+                if node["properties"] == {}:
+                    assert node.get("additionalProperties") is True, (
+                        "empty-properties object without additionalProperties=True "
+                        f"closes the decoder grammar to '{{}}' only: {node!r}"
+                    )
+
+
+@pytest.mark.asyncio
+async def test_plan_next_accepts_task_complete_step_with_no_tool() -> None:
+    """A task_complete step (tool=None) must pass plan_next's post-validation
+    unchanged — the tool-membership check is gated on kind == "tool_call"."""
+    stub = _StubClient(
+        content='{"kind": "task_complete", "summary": "Listed the Downloads folder."}'
+    )
+    reasoner = Tier1Reasoner(client=stub, model="minimax/minimax-m2.7")
+
+    step = await reasoner.plan_next(
+        user_text="list downloads",
+        available_skills=[_files_list_skill()],
+    )
+
+    assert step.kind == "task_complete"
+    assert step.tool is None
+    assert step.summary == "Listed the Downloads folder."
+
+
+@pytest.mark.asyncio
+async def test_plan_next_still_rejects_unknown_tool_on_tool_call() -> None:
+    """Pin: the kind == "tool_call" gate must not loosen unknown-tool rejection."""
+    stub = _StubClient(
+        content='{"kind": "tool_call", "tool": "files_delete", "args": {"path": "/x"}}'
+    )
+    reasoner = Tier1Reasoner(client=stub, model="minimax/minimax-m2.7")
+
+    with pytest.raises(Tier1ReasonerError):
+        await reasoner.plan_next(
+            user_text="anything",
+            available_skills=[_files_list_skill()],
+        )
+
+
+def test_plan_step_accepts_task_complete_kind() -> None:
+    step = PlanStep(kind="task_complete", summary="Did the thing.")
+    assert step.kind == "task_complete"
+    assert step.tool is None
+
+
+def test_plan_step_accepts_summary_at_max_length() -> None:
+    step = PlanStep(kind="task_complete", summary="x" * 2048)
+    assert step.summary is not None
+    assert len(step.summary) == 2048
+
+
+def test_plan_step_rejects_summary_over_max_length() -> None:
+    with pytest.raises(ValidationError):
+        PlanStep(kind="task_complete", summary="x" * 2049)

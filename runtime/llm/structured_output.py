@@ -5,7 +5,8 @@ answer goes through this wrapper. Local and frontier models both
 benefit — the flow is:
 
 1. Call the primary `client` with `response_format="json"`.
-2. Parse the response body as JSON.
+2. Parse the response body as JSON. On JSON parse failure, attempt
+   deterministic repair (`repair_json`) before declaring `invalid_json`.
 3. Validate against `schema` (draft-2020-12 JSON schema).
 4. On parse/validate failure, append a corrective system message
    containing the failure reason + the schema, and retry up to
@@ -21,6 +22,7 @@ will degrade to a safe default (e.g. intent classifier → `general_question`).
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -36,6 +38,33 @@ from runtime.llm.clients.base import (
 
 ErrorKind = Literal["ok", "invalid_json", "schema_violation", "empty", "failed"]
 
+_FENCE_RE = re.compile(r"^```(?:json)?\s*(.*?)\s*```\s*$", re.DOTALL)
+_TRAILING_COMMA_RE = re.compile(r",\s*([}\]])")
+
+
+def repair_json(content: str) -> str | None:
+    """Deterministic salvage of near-miss JSON. Returns a parseable string
+    or None. Never guesses at semantics — only removes wrapper noise:
+
+    1. markdown fences (```json ... ```)
+    2. prose before the first '{' / after the last '}'
+    3. trailing commas before '}' or ']'
+    """
+    candidate = content.strip()
+    fence = _FENCE_RE.match(candidate)
+    if fence:
+        candidate = fence.group(1).strip()
+    start, end = candidate.find("{"), candidate.rfind("}")
+    if start == -1 or end <= start:
+        return None
+    candidate = candidate[start : end + 1]
+    candidate = _TRAILING_COMMA_RE.sub(r"\1", candidate)
+    try:
+        json.loads(candidate)
+    except json.JSONDecodeError:
+        return None
+    return candidate
+
 
 @dataclass(frozen=True)
 class StructuredOutcome:
@@ -50,6 +79,7 @@ class StructuredOutcome:
     escalated: bool
     error_kind: ErrorKind
     final_model: str
+    repaired: bool = False
 
 
 @dataclass(frozen=True)
@@ -83,24 +113,37 @@ def _corrective_messages(
     return [*original, corrective]
 
 
-def _validate(content: str, schema: dict[str, Any]) -> tuple[dict[str, Any] | None, ErrorKind, str]:
-    """Parse + validate. Returns (data_or_None, error_kind, reason)."""
+def _validate(
+    content: str, schema: dict[str, Any]
+) -> tuple[dict[str, Any] | None, ErrorKind, str, bool]:
+    """Parse + validate. Returns (data_or_None, error_kind, reason, repaired).
+
+    `repaired` is True when the JSON only parsed after `repair_json`
+    salvaged it (fences / prose / trailing commas stripped) — a signal
+    for the caller, never part of the parse/validate contract itself.
+    """
     stripped = content.strip()
     if not stripped:
-        return None, "empty", "model returned empty content"
+        return None, "empty", "model returned empty content", False
+    repaired = False
     try:
         data = json.loads(stripped)
     except json.JSONDecodeError as exc:
         reason = f"json parse error: {exc.msg} at line {exc.lineno} col {exc.colno}"
-        return None, "invalid_json", reason
+        candidate = repair_json(stripped)
+        if candidate is None:
+            return None, "invalid_json", reason, False
+        data = json.loads(candidate)
+        repaired = True
     if not isinstance(data, dict):
-        return None, "schema_violation", f"expected JSON object, got {type(data).__name__}"
+        reason = f"expected JSON object, got {type(data).__name__}"
+        return None, "schema_violation", reason, repaired
     try:
         Draft202012Validator(schema).validate(data)
     except ValidationError as exc:
         path = "/".join(str(p) for p in exc.absolute_path) or "<root>"
-        return None, "schema_violation", f"schema violation at {path}: {exc.message}"
-    return data, "ok", ""
+        return None, "schema_violation", f"schema violation at {path}: {exc.message}", repaired
+    return data, "ok", "", repaired
 
 
 async def _one_call(
@@ -109,6 +152,7 @@ async def _one_call(
     messages: list[ChatMessage],
     temperature: float,
     max_tokens: int,
+    schema: dict[str, Any],
 ) -> ChatResponse:
     request = ChatRequest(
         model=model,
@@ -116,6 +160,7 @@ async def _one_call(
         temperature=temperature,
         max_tokens=max_tokens,
         response_format="json",
+        response_schema=schema,
     )
     return await client.chat(request)
 
@@ -150,16 +195,22 @@ async def request_structured(
     for attempt_idx in range(max_retries + 1):
         attempts += 1
         resp = await _one_call(
-            client, model, current_messages, temperature, max_tokens
+            client, model, current_messages, temperature, max_tokens, schema
         )
         last_raw = resp.content
-        data, kind, reason = _validate(resp.content, schema)
+        data, kind, reason, repaired = _validate(resp.content, schema)
         if kind == "ok" and data is not None:
+            if repaired and events is not None:
+                events.append(
+                    EventType.LLM_JSON_REPAIRED,
+                    {"call_site": call_site, "model": model},
+                )
             return data, StructuredOutcome(
                 attempts=attempts,
                 escalated=False,
                 error_kind="ok",
                 final_model=model,
+                repaired=repaired,
             )
         last_kind, last_reason = kind, reason
         if events is not None and attempt_idx < max_retries:
@@ -202,14 +253,24 @@ async def request_structured(
             escalated_messages,
             escalate_to.temperature,
             escalate_to.max_tokens,
+            schema,
         )
-        data, kind, reason = _validate(resp.content, schema)
+        data, kind, reason, repaired = _validate(resp.content, schema)
         if kind == "ok" and data is not None:
+            if repaired and events is not None:
+                # Deliberate: logs the model that actually produced the
+                # repaired content (escalated), unlike LLM_STRUCTURED_FAILED
+                # which always logs the primary model.
+                events.append(
+                    EventType.LLM_JSON_REPAIRED,
+                    {"call_site": call_site, "model": escalate_to.model},
+                )
             return data, StructuredOutcome(
                 attempts=attempts,
                 escalated=True,
                 error_kind="ok",
                 final_model=escalate_to.model,
+                repaired=repaired,
             )
         last_kind, last_reason = kind, reason
 

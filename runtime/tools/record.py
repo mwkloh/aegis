@@ -41,6 +41,7 @@ from datetime import UTC, datetime
 from typing import Literal
 
 from runtime.events import EventStream, EventType
+from runtime.harness.contract import ToolResult as InProcessToolResult
 from runtime.tools.harness import ToolVerdict
 
 ToolOutcome = Literal["ok", "skipped_idempotent"]
@@ -73,6 +74,33 @@ def compute_argv_hash(argv: Iterable[str]) -> str:
     """
     joined = "\x00".join(argv)
     return hashlib.sha256(joined.encode("utf-8")).hexdigest()[:16]
+
+
+def verdict_for_result(result: InProcessToolResult) -> ToolVerdict:
+    """Map an in-process HarnessAdapter result onto the verdict vocabulary.
+
+    Default mapping is status-based: ``"ok"`` → ``"verified"``, anything
+    else → ``"tool_error"``. Some tools report a richer outcome than bare
+    success/failure inside their own payload — `run_command` returns
+    ``status="ok"`` (it ran to completion) but carries its own
+    ``payload["verdict"]`` of ``"exit_nonzero"`` when the command's exit
+    code was non-zero (Phase 11 whole-branch review, C4). Ignoring that
+    would record a FAILED command as ``verified``, and the completion gate
+    would never flag the false "done" claim. When ``status == "ok"`` and
+    the payload carries a recognised, non-``"verified"`` verdict, that
+    payload verdict wins. This generalises to any tool that reports a
+    richer verdict, not just `run_command`. Total: an odd/invalid payload
+    verdict falls back to the status-based mapping rather than raising.
+    """
+    if result.status == "ok" and isinstance(result.payload, dict):
+        payload_verdict = result.payload.get("verdict")
+        if (
+            isinstance(payload_verdict, str)
+            and payload_verdict in _VALID_VERDICTS
+            and payload_verdict != "verified"
+        ):
+            return payload_verdict  # type: ignore[return-value]
+    return "verified" if result.status == "ok" else "tool_error"
 
 
 def load_tool_calls(events: EventStream) -> list[ToolCallRecord]:
@@ -165,6 +193,7 @@ _VALID_VERDICTS: frozenset[str] = frozenset(
         "timeout",
         "schema_violation",
         "host_denied",
+        "tool_error",
     }
 )
 
@@ -225,4 +254,5 @@ __all__ = [
     "compute_argv_hash",
     "load_tool_calls",
     "record_tool_call",
+    "verdict_for_result",
 ]

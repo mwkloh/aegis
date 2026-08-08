@@ -97,6 +97,65 @@ async def test_chat_json_mode_sets_format() -> None:
 
 
 @pytest.mark.asyncio
+async def test_chat_response_schema_sets_format_to_schema_dict() -> None:
+    cfg = _config_with_base("http://127.0.0.1:11434")
+    client = OllamaClient(cfg)
+    schema = {
+        "type": "object",
+        "required": ["intent"],
+        "properties": {"intent": {"type": "string"}},
+    }
+    request = ChatRequest(
+        model="gemma4:e2b",
+        messages=[ChatMessage(role="user", content="hi")],
+        response_format="json",
+        response_schema=schema,
+    )
+
+    captured: dict[str, object] = {}
+
+    def _handler(req: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(req.content))
+        return httpx.Response(
+            200,
+            json={"message": {"role": "assistant", "content": "{\"intent\":\"ask\"}"}},
+        )
+
+    with respx.mock() as mock:
+        mock.post("http://127.0.0.1:11434/api/chat").mock(side_effect=_handler)
+        await client.chat(request)
+
+    assert captured.get("format") == schema
+
+
+@pytest.mark.asyncio
+async def test_chat_response_format_json_without_schema_sets_string() -> None:
+    cfg = _config_with_base("http://127.0.0.1:11434")
+    client = OllamaClient(cfg)
+    request = ChatRequest(
+        model="gemma4:e2b",
+        messages=[ChatMessage(role="user", content="hi")],
+        response_format="json",
+    )
+
+    captured: dict[str, object] = {}
+
+    def _handler(req: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(req.content))
+        return httpx.Response(
+            200,
+            json={"message": {"role": "assistant", "content": "{\"ok\":true}"}},
+        )
+
+    with respx.mock() as mock:
+        mock.post("http://127.0.0.1:11434/api/chat").mock(side_effect=_handler)
+        await client.chat(request)
+
+    assert captured.get("format") == "json"
+    assert request.response_schema is None
+
+
+@pytest.mark.asyncio
 async def test_chat_retries_on_read_timeout_then_succeeds() -> None:
     cfg = _config_with_base("http://127.0.0.1:11434")
     client = OllamaClient(cfg)

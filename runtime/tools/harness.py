@@ -42,6 +42,7 @@ ToolVerdict = Literal[
     "timeout",            # bounded by spec.timeout_ms
     "schema_violation",   # stdout did not match spec.schema
     "host_denied",        # allow_net=False but network was requested
+    "tool_error",         # in-process tool raised or returned error status
 ]
 
 STDOUT_TAIL_BYTES = 32 * 1024  # 32 KB — matches the applier's order of magnitude

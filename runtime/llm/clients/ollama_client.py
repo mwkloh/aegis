@@ -61,7 +61,9 @@ class OllamaClient:
                 "num_predict": request.max_tokens,
             },
         }
-        if request.response_format == "json":
+        if request.response_schema is not None:
+            payload["format"] = request.response_schema
+        elif request.response_format == "json":
             payload["format"] = "json"
 
         started = time.perf_counter()

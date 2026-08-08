@@ -1,0 +1,26 @@
+id: run_command
+version: 0.1.0
+description: Run a read-only inspection command (ls, cat, grep, ...) as an
+  argv list. No shell features — pipes, redirects and globs do not work.
+intents:
+  - run_command
+  - shell_command
+tool: run_command
+args_schema:
+  type: object
+  properties:
+    argv:
+      type: array
+      minItems: 1
+      maxItems: 16
+      items:
+        type: string
+        maxLength: 512
+      description: >-
+        Command as an argv list, e.g. ["ls", "-la", "/Users/michaelloh/Desktop"].
+        The first element must be an allowed binary name. Path arguments must
+        be absolute (/...) or ~-prefixed; relative paths and bare patterns
+        containing '/' are rejected by the sandbox.
+  required:
+    - argv
+requires_tier1: true

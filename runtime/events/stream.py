@@ -48,6 +48,8 @@ class EventType(StrEnum):
     LLM_STRUCTURED_RETRY = "llm.structured_retry"
     LLM_TIER_ESCALATED = "llm.tier_escalated"
     LLM_STRUCTURED_FAILED = "llm.structured_failed"
+    # Phase 11 Track A — deterministic JSON repair salvage.
+    LLM_JSON_REPAIRED = "llm.json_repaired"
     # Phase 10 — Autonomous scheduler lifecycle.
     SCHEDULER_TICK = "scheduler.tick"
     SCHEDULER_JOB_STARTED = "scheduler.job_started"
@@ -55,6 +57,12 @@ class EventType(StrEnum):
     SCHEDULER_JOB_FAILED = "scheduler.job_failed"
     SCHEDULER_SKIPPED_BUSY = "scheduler.skipped_busy"
     SCHEDULER_SKIPPED_STALE = "scheduler.skipped_stale"
+    # Phase 11 Track C — task_complete completion gate.
+    HARNESS_COMPLETION_GATED = "harness.completion_gated"
+    # Phase 11 Track D — destructive-guard pending confirmation.
+    HARNESS_CONFIRMATION_REQUESTED = "harness.confirmation_requested"
+    HARNESS_CONFIRMATION_ACCEPTED = "harness.confirmation_accepted"
+    HARNESS_CONFIRMATION_DECLINED = "harness.confirmation_declined"
 
 
 class EventStream:

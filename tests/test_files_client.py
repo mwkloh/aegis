@@ -252,17 +252,22 @@ def test_mkdir_creates_nested(client: FilesClient, tmp_path: Path) -> None:
 
 
 # ── write_file ────────────────────────────────────────────────────────────────
+# Full coverage (size cap, symlink escape, overwrite, '~' expansion) lives in
+# tests/test_files_write.py (Phase 11 D2). These are smoke tests for the
+# basic path plus the "no mkdir" invariant.
 
 def test_write_file_creates_file(client: FilesClient, tmp_path: Path) -> None:
     p = tmp_path / "new.txt"
-    client.write_file(str(p), "hello")
+    result = client.write_file(str(p), "hello")
     assert p.read_text() == "hello"
+    assert result == {"path": str(p), "bytes_written": len(b"hello"), "overwrote": False}
 
 
-def test_write_file_creates_parent_dirs(client: FilesClient, tmp_path: Path) -> None:
+def test_write_file_missing_parent_dir_raises(client: FilesClient, tmp_path: Path) -> None:
     p = tmp_path / "deep" / "nested" / "file.txt"
-    client.write_file(str(p), "deep content")
-    assert p.read_text() == "deep content"
+    with pytest.raises(FileNotFoundError):
+        client.write_file(str(p), "deep content")
+    assert not p.parent.exists()
 
 
 # ── open_with_app ─────────────────────────────────────────────────────────────

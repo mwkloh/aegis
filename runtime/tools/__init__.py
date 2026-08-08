@@ -17,6 +17,7 @@ from .record import (
     compute_argv_hash,
     load_tool_calls,
     record_tool_call,
+    verdict_for_result,
 )
 
 __all__ = [
@@ -30,4 +31,5 @@ __all__ = [
     "load_tool_calls",
     "record_tool_call",
     "run_tool",
+    "verdict_for_result",
 ]

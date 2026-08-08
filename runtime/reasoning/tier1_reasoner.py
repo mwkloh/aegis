@@ -60,17 +60,22 @@ class Tier1Reply(BaseModel):
 
 
 class PlanStep(BaseModel):
-    """Discriminated union over the two planner outcomes.
+    """Discriminated union over the three planner outcomes.
 
     `kind="tool_call"` → execute (`tool`, `args`) and call planner again.
     `kind="respond"` → terminate the loop; synthesise the final reply.
+    `kind="task_complete"` → terminate the loop; `summary` states what was
+    done, grounded in the tool results already in the chain history. The
+    dispatcher gates task_complete summaries against the turn's evidence
+    ledger (C2) — see docs/PLAN_PHASE_11_CAPABILITY_FLOOR.md.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    kind: str = Field(pattern="^(tool_call|respond)$")
+    kind: str = Field(pattern="^(tool_call|respond|task_complete)$")
     tool: str | None = Field(default=None, max_length=64)
     args: dict[str, Any] | None = Field(default=None)
+    summary: str | None = Field(default=None, max_length=2048)
 
 
 class Tier1ReasonerError(RuntimeError):
@@ -252,12 +257,21 @@ def _format_call_history(history: Sequence[tuple[ToolIntent, ToolResult]]) -> st
 
 
 def _build_planner_schema(skills: Sequence[SkillDescriptor]) -> dict[str, Any]:
-    """JSON schema accepting either a `respond` step or a `tool_call` step.
+    """JSON schema accepting a `respond`, `task_complete`, or `tool_call` step.
 
     `args` is left as a free-form object — per-tool arg validation happens
     downstream in the harness adapter, mirroring the existing
     `Tier1Reasoner.reason` flow where the schema rejects extra args at the
-    top level but trusts the harness to enforce nested constraints.
+    top level but trusts the harness to enforce nested constraints. It
+    declares `"properties": {}` (rather than a bare `{"type": "object"}`) to
+    stay GBNF-friendly, and pairs that with an explicit
+    `"additionalProperties": True` — an object node with empty `properties`
+    and no `additionalProperties` compiles (in llama.cpp's
+    json-schema-to-grammar converter) to a grammar that matches ONLY `{}`,
+    silently closing `args` at the decoder the moment this schema is sent
+    to Ollama as a `format` constraint (Track A, A2). The explicit `True`
+    keeps the decoder grammar open, matching the client-side
+    Draft202012Validator's (already-open) interpretation.
     """
     tool_ids = sorted({d.tool for d in skills})
     return {
@@ -265,9 +279,10 @@ def _build_planner_schema(skills: Sequence[SkillDescriptor]) -> dict[str, Any]:
         "additionalProperties": False,
         "required": ["kind"],
         "properties": {
-            "kind": {"type": "string", "enum": ["tool_call", "respond"]},
+            "kind": {"type": "string", "enum": ["tool_call", "respond", "task_complete"]},
             "tool": {"type": "string", "enum": tool_ids} if tool_ids else {"type": "string"},
-            "args": {"type": "object"},
+            "args": {"type": "object", "properties": {}, "additionalProperties": True},
+            "summary": {"type": "string", "maxLength": 2048},
         },
     }
 
