@@ -48,6 +48,8 @@ class EventType(StrEnum):
     LLM_STRUCTURED_RETRY = "llm.structured_retry"
     LLM_TIER_ESCALATED = "llm.tier_escalated"
     LLM_STRUCTURED_FAILED = "llm.structured_failed"
+    # Phase 11 Track A — deterministic JSON repair salvage.
+    LLM_JSON_REPAIRED = "llm.json_repaired"
     # Phase 10 — Autonomous scheduler lifecycle.
     SCHEDULER_TICK = "scheduler.tick"
     SCHEDULER_JOB_STARTED = "scheduler.job_started"

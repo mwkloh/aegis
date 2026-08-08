@@ -188,6 +188,8 @@ async def test_escalation_recovers_after_primary_fails(tmp_path: Path) -> None:
     escalated_req = smart.seen[0]
     assert escalated_req.model == "smart-70b"
     assert escalated_req.messages[-1].role == "system"
+    # The escalated request must also carry the schema (Task 1 carry-over).
+    assert escalated_req.response_schema == SCHEMA
 
 
 async def test_escalation_also_fails(tmp_path: Path) -> None:
@@ -253,3 +255,70 @@ async def test_no_events_when_stream_not_passed() -> None:
         client, BASE_MSGS, SCHEMA, model="fake-7b", max_retries=2
     )
     assert outcome.error_kind != "ok"
+
+
+# --- Phase 11 Track A4 — deterministic JSON repair -------------------------
+
+
+async def test_repairable_content_succeeds_without_retry(tmp_path: Path) -> None:
+    # Fenced JSON is a near-miss the deterministic repair path should
+    # salvage on the very first attempt — no retry burned.
+    client = FakeClient(
+        replies=['```json\n{"intent":"ask","confidence":0.9}\n```']
+    )
+    events = EventStream(tmp_path)
+    data, outcome = await request_structured(
+        client,
+        BASE_MSGS,
+        SCHEMA,
+        model="fake-7b",
+        events=events,
+        call_site="test.repair",
+    )
+    assert data == {"intent": "ask", "confidence": 0.9}
+    assert outcome.attempts == 1
+    assert outcome.error_kind == "ok"
+    assert outcome.repaired is True
+
+    records = _read_events(events.path)
+    types = [r["type"] for r in records]
+    assert types == ["llm.json_repaired"]
+    assert records[0]["payload"] == {"call_site": "test.repair", "model": "fake-7b"}
+
+
+async def test_unrepairable_content_still_walks_retry_path(tmp_path: Path) -> None:
+    # Braces present but the interior isn't valid JSON — repair_json can't
+    # salvage this, so the existing retry/escalation behavior must be
+    # unchanged.
+    client = FakeClient(
+        replies=[
+            "sure thing {not json}",
+            '{"intent":"ask","confidence":0.5}',
+        ]
+    )
+    events = EventStream(tmp_path)
+    data, outcome = await request_structured(
+        client,
+        BASE_MSGS,
+        SCHEMA,
+        model="fake-7b",
+        events=events,
+        call_site="test.unrepairable_retry",
+    )
+    assert data == {"intent": "ask", "confidence": 0.5}
+    assert outcome.attempts == 2
+    assert outcome.error_kind == "ok"
+    assert outcome.repaired is False
+
+    records = _read_events(events.path)
+    types = [r["type"] for r in records]
+    assert types == ["llm.structured_retry"]
+    assert "llm.json_repaired" not in types
+
+
+async def test_repaired_outcome_defaults_false_on_plain_success(tmp_path: Path) -> None:
+    client = FakeClient(replies=['{"intent":"ask","confidence":0.9}'])
+    _, outcome = await request_structured(
+        client, BASE_MSGS, SCHEMA, model="fake-7b", events=None
+    )
+    assert outcome.repaired is False
