@@ -1332,6 +1332,7 @@ async def test_events_none_by_default_does_not_record() -> None:
         chat_id=123, user_text="list my downloads", message=message
     )
     assert outcome == DispatchOutcome.FIRED
+    assert dispatcher._events is None
 
 
 # ---------------------------------------------------------------------------
@@ -1372,4 +1373,3 @@ async def test_multi_step_task_complete_breaks_loop_like_respond() -> None:
     # Synthesis saw exactly the one tool call's history (pre-C2 safety
     # property: task_complete's summary is NOT trusted or surfaced yet).
     assert len(runner.plan_next_calls[1]["history"]) == 1
-    assert dispatcher._events is None

@@ -262,9 +262,16 @@ def _build_planner_schema(skills: Sequence[SkillDescriptor]) -> dict[str, Any]:
     `args` is left as a free-form object — per-tool arg validation happens
     downstream in the harness adapter, mirroring the existing
     `Tier1Reasoner.reason` flow where the schema rejects extra args at the
-    top level but trusts the harness to enforce nested constraints. It still
+    top level but trusts the harness to enforce nested constraints. It
     declares `"properties": {}` (rather than a bare `{"type": "object"}`) to
-    stay GBNF-friendly — see docs/PLAN_PHASE_11_CAPABILITY_FLOOR.md A2.
+    stay GBNF-friendly, and pairs that with an explicit
+    `"additionalProperties": True` — an object node with empty `properties`
+    and no `additionalProperties` compiles (in llama.cpp's
+    json-schema-to-grammar converter) to a grammar that matches ONLY `{}`,
+    silently closing `args` at the decoder the moment this schema is sent
+    to Ollama as a `format` constraint (Track A, A2). The explicit `True`
+    keeps the decoder grammar open, matching the client-side
+    Draft202012Validator's (already-open) interpretation.
     """
     tool_ids = sorted({d.tool for d in skills})
     return {
@@ -274,7 +281,7 @@ def _build_planner_schema(skills: Sequence[SkillDescriptor]) -> dict[str, Any]:
         "properties": {
             "kind": {"type": "string", "enum": ["tool_call", "respond", "task_complete"]},
             "tool": {"type": "string", "enum": tool_ids} if tool_ids else {"type": "string"},
-            "args": {"type": "object", "properties": {}},
+            "args": {"type": "object", "properties": {}, "additionalProperties": True},
             "summary": {"type": "string", "maxLength": 2048},
         },
     }

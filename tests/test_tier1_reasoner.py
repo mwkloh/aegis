@@ -345,7 +345,12 @@ def test_schemas_are_gbnf_compatible() -> None:
     `{"type": "object"}` without `properties` anywhere in the tree — all
     forms that break llama.cpp-style JSON-schema-to-grammar converters
     (lesson from hermes-agent's schema_sanitizer.py, cited in
-    docs/PLAN_PHASE_11_CAPABILITY_FLOOR.md A2)."""
+    docs/PLAN_PHASE_11_CAPABILITY_FLOOR.md A2). An object node with EMPTY
+    `properties` must also declare `"additionalProperties": True` — without
+    it, llama.cpp's json-schema-to-grammar converter compiles the node to a
+    grammar that matches ONLY `{}`, silently closing what was meant to be a
+    free-form object the moment the schema reaches Ollama's `format`
+    constraint. Nodes with non-empty `properties` are fine as-is."""
     reply_schema = _build_schema(_allowed_keys(_ask_question()))
     planner_schema = _build_planner_schema([_files_list_skill()])
 
@@ -356,6 +361,11 @@ def test_schemas_are_gbnf_compatible() -> None:
             assert "oneOf" not in node
             if node.get("type") == "object":
                 assert "properties" in node, f"bare object without properties: {node!r}"
+                if node["properties"] == {}:
+                    assert node.get("additionalProperties") is True, (
+                        "empty-properties object without additionalProperties=True "
+                        f"closes the decoder grammar to '{{}}' only: {node!r}"
+                    )
 
 
 @pytest.mark.asyncio
