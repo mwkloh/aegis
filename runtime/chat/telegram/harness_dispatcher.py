@@ -209,22 +209,35 @@ class HarnessDispatcher:
 
         Structural only — argv_hash and outcome_bytes, never args contents
         or payload bodies. `record_tool_call` is idempotent on its
-        composite key and does not raise on malformed prior shard lines;
-        this never blocks the chat turn.
+        composite key and does not raise on malformed prior shard lines.
+        Recording is telemetry, not the product: `args`/`payload` are
+        `dict[str, Any]` and may hold values `json.dumps` can't natively
+        serialize (sets, `Path`, `datetime`, ...), so serialization here
+        uses `default=str` to stay total, and the whole body is wrapped so
+        no future recording failure can ever break a chat turn.
         """
         if self._events is None:
             return
-        record_tool_call(
-            self._events,
-            imp_id=turn_id,
-            skill=skill_id,
-            tool=tool_intent.tool,
-            argv_hash=compute_argv_hash(
-                [tool_intent.tool, json.dumps(tool_intent.args, sort_keys=True)]
-            ),
-            verdict=verdict_for_result(result),
-            outcome_bytes=len(json.dumps(result.payload, ensure_ascii=False)),
-        )
+        try:
+            payload_json = json.dumps(
+                result.payload, ensure_ascii=False, default=str
+            )
+            record_tool_call(
+                self._events,
+                imp_id=turn_id,
+                skill=skill_id,
+                tool=tool_intent.tool,
+                argv_hash=compute_argv_hash(
+                    [
+                        tool_intent.tool,
+                        json.dumps(tool_intent.args, sort_keys=True, default=str),
+                    ]
+                ),
+                verdict=verdict_for_result(result),
+                outcome_bytes=len(payload_json.encode("utf-8")),
+            )
+        except Exception:
+            logger.warning("harness_dispatcher.ledger_record_failed", exc_info=True)
 
     async def dispatch(
         self,

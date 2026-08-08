@@ -1275,6 +1275,34 @@ async def test_single_shot_records_tool_error_on_failure(tmp_path: Path) -> None
     assert records[0].verdict == "tool_error"
 
 
+async def test_non_json_serializable_payload_does_not_break_dispatch_or_ledger(
+    tmp_path: Path,
+) -> None:
+    # A tool payload containing a value json.dumps can't natively serialize
+    # (a set here) must never raise out of dispatch() — recording is
+    # telemetry, not the product. The ledger still gets a record, with a
+    # verdict derived from the (successful) ToolResult and a positive
+    # outcome_bytes from the `default=str`-serialized fallback.
+    odd_harness = HarnessAdapter(tools={"files_list": lambda args: {"paths": {1, 2}}})
+    events = EventStream(tmp_path / "sessions")
+    dispatcher = _make_dispatcher(
+        classifier=_StubClassifier("list_files", 0.9),
+        harness=odd_harness,
+    )
+    dispatcher._events = events
+
+    outcome = await dispatcher.dispatch(
+        chat_id=123, user_text="list my downloads", message=_FakeMessage()
+    )
+
+    assert outcome == DispatchOutcome.FIRED
+    records = load_tool_calls(events)
+    assert len(records) == 1
+    assert records[0].tool == "files_list"
+    assert records[0].verdict == "verified"
+    assert records[0].outcome_bytes > 0
+
+
 async def test_two_dispatches_produce_two_turn_ids(tmp_path: Path) -> None:
     events = EventStream(tmp_path / "sessions")
     dispatcher = _make_dispatcher(

@@ -41,7 +41,7 @@ from datetime import UTC, datetime
 from typing import Literal
 
 from runtime.events import EventStream, EventType
-from runtime.harness.contract import ToolResult
+from runtime.harness.contract import ToolResult as InProcessToolResult
 from runtime.tools.harness import ToolVerdict
 
 ToolOutcome = Literal["ok", "skipped_idempotent"]
@@ -76,7 +76,7 @@ def compute_argv_hash(argv: Iterable[str]) -> str:
     return hashlib.sha256(joined.encode("utf-8")).hexdigest()[:16]
 
 
-def verdict_for_result(result: ToolResult) -> ToolVerdict:
+def verdict_for_result(result: InProcessToolResult) -> ToolVerdict:
     """Map an in-process HarnessAdapter result onto the verdict vocabulary."""
     return "verified" if result.status == "ok" else "tool_error"
 
