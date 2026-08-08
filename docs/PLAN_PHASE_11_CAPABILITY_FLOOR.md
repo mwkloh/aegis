@@ -318,12 +318,19 @@ New branch in the loop, before the `tool_call` handling:
 
 ```python
 if plan.kind == "task_complete":
-    summary = plan.summary or ""
+    summary = (plan.summary or "").strip() or "Done."
     if not history:
         break  # nothing was done; same as respond-with-no-history → PASS
     gated = self._gate_completion(summary, history, turn_id)
     return _ChainResult(history=history, completion_summary=gated)
 ```
+
+(The `"Done."` fallback matters at 2B scale: `summary` is optional in the
+schema, and an empty reply string would be rejected by the Telegram Bot API
+and raise out of the handler. In `_gate_completion`, `failed` must be the
+set difference `{failed tools} - verified` — a tool that failed and then
+recovered on a retry within the same turn is not a failure, and branding it
+one would make the anti-lying gate itself lie.)
 
 `_ChainResult` grows `completion_summary: str | None = None`. The gate:
 
@@ -705,3 +712,12 @@ Each step ships independently and leaves the system working:
    with the GBNF pin but dead code today (every `requires_tier1` skill has
    non-empty `args_schema.properties`). Fix to an explicitly-open shape the
    next time that function is touched.
+7. **Ledger idempotency key excludes the verdict.**
+   `record_tool_call`'s composite key is `(session_id, imp_id, skill, tool,
+   argv_hash)` — a fail→succeed retry with *identical* args persists only
+   the first (failed) verdict; the success is deduped as
+   `skipped_idempotent`. The gate compensates (`failed - verified` set
+   difference), but this MUST be resolved (key gains the verdict, or
+   last-write-wins semantics) before the hard-block upgrade in open
+   question #3 is enabled — blocking on a stale failed verdict would reject
+   legitimately-completed turns.
