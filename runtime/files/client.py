@@ -169,16 +169,26 @@ class FilesClient:
         Parent directories are NOT created — writing into a missing directory
         is an error (the OS raises `FileNotFoundError`), not a mkdir. Content
         is capped at `MAX_WRITE_BYTES` (encoded size) — a chat-driven write
-        has no business being bigger.
+        has no business being bigger. Written atomically via a tmp sibling
+        + rename so a crash mid-write never truncates the original nor
+        leaves a half-file at `path` (mirrors the idiom in
+        `runtime/skills/installer.py`).
         """
         filepath = self._validate(path)
         encoded = content.encode("utf-8")
         if len(encoded) > MAX_WRITE_BYTES:
             raise FileTooBig(
-                f"content is {len(encoded)} bytes (max {MAX_WRITE_BYTES})"
+                f"'{filepath}' content is {len(encoded)} bytes (max {MAX_WRITE_BYTES})"
             )
-        filepath.write_text(content, encoding="utf-8")
-        return {"path": str(filepath), "bytes_written": len(encoded)}
+        existed = filepath.exists()
+        tmp = filepath.with_suffix(filepath.suffix + ".tmp")
+        try:
+            tmp.write_bytes(encoded)
+            tmp.replace(filepath)
+        except OSError:
+            tmp.unlink(missing_ok=True)
+            raise
+        return {"path": str(filepath), "bytes_written": len(encoded), "overwrote": existed}
 
     def move(self, src: str, dst: str) -> None:
         src_path = self._validate(src)

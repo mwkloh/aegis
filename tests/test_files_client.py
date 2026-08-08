@@ -260,7 +260,7 @@ def test_write_file_creates_file(client: FilesClient, tmp_path: Path) -> None:
     p = tmp_path / "new.txt"
     result = client.write_file(str(p), "hello")
     assert p.read_text() == "hello"
-    assert result == {"path": str(p), "bytes_written": len(b"hello")}
+    assert result == {"path": str(p), "bytes_written": len(b"hello"), "overwrote": False}
 
 
 def test_write_file_missing_parent_dir_raises(client: FilesClient, tmp_path: Path) -> None:

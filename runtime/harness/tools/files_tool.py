@@ -1,4 +1,5 @@
-"""Harness tool callables for read-only filesystem access."""
+"""Harness tool callables for filesystem access (read-only ops, plus the
+guarded destructive `files_write`)."""
 from __future__ import annotations
 
 import functools
@@ -64,7 +65,8 @@ def make_files_tools(
 
     def files_write(args: dict[str, Any]) -> dict[str, Any]:
         result = client.write_file(args["path"], args["content"])
-        return {"result": f"Wrote {result['bytes_written']} bytes to {result['path']}."}
+        suffix = " (overwrote existing file)" if result.get("overwrote") else ""
+        return {"result": f"Wrote {result['bytes_written']} bytes to {result['path']}.{suffix}"}
 
     return {
         "files_list": _wrap(files_list),

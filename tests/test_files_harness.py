@@ -23,7 +23,9 @@ class _StubClient:
             created=_NOW, modified=_NOW, accessed=_NOW, mode="100644",
         )
         self.search_results: list[str] = []
-        self.write_result: dict[str, Any] = {"path": "/x/written.txt", "bytes_written": 7}
+        self.write_result: dict[str, Any] = {
+            "path": "/x/written.txt", "bytes_written": 7, "overwrote": False,
+        }
         self.raise_on_next: Exception | None = None
 
     def _maybe_raise(self) -> None:
@@ -106,10 +108,22 @@ def test_files_search_no_matches(tools: dict) -> None:
 
 
 def test_files_write_returns_confirmation(tools: dict, stub: _StubClient) -> None:
-    stub.write_result = {"path": "/x/notes.txt", "bytes_written": 42}
+    stub.write_result = {"path": "/x/notes.txt", "bytes_written": 42, "overwrote": False}
     result = tools["files_write"]({"path": "/x/notes.txt", "content": "hello"})
     assert "42" in result["result"]
     assert "/x/notes.txt" in result["result"]
+
+
+def test_files_write_signals_overwrite(tools: dict, stub: _StubClient) -> None:
+    stub.write_result = {"path": "/x/notes.txt", "bytes_written": 42, "overwrote": True}
+    result = tools["files_write"]({"path": "/x/notes.txt", "content": "hello"})
+    assert "overwrote existing file" in result["result"]
+
+
+def test_files_write_no_overwrite_signal_on_new_file(tools: dict, stub: _StubClient) -> None:
+    stub.write_result = {"path": "/x/notes.txt", "bytes_written": 42, "overwrote": False}
+    result = tools["files_write"]({"path": "/x/notes.txt", "content": "hello"})
+    assert "overwrote" not in result["result"]
 
 
 def test_files_write_path_denied_raises_runtime_error(tools: dict, stub: _StubClient) -> None:

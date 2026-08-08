@@ -28,6 +28,7 @@ def test_write_inside_root_succeeds(client: FilesClient, tmp_path: Path) -> None
     assert result["bytes_written"] == len(content.encode("utf-8"))
     # Sanity: the non-ASCII content must actually differ in char vs byte length.
     assert result["bytes_written"] != len(content)
+    assert result["overwrote"] is False
 
 
 def test_write_overwrite_existing_file_succeeds(client: FilesClient, tmp_path: Path) -> None:
@@ -38,6 +39,38 @@ def test_write_overwrite_existing_file_succeeds(client: FilesClient, tmp_path: P
 
     assert p.read_text(encoding="utf-8") == "new content"
     assert result["bytes_written"] == len(b"new content")
+    assert result["overwrote"] is True
+
+
+# ── Atomic write (tmp sibling + rename) ─────────────────────────────────────
+
+def test_write_leaves_no_tmp_sibling_after_success(client: FilesClient, tmp_path: Path) -> None:
+    p = tmp_path / "clean.txt"
+    client.write_file(str(p), "content")
+
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    assert not tmp.exists()
+
+
+def test_write_replace_failure_preserves_original_and_cleans_tmp(
+    client: FilesClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    p = tmp_path / "protected.txt"
+    p.write_text("original content", encoding="utf-8")
+
+    def _boom(self: Path, target: object) -> Path:
+        raise OSError("simulated crash mid-replace")
+
+    monkeypatch.setattr(Path, "replace", _boom)
+
+    with pytest.raises(OSError, match="simulated crash mid-replace"):
+        client.write_file(str(p), "new content")
+
+    # A crash during the rename must not truncate/destroy the original...
+    assert p.read_text(encoding="utf-8") == "original content"
+    # ...and must not leave a half-written tmp file behind.
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    assert not tmp.exists()
 
 
 def test_write_tilde_expansion(
