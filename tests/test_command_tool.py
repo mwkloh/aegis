@@ -179,3 +179,14 @@ def test_flags_and_bare_patterns_are_not_treated_as_paths(tmp_path: Path) -> Non
 
     assert out["verdict"] == "verified"
     assert "TOKEN" in out["stdout_tail"]
+
+
+def test_relative_path_with_slash_arg_is_blocked(tmp_path: Path) -> None:
+    # `logs/app.log` is path-shaped (contains '/') but not absolute or
+    # `~`-prefixed, so FilesClient._validate rejects it outright — it never
+    # resolves against the process cwd. Pinned so a future loosening of
+    # this over-block doesn't silently reopen a containment gap.
+    run_command = make_command_tool(CommandsConfig(), FilesClient(allowed_roots=[tmp_path]))
+
+    with pytest.raises(PermissionError):
+        run_command({"argv": ["cat", "logs/app.log"]})

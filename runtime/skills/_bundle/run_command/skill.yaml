@@ -18,7 +18,9 @@ args_schema:
         maxLength: 512
       description: >-
         Command as an argv list, e.g. ["ls", "-la", "/Users/michaelloh/Desktop"].
-        The first element must be an allowed binary name.
+        The first element must be an allowed binary name. Path arguments must
+        be absolute (/...) or ~-prefixed; relative paths and bare patterns
+        containing '/' are rejected by the sandbox.
   required:
     - argv
 requires_tier1: true

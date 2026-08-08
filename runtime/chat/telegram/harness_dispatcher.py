@@ -182,8 +182,17 @@ def _history_verified_tools(history: list[tuple[ToolIntent, ToolResult]]) -> set
     branches) and `dispatch()`'s respond-path verdict gate — a failed tool
     must never count as "verified" regardless of which of those call sites
     is asking (Phase 11 whole-branch review, C3/I3).
+
+    Uses `verdict_for_result` rather than a bare `res.status == "ok"` check
+    (Phase 11 review follow-up) — some tools report a soft failure inside
+    an "ok" status (e.g. `run_command`'s `payload["verdict"] ==
+    "exit_nonzero"` for a non-zero exit). A raw status check would still
+    count that tool as verified here even though C4 already teaches the
+    ledger path not to.
     """
-    return {call.tool for call, res in history if res.status == "ok"}
+    return {
+        call.tool for call, res in history if verdict_for_result(res) == "verified"
+    }
 
 
 def _clip(text: str) -> str:

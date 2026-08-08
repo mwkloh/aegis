@@ -1076,6 +1076,58 @@ async def test_multi_step_respond_path_verified_tools_excludes_failed_tool() -> 
     assert "searched the files" in message.replies[0]
 
 
+async def test_multi_step_respond_path_verified_tools_excludes_soft_failed_run_command() -> None:
+    """A tool can also "fail" without raising: `run_command` never raises on
+    a non-zero exit — it returns `status="ok"` with its OWN
+    `payload["verdict"] == "exit_nonzero"`. `_history_verified_tools` must
+    defer to `verdict_for_result` (which already understands the payload
+    verdict via C4) rather than a bare `res.status == "ok"` check, or this
+    soft-failure shape slips past the respond-path gate the same way a
+    raised exception used to (Phase 11 review follow-up to C4/I3)."""
+    registry, _ = _two_skill_setup()
+
+    def _soft_fail_search(args: dict[str, Any]) -> dict[str, Any]:
+        # run_command-shaped: the harness sees status="ok" (it ran to
+        # completion, nothing raised) but the tool's own verdict says it
+        # failed.
+        return {
+            "argv": ["grep", "nope", "/tmp/haystack.txt"],
+            "exit_code": 1,
+            "stdout_tail": "",
+            "verdict": "exit_nonzero",
+        }
+
+    harness = _RecordingHarness(
+        tools={
+            "files_search": _soft_fail_search,
+            "files_read": lambda args: {"content": "hello"},
+        }
+    )
+    runner = _StubPlanRunner(
+        plan_steps=[
+            PlanStep(kind="tool_call", tool="files_search", args={"glob": "*.md"}),
+            PlanStep(kind="respond"),
+        ],
+    )
+    rogue = _StubSynthesizer(reply="Done — I searched the files for you.")
+    dispatcher = _make_loop_dispatcher(
+        runner=runner, registry=registry, harness=harness, synthesizer=rogue
+    )
+    message = _FakeMessage()
+
+    outcome = await dispatcher.dispatch(
+        chat_id=1, user_text="find md", message=message
+    )
+
+    assert outcome == DispatchOutcome.FIRED
+    assert len(message.replies) == 1
+    # files_search "succeeded" (status="ok") but its own verdict says
+    # exit_nonzero — a status-only check would still count it "verified"
+    # and let "I searched" through unflagged.
+    assert message.replies[0].startswith(UNVERIFIED_BANNER)
+    assert "searched the files" in message.replies[0]
+
+
 # ---------------------------------------------------------------------------
 # Destructive-tool guard — Step 4 of docs/PLAN_MULTI_STEP_AGENT_LOOP.md.
 # Allowed at step 1 (operator's explicit opening request); intercepted at
