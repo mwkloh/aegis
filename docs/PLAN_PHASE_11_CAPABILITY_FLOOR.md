@@ -550,7 +550,11 @@ def make_command_tool(cfg: CommandsConfig) -> Callable[[dict[str, Any]], dict[st
             isinstance(t, str) for t in argv
         ):
             raise ValueError("argv must be a non-empty list of strings")
-        binary = Path(argv[0]).name
+        binary = argv[0]
+        if "/" in binary or binary != Path(binary).name:
+            raise PermissionError(
+                f"argv[0] must be a bare binary name, not a path: {binary!r}"
+            )
         if binary not in cfg.allowed_binaries:
             raise PermissionError(f"binary not allowlisted: {binary!r}")
         proc = subprocess.run(          # noqa: S603 — argv list, shell=False
@@ -736,3 +740,8 @@ Each step ships independently and leaves the system working:
    last-write-wins semantics) before the hard-block upgrade in open
    question #3 is enabled — blocking on a stale failed verdict would reject
    legitimately-completed turns.
+8. **files_write resets permission bits on overwrite.** The atomic
+   tmp+rename path creates a fresh inode, so a `0o600` file comes back
+   `0o644` (umask default) after an overwrite. One-line fix
+   (`tmp.chmod(filepath.stat().st_mode)` before `replace()` when `existed`)
+   if it ever matters for the vault; noted, not fixed this phase.
