@@ -1332,4 +1332,44 @@ async def test_events_none_by_default_does_not_record() -> None:
         chat_id=123, user_text="list my downloads", message=message
     )
     assert outcome == DispatchOutcome.FIRED
+
+
+# ---------------------------------------------------------------------------
+# task_complete plan kind (Track C, C1) — schema + prompt only.
+#
+# C1 does NOT change `_run_multi_step`. This test pins the pre-C2 safety
+# property from docs/PLAN_PHASE_11_CAPABILITY_FLOOR.md's rollout note: the
+# existing `plan.kind != "tool_call" or plan.tool is None` break condition
+# already treats `task_complete` exactly like `respond` (both have
+# `tool=None`), so a planner that starts emitting `task_complete` cannot
+# change dispatch behavior until the completion gate (C2) lands.
+# ---------------------------------------------------------------------------
+
+
+async def test_multi_step_task_complete_breaks_loop_like_respond() -> None:
+    """Planner: search → task_complete. Loop breaks exactly as it would for
+    `respond`; chain synthesis still runs from the 1-step accumulated
+    history."""
+    runner = _StubPlanRunner(
+        plan_steps=[
+            PlanStep(kind="tool_call", tool="files_search", args={"glob": "*.md"}),
+            PlanStep(kind="task_complete", summary="Found the markdown files."),
+        ],
+    )
+    registry, harness = _two_skill_setup()
+    dispatcher = _make_loop_dispatcher(
+        runner=runner, registry=registry, harness=harness
+    )
+
+    outcome = await dispatcher.dispatch(
+        chat_id=1, user_text="find md files", message=_FakeMessage()
+    )
+
+    assert outcome == DispatchOutcome.FIRED
+    assert len(harness.calls) == 1
+    # Loop broke on task_complete — no third plan_next call was made.
+    assert len(runner.plan_next_calls) == 2
+    # Synthesis saw exactly the one tool call's history (pre-C2 safety
+    # property: task_complete's summary is NOT trusted or surfaced yet).
+    assert len(runner.plan_next_calls[1]["history"]) == 1
     assert dispatcher._events is None

@@ -18,11 +18,13 @@ Tool calls already made on this turn (oldest → newest), with their results:
 Operator request:
 {user_text}
 
-Respond with EXACTLY one of these two JSON shapes and nothing else:
+Respond with EXACTLY one of these three JSON shapes and nothing else:
 
   {{"kind": "tool_call", "tool": "<tool_id>", "args": {{<field>: <value>, ...}}}}
 
   {{"kind": "respond"}}
+
+  {{"kind": "task_complete", "summary": "<one sentence stating what was done>"}}
 
 Rules:
 - "tool" must be one of the tool ids listed above. Do not invent tools.
@@ -35,3 +37,7 @@ Rules:
   (`files_delete`, `files_move`, `files_write`) without explicit operator
   confirmation in the request.
 - One step at a time. Do not pack multiple actions into one reply.
+- When the user's request has been satisfied by the tool calls above, emit
+  {{"kind": "task_complete", "summary": "<one sentence stating what was done>"}}.
+  Only state things the tool results above actually show. If you have not
+  called any tool yet, use "respond" instead — never "task_complete".
