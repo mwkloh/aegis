@@ -18,13 +18,13 @@ from __future__ import annotations
 
 import os
 import subprocess
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 
 def _ts() -> str:
     """Return a UTC timestamp prefix for log lines."""
-    return datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(tz=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def main() -> int:
@@ -62,7 +62,7 @@ def main() -> int:
     cmd = ["rsync", "-av", "--delete", f"{source}/", f"{dest}/"]
     print(f"[{_ts()}] Running: {' '.join(cmd)}")
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
 
     if result.stdout:
         print(result.stdout, end="")

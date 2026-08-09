@@ -21,7 +21,7 @@ from runtime.config import get_config
 
 # Re-export for test patching — tests patch serve.build_application directly.
 try:
-    from runtime.chat.telegram import build_application  # noqa: F401
+    from runtime.chat.telegram import build_application
 except ImportError:  # pragma: no cover — the real check is inside main()
     build_application = None  # type: ignore[assignment]
 
@@ -61,7 +61,7 @@ def main() -> int:
 
     # --- import the Telegram layer (lazy: avoids crash on bare venv) ---
     # Use the module-level name so tests can patch serve.build_application.
-    import runtime.serve as _self  # noqa: PLC0415
+    import runtime.serve as _self  # noqa: PLC0415, PLW0406
 
     _build = _self.build_application
     if _build is None:
@@ -80,7 +80,7 @@ def main() -> int:
             exc,
         )
         return 2
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.exception("build_application failed: %s", exc)
         return 1
 
@@ -90,7 +90,7 @@ def main() -> int:
     except KeyboardInterrupt:
         logger.info("interrupted — shutting down cleanly")
         return 0
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.exception("fatal error during polling: %s", exc)
         return 1
 

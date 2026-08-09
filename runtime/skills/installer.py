@@ -59,7 +59,7 @@ class InstallOutcome:
         return self.verdict in ("staged", "confirmed")
 
 
-def stage_skill(  # noqa: PLR0911 - one return per distinct rejection verdict
+def stage_skill(
     source: Path,
     *,
     staging_dir: Path,

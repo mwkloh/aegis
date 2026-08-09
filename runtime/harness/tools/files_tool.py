@@ -16,7 +16,9 @@ def make_files_tools(
 ) -> dict[str, Callable[[dict[str, Any]], dict[str, Any]]]:
     """Return the six harness callables closed over `client`."""
 
-    def _wrap(fn: Callable[[dict[str, Any]], dict[str, Any]]) -> Callable[[dict[str, Any]], dict[str, Any]]:
+    def _wrap(
+        fn: Callable[[dict[str, Any]], dict[str, Any]],
+    ) -> Callable[[dict[str, Any]], dict[str, Any]]:
         @functools.wraps(fn)
         def wrapper(args: dict[str, Any]) -> dict[str, Any]:
             try:

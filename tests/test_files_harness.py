@@ -55,12 +55,12 @@ class _StubClient:
         return self.write_result
 
 
-@pytest.fixture()
+@pytest.fixture
 def stub() -> _StubClient:
     return _StubClient()
 
 
-@pytest.fixture()
+@pytest.fixture
 def tools(stub: _StubClient) -> dict[str, Any]:
     return make_files_tools(stub)  # type: ignore[arg-type]
 

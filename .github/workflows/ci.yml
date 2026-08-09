@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# One in-flight run per branch; a new push cancels the previous.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: lint · tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install runtime + dev deps
+        run: uv sync --extra dev
+
+      # Blocking gates — all green as of the ruff/bandit cleanup.
+      - name: Lint (ruff + bandit)
+        run: make lint
+
+      - name: Unit tests
+        run: make test-unit
+
+      - name: End-to-end tests
+        run: make test-e2e
+
+      # Non-blocking until the pre-existing mypy --strict errors are cleared
+      # (tracked in docs/MAINTAINING.md). Runs for visibility; flip to blocking
+      # by removing continue-in-error once `make type` is green.
+      - name: Type check (mypy --strict) — informational
+        run: make type
+        continue-on-error: true

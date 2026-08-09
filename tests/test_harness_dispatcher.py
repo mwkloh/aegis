@@ -10,8 +10,7 @@ from typing import Any
 
 import pytest
 
-from runtime.chat.memory.tier1 import Tier1Loader, Tier1Snapshot
-from runtime.chat.memory.tier3 import Tier3Store
+from runtime.chat.memory.tier1 import Tier1Snapshot
 from runtime.chat.reply_verdict import UNVERIFIED_BANNER
 from runtime.chat.telegram.harness_dispatcher import DispatchOutcome, HarnessDispatcher
 from runtime.events import EventStream
@@ -21,7 +20,7 @@ from runtime.harness.contract import ToolIntent, ToolResult
 from runtime.harness.tools.files_tool import make_files_tools
 from runtime.intent.classifier import IntentClassification
 from runtime.llm.clients.base import ChatResponse
-from runtime.reasoning.skill_runner import PlanStep, SkillRunner
+from runtime.reasoning.skill_runner import PlanStep
 from runtime.skills.registry import SkillDescriptor, SkillRegistry
 from runtime.tools.record import load_tool_calls
 

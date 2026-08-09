@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from runtime.config import AegisConfig, FilesConfig, _coerce_files, reset_config
+from runtime.config import AegisConfig, FilesConfig, _coerce_files
 
 pytestmark = pytest.mark.unit
 

@@ -108,10 +108,11 @@ git push -u origin <branch>
 gh pr create --base main --title "…" --body "…"   # Summary + Test Plan
 ```
 
-There's no CI on the repo yet (see §4), so **the PR body's test plan is the
-evidence** — state the pytest result (unit + e2e) and baseline lint/type parity,
-and check off the manual smoke steps that automation can't cover (below). Merge with `gh pr merge <n> --merge
---delete-branch` (or the GitHub UI). Then:
+CI runs `make lint` + unit + e2e on every PR (see §4); mypy is not yet
+blocking, so **the PR body's test plan still carries evidence CI can't** —
+note the gate result and check off the manual smoke steps automation can't
+cover (below). Merge with `gh pr merge <n> --merge --delete-branch` (or the
+GitHub UI). Then:
 
 ```bash
 git checkout main && git pull --ff-only
@@ -198,9 +199,14 @@ style — an `## [Unreleased]` section you append to as you merge PRs, renamed t
 These are known gaps, not oversights — add them when the cost of doing without
 them exceeds the cost of maintaining them:
 
-- **No CI.** Gates run locally via `make test`. A GitHub Actions workflow
-  running the same target on every PR is the obvious next step; until then the
-  PR test-plan checkbox is the contract.
+- **CI runs a partial gate.** `.github/workflows/ci.yml` runs `make lint`
+  (ruff + bandit), `make test-unit`, and `make test-e2e` as **blocking** checks
+  on every PR and push to `main` — these are all green. `make type`
+  (mypy --strict) runs **non-blocking** because ~7 pre-existing errors remain
+  (optional-dependency typing in `serve.py`, defensive guards in the
+  dispatcher). Clearing those and removing `continue-on-error` from the mypy
+  step turns the whole `make test` into an enforced gate — the highest-value
+  next cleanup.
 - **No required reviewers.** Solo repo — you approve your own work. The
   discipline substitute is the branch → PR → self-review flow (and, for larger
   work, the multi-agent review pattern below), not a rubber-stamp merge.

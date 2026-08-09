@@ -21,11 +21,30 @@ select = [
 ignore = [
   "PLR0913",  # too many arguments — pydantic models trip this
   "S101",     # assert used (pytest)
+  # Cyclomatic-complexity thresholds are opinionated; the dispatcher/handler
+  # entry points (dispatch, _run_multi_step, the Telegram handlers) are
+  # legitimately branchy. Contorting them to hit an arbitrary count is worse
+  # than the count. The dispatch() decomposition is tracked separately.
+  "PLR0911",  # too many return statements
+  "PLR0912",  # too many branches
+  "PLR0915",  # too many statements
 ]
 
 [lint.per-file-ignores]
-# subprocess use (S603/S607) is intentional infrastructure in tests + scripts
-"tests/**" = ["S101", "S105", "S106", "S108", "PLR2004", "S603", "S607"]
+# Tests intentionally break rules that make sense for library code:
+#   S1xx  — subprocess / hardcoded test tokens / temp paths are fixture infra
+#   PLR2004 — magic numbers are fine in assertions
+#   PLC0415 — local imports isolate module state and support patch() clarity
+#   PLR0402 — `import x as x` is a deliberate patch-target idiom
+#   E402  — imports after per-test env/sys.path setup
+#   PT011 — pytest.raises without match= is acceptable in narrow tests
+#   PT018 — composite asserts are readable in tests
+#   ASYNC240/251, B008 — async/default-arg niceties don't matter in tests
+"tests/**" = [
+  "S101", "S105", "S106", "S107", "S108", "PLR2004", "S603", "S607",
+  "PLC0415", "PLR0402", "E402", "PT011", "PT018",
+  "ASYNC240", "ASYNC251", "B008",
+]
 "scripts/**" = ["S603", "S607"]
 
 [lint.isort]

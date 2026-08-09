@@ -228,7 +228,10 @@ def test_blob_to_vec_rejects_dim_mismatch() -> None:
 
 def test_embedder_protocol_recognizes_fake_and_bgem3() -> None:
     assert isinstance(FakeEmbedder(), Embedder)
-    assert isinstance(Bgem3Embedder(), Embedder)
+    # Pass expected_dim so the protocol check never touches the live model:
+    # Bgem3Embedder.dim raises until the first embed() call, and the isinstance
+    # check accesses `dim`. Without a cached bge-m3 (e.g. in CI) that raises.
+    assert isinstance(Bgem3Embedder(expected_dim=1024), Embedder)
 
 
 # --- episodic insert + search ---------------------------------------------

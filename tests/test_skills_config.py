@@ -1,9 +1,6 @@
 """SkillsConfig — catalog directory + bundle-source knobs."""
 from __future__ import annotations
 
-import os
-from pathlib import Path
-
 from runtime.config import AegisConfig, SkillsConfig
 
 

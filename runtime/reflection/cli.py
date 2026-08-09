@@ -17,7 +17,6 @@ import argparse
 import asyncio
 import sys
 from datetime import date, datetime
-from pathlib import Path
 
 from runtime.config import AegisConfig, get_config
 from runtime.events import EventStream, EventType
@@ -32,6 +31,7 @@ from .event_reader import read_window
 from .patterns import detect_all
 from .proposals import draft
 from .writer import write_patterns, write_proposals
+
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(sys.argv[1:] if argv is None else argv)

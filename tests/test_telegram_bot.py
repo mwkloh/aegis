@@ -419,7 +419,7 @@ async def test_route_chat_dispatcher_path_shows_typing_indicator() -> None:
         async def dispatch(
             self, *, chat_id: int, user_text: str, message: Any, reply: Any = None
         ) -> Any:
-            from runtime.chat.telegram.harness_dispatcher import DispatchOutcome  # noqa: PLC0415
+            from runtime.chat.telegram.harness_dispatcher import DispatchOutcome
             assert reply is not None, "route_chat must supply a reply callback"
             await reply("tool-use answer")
             return DispatchOutcome.FIRED
@@ -637,7 +637,7 @@ def test_skill_arg_resolver_fills_vault_root(tmp_path: Path) -> None:
     # Resolver needs a registry to fill {skill_dir}; without one the
     # descriptor resolves to None. Supply one via a fake that returns
     # a tmp dir for the morning_brief id.
-    from runtime.skills.registry import SkillRegistry as _Reg  # noqa: PLC0415
+    from runtime.skills.registry import SkillRegistry as _Reg
 
     reg = _Reg([descriptor], source_dirs={"morning_brief": tmp_path / "skills" / "morning_brief"})
     resolve = build_skill_arg_resolver(
@@ -718,9 +718,9 @@ def test_skill_arg_resolver_returns_none_for_descriptor_without_tools() -> None:
 def test_build_intent_router_loads_real_catalog(tmp_path: Path) -> None:
     # Seed the bundle into a scratch catalog so the loader sees morning_brief
     # (which lives in runtime/skills/_bundle/ post-workspace-skills migration).
-    from pathlib import Path  # noqa: PLC0415
+    from pathlib import Path
 
-    from runtime.skills.bootstrap import seed_builtin_skills  # noqa: PLC0415
+    from runtime.skills.bootstrap import seed_builtin_skills
 
     repo_root = Path(__file__).resolve().parent.parent
     bundle = repo_root / "runtime" / "skills" / "_bundle"
@@ -1129,7 +1129,7 @@ def test_build_application_threads_brief_script_into_long_runner(
         def build(self) -> _FakeApp:
             return _FakeApp()
 
-    import telegram.ext as ptb_ext  # noqa: PLC0415
+    import telegram.ext as ptb_ext
 
     monkeypatch.setattr(ptb_ext, "ApplicationBuilder", _FakeBuilder)
 
@@ -1575,7 +1575,7 @@ def test_build_application_spawns_scheduler_task(
             return app
 
     # Patch only the SDK entry point reached via the lazy import.
-    import telegram.ext as ptb_ext  # noqa: PLC0415
+    import telegram.ext as ptb_ext
 
     monkeypatch.setattr(ptb_ext, "ApplicationBuilder", _FakeBuilder)
 
@@ -1635,7 +1635,7 @@ async def test_build_application_post_init_starts_scheduler(
             captured["app"] = app
             return app
 
-    import telegram.ext as ptb_ext  # noqa: PLC0415
+    import telegram.ext as ptb_ext
 
     monkeypatch.setattr(ptb_ext, "ApplicationBuilder", _FakeBuilder)
     build_application(cfg)
@@ -1687,7 +1687,7 @@ def test_build_application_skips_scheduler_when_factory_returns_none(
             captured["app"] = app
             return app
 
-    import telegram.ext as ptb_ext  # noqa: PLC0415
+    import telegram.ext as ptb_ext
 
     monkeypatch.setattr(ptb_ext, "ApplicationBuilder", _FakeBuilder)
     build_application(cfg)
@@ -1706,7 +1706,7 @@ def test_build_application_skips_scheduler_when_factory_returns_none(
 
 
 def test_default_command_help_includes_cron() -> None:
-    from runtime.chat.telegram.handlers import DEFAULT_COMMAND_HELP  # noqa: PLC0415
+    from runtime.chat.telegram.handlers import DEFAULT_COMMAND_HELP
 
     assert "/cron" in DEFAULT_COMMAND_HELP
     desc = DEFAULT_COMMAND_HELP["/cron"]

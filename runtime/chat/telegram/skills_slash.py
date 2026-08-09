@@ -40,7 +40,7 @@ def skills_handler(
 ) -> Handler:
     """Factory for the dispatcher. Closes over the loader + state deps."""
 
-    def _handle(msg: IncomingMessage, cmd: ParsedCommand) -> str:  # noqa: PLR0911 - one return per sub-verb
+    def _handle(msg: IncomingMessage, cmd: ParsedCommand) -> str:
         if not cmd.args:
             return _USAGE
         sub = cmd.args[0].strip().lower()

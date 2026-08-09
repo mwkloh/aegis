@@ -28,7 +28,7 @@ doctor:  ## Verify Ollama, models, ~/.aegis/ layout, and pinned digests
 
 lint:  ## Run ruff + bandit
 	$(VENV)/bin/ruff check .
-	$(VENV)/bin/bandit -q -r runtime memory scripts -x tests
+	$(VENV)/bin/bandit -q -c pyproject.toml -r runtime memory scripts -x tests
 
 type:  ## Run mypy --strict
 	$(VENV)/bin/mypy runtime memory scripts
@@ -42,7 +42,7 @@ test-e2e:  ## End-to-end walking-skeleton tests
 	$(VENV)/bin/pytest -m e2e tests/
 
 security:  ## Bandit + Semgrep (Semgrep already on system)
-	$(VENV)/bin/bandit -q -r runtime memory scripts -x tests
+	$(VENV)/bin/bandit -q -c pyproject.toml -r runtime memory scripts -x tests
 	semgrep --config auto runtime memory scripts || true
 
 run:  ## Launch the CLI walking skeleton

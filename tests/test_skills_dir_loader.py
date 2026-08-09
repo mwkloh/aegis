@@ -3,8 +3,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from runtime.chat.telegram.bot import build_skill_arg_resolver
 from runtime.config import AegisConfig
 from runtime.skills.registry import SkillRegistry

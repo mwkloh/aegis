@@ -234,7 +234,10 @@ DEFAULT_COMMAND_HELP: dict[str, str] = {
         "Scheduler: /cron add \"<cron>\" <skill> [args...] | list | rm <id> "
         "| pause <id> | resume <id>."
     ),
-    "/board": "Fan a question out to configured panelists and save the full board to a file. Use -research to pre-fetch Brave Search context before fan-out.",
+    "/board": (
+        "Fan a question out to configured panelists and save the full board to a file. "
+        "Use -research to pre-fetch Brave Search context before fan-out."
+    ),
     "/files": (
         "Filesystem access: ls [-r], read, stat, find, mv, cp, rm [--confirm], mkdir, open. "
         "Paths sandboxed to config files.allowed_roots."
@@ -425,7 +428,9 @@ def health_handler(
 
         if age_seconds > _HEALTH_STALE_SECONDS:
             status = "STALE"
-            status_note = f"  ⚠️ Last tick was {round(age_seconds)}s ago — scheduler may have stopped."
+            status_note = (
+                f"  ⚠️ Last tick was {round(age_seconds)}s ago — scheduler may have stopped."
+            )
         else:
             status = "OK"
             status_note = ""

@@ -5,6 +5,9 @@ from runtime.chat.telegram.dispatch import Handler, IncomingMessage, ParsedComma
 from runtime.files.client import FilesClient, FileTooBig, PathDenied
 
 _MAX_READ_CHARS = 3500
+_FIND_MIN_ARGS = 2  # <dir> <pattern>
+_MV_MIN_ARGS = 2  # <src> <dst>
+_CP_MIN_ARGS = 2  # <src> <dst>
 _USAGE = """\
 Usage: /files <sub-command>
   ls [-r] <path>           list directory
@@ -27,15 +30,24 @@ def files_handler(*, client: FilesClient) -> Handler:
         sub = cmd.args[0].strip().lower()
         tail = cmd.args[1:]
         try:
-            if sub == "ls":    return _ls(client, tail)
-            if sub == "read":  return _read(client, tail)
-            if sub == "stat":  return _stat(client, tail)
-            if sub == "find":  return _find(client, tail)
-            if sub == "mv":    return _mv(client, tail)
-            if sub == "cp":    return _cp(client, tail)
-            if sub == "rm":    return _rm(client, tail)
-            if sub == "mkdir": return _mkdir(client, tail)
-            if sub == "open":  return _open(client, tail)
+            if sub == "ls":
+                return _ls(client, tail)
+            if sub == "read":
+                return _read(client, tail)
+            if sub == "stat":
+                return _stat(client, tail)
+            if sub == "find":
+                return _find(client, tail)
+            if sub == "mv":
+                return _mv(client, tail)
+            if sub == "cp":
+                return _cp(client, tail)
+            if sub == "rm":
+                return _rm(client, tail)
+            if sub == "mkdir":
+                return _mkdir(client, tail)
+            if sub == "open":
+                return _open(client, tail)
             return _USAGE
         except PathDenied as exc:
             return f"Access denied: {exc}"
@@ -102,21 +114,21 @@ def _stat(client: FilesClient, args: tuple[str, ...]) -> str:
 
 
 def _find(client: FilesClient, args: tuple[str, ...]) -> str:
-    if len(args) < 2:
+    if len(args) < _FIND_MIN_ARGS:
         return "Usage: /files find <dir> <pattern>"
     matches = client.search(args[0], args[1])
     return "\n".join(matches) if matches else "No matches."
 
 
 def _mv(client: FilesClient, args: tuple[str, ...]) -> str:
-    if len(args) < 2:
+    if len(args) < _MV_MIN_ARGS:
         return "Usage: /files mv <src> <dst>"
     client.move(args[0], args[1])
     return f"Moved: {args[0]} → {args[1]}"
 
 
 def _cp(client: FilesClient, args: tuple[str, ...]) -> str:
-    if len(args) < 2:
+    if len(args) < _CP_MIN_ARGS:
         return "Usage: /files cp <src> <dst>"
     client.copy(args[0], args[1])
     return f"Copied: {args[0]} → {args[1]}"

@@ -22,7 +22,7 @@ Design pins:
   the UTC offset it wants explicitly; no per-job `timezone` column.
   Defaults below target NZ (UTC+12/+13): morning_brief at 20:00 UTC
   (08:00 NZST / 09:00 NZDT); maintenance triad at 15:00/15:15/15:30
-  UTC (03:00–03:30 NZST). The 15-minute spread keeps busy-skip
+  UTC (03:00-03:30 NZST). The 15-minute spread keeps busy-skip
   interaction deterministic — if one overruns, the next skips and
   retries tomorrow. Adjust via ``/cron`` after first boot if needed.
 """
