@@ -1,12 +1,15 @@
 """Model router — picks model + provider for a tier.
 
-Phase 8 Track A3 extended the Phase 0 stub with:
+Phase 8 Track A3 extended the Phase 0 stub with `FAST_LOCAL` / `SMART_LOCAL`
+tiers for callers that insist on local.
 
-* `FAST_LOCAL` / `SMART_LOCAL` tiers for callers that insist on local.
-* A `prefer_local` preference + liveness probe that transparently
-  routes SMART to local when Ollama is reachable, falling back to
-  OpenRouter when it is not (and silently degrading to local if
-  OpenRouter also isn't configured — **never raise on degrade**).
+* `FAST` / `FAST_LOCAL` / `REFLECTION` always resolve to local (ollama).
+* `SMART_LOCAL` forces local even when OpenRouter is configured.
+* `SMART` is a direct lookup on `smart_provider` — no liveness probe in the
+  routing decision, no fallback between providers (2026-08-19 explicit
+  model-provider routing design). Callers that need to know whether Ollama
+  is actually reachable before constructing a client still use
+  `is_local_ready()` separately.
 
 The router is intentionally synchronous. Callers already hold a
 `ModelClient` reference for the returned target and make their own
@@ -131,32 +134,19 @@ class ModelRouter:
                 base_url=providers.ollama_base_url,
             )
 
-        # SMART — layered preference:
-        #   1. prefer_local=True AND local is reachable → local.
-        #   2. OpenRouter key configured → OpenRouter.
-        #   3. Silent degrade to local (never raise).
-        want_local = models.prefer_local and self._local_ready()
-        have_openrouter = bool(providers.openrouter_api_key)
-
-        if want_local:
-            return ModelTarget(
-                tier=tier,
-                model=models.smart_local,
-                provider="ollama",
-                base_url=providers.ollama_base_url,
-                degraded=False,
-            )
-        if have_openrouter:
+        if tier is ModelTier.SMART:
+            if models.smart_provider == "ollama":
+                return ModelTarget(
+                    tier=tier,
+                    model=models.smart_local,
+                    provider="ollama",
+                    base_url=providers.ollama_base_url,
+                )
             return ModelTarget(
                 tier=tier,
                 model=models.smart,
                 provider="openrouter",
                 base_url=providers.openrouter_base_url,
             )
-        return ModelTarget(
-            tier=tier,
-            model=models.smart_local,
-            provider="ollama",
-            base_url=providers.ollama_base_url,
-            degraded=True,
-        )
+
+        raise ValueError(f"unhandled tier: {tier!r}")  # pragma: no cover — exhaustive above
