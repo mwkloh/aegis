@@ -11,6 +11,8 @@ Both behaviors mean the operator cannot reliably know, or control, whether a giv
 
 This design replaces implicit, probe-driven fallback with an **explicit, config-pinned provider choice**, applied uniformly to both pipelines, with the actual per-reply decision made visible in the Telegram chat itself.
 
+**Intended deployment stance for this machine**: `smart_provider=ollama` is the everyday default — routed through the Mac Mini's Ollama daemon over the Tailscale proxy, covering both genuinely-local models and Ollama Cloud's hosted open-weight catalog (deepseek, qwen, llama, etc. — Ollama's own infrastructure, *not* a proxy to proprietary APIs). `openrouter` is kept configured as a deliberate escape hatch for reaching proprietary frontier models (Claude, GPT, Gemini) that Ollama Cloud doesn't serve — flipped to on purpose, not fallen into.
+
 ## Non-Goals
 
 - No new provider client classes. `OllamaClient` and `OpenRouterClient` (both implementing the existing `ModelClient` protocol in `runtime/llm/clients/base.py`) are sufficient — confirmed OpenRouter already reaches Anthropic/OpenAI/Gemini/etc. under one API, and Ollama already serves both genuinely-local and Ollama-cloud-proxied (`-cloud` tagged) models through the same daemon.
