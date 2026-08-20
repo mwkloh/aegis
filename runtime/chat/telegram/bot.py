@@ -854,13 +854,18 @@ def build_harness_dispatcher(
         )
         return None
 
-    try:
-        openrouter_client = OpenRouterClient(cfg)
-    except OpenRouterConfigError:
-        logger.warning(
-            "harness_dispatcher.disabled", extra={"reason": "no_openrouter"}
-        )
-        return None
+    target = router.route(ModelTier.SMART)
+    reasoning_client: ModelClient
+    if target.provider == "ollama":
+        reasoning_client = ollama_client
+    else:
+        try:
+            reasoning_client = OpenRouterClient(cfg)
+        except OpenRouterConfigError:
+            logger.warning(
+                "harness_dispatcher.disabled", extra={"reason": "no_openrouter"}
+            )
+            return None
 
     _file_tools: dict = {}
     if files_client is not None:
@@ -902,7 +907,7 @@ def build_harness_dispatcher(
         model=cfg.models.smart_local,
         known_intents=known_intents,
     )
-    tier1_reasoner = Tier1Reasoner(client=openrouter_client, model=cfg.models.smart)
+    tier1_reasoner = Tier1Reasoner(client=reasoning_client, model=target.model)
     runner = SkillRunner(tier1=tier1_reasoner)
 
     return HarnessDispatcher(
@@ -910,10 +915,11 @@ def build_harness_dispatcher(
         registry=skill_registry,
         runner=runner,
         harness=harness,
-        synthesizer=openrouter_client,
+        synthesizer=reasoning_client,
         tier3=tier3,
         tier1_loader=tier1_loader,
-        synthesis_model=cfg.models.smart,
+        synthesis_model=target.model,
+        provider=target.provider,
         multi_step=cfg.harness.multi_step,
         max_steps=cfg.harness.max_steps,
         events=events,

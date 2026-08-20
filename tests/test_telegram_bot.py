@@ -30,11 +30,15 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
+import respx
 
 import runtime.chat.telegram.bot as bot_mod
 from memory.embeddings import FakeEmbedder
+from runtime.chat.memory.tier1 import Tier1Loader
 from runtime.chat.memory.tier2 import Tier2Store
+from runtime.chat.memory.tier3 import Tier3Store
 from runtime.chat.memory.vault_indexer import VaultIndexer
 from runtime.chat.pipeline import ChatPipeline
 from runtime.chat.telegram.auth import Authorizer
@@ -47,6 +51,7 @@ from runtime.chat.telegram.bot import (
     build_application,
     build_chat_pipeline,
     build_dispatcher,
+    build_harness_dispatcher,
     build_intent_router,
     build_long_running_runner,
     build_scheduler,
@@ -68,6 +73,7 @@ from runtime.config import (
     VaultSource,
 )
 from runtime.events import EventStream
+from runtime.files.client import FilesClient
 from runtime.improvement.decisions import load_decisions
 from runtime.improvement.proposal_loader import derive_imp_id
 from runtime.llm.router import LocalReadyProbe, ModelRouter
@@ -1717,3 +1723,97 @@ def test_default_command_help_includes_cron() -> None:
     desc = DEFAULT_COMMAND_HELP["/cron"]
     for keyword in ("add", "list", "rm", "pause", "resume"):
         assert keyword in desc
+
+
+# --- build_harness_dispatcher: smart_provider branching -----------------
+
+
+def _harness_cfg(tmp_path: Path, *, smart_provider: str, api_key: str | None) -> AegisConfig:
+    return AegisConfig(
+        aegis_home=tmp_path,
+        aegis_root=tmp_path,
+        models=ModelConfig(
+            smart="minimax/minimax-m2.7",
+            smart_local="llama3.1:8b",
+            smart_provider=smart_provider,  # type: ignore[arg-type]
+        ),
+        providers=ProviderConfig(openrouter_api_key=api_key),
+        telegram=TelegramConfig(),
+        storage=StorageConfig(
+            workspace=tmp_path,
+            sessions_dir=tmp_path / "sessions",
+            memory_db=tmp_path / "memory" / "index.db",
+        ),
+    )
+
+
+def _harness_deps(tmp_path: Path) -> dict[str, Any]:
+    registry = SkillRegistry(
+        [
+            SkillDescriptor(
+                id="list_files",
+                description="List a folder.",
+                intents=["list_files"],
+                tool="files_list",
+            )
+        ]
+    )
+    return {
+        "skill_registry": registry,
+        "tier3": Tier3Store(),
+        "tier1_loader": Tier1Loader(tmp_path),
+        "files_client": FilesClient(allowed_roots=[tmp_path]),
+    }
+
+
+def test_build_harness_dispatcher_ollama_pin_uses_ollama_for_reasoning(
+    tmp_path: Path,
+) -> None:
+    cfg = _harness_cfg(tmp_path, smart_provider="ollama", api_key=None)
+    with respx.mock() as mock:
+        mock.get(f"{cfg.providers.ollama_base_url}/api/tags").mock(
+            return_value=httpx.Response(200, json={"models": []})
+        )
+        dispatcher = build_harness_dispatcher(cfg, **_harness_deps(tmp_path))
+    assert dispatcher is not None
+    assert dispatcher._provider == "ollama"  # type: ignore[attr-defined]
+    assert dispatcher._synthesis_model == "llama3.1:8b"  # type: ignore[attr-defined]
+
+
+def test_build_harness_dispatcher_openrouter_pin_uses_openrouter_for_reasoning(
+    tmp_path: Path,
+) -> None:
+    cfg = _harness_cfg(tmp_path, smart_provider="openrouter", api_key="sk-test")
+    with respx.mock() as mock:
+        mock.get(f"{cfg.providers.ollama_base_url}/api/tags").mock(
+            return_value=httpx.Response(200, json={"models": []})
+        )
+        dispatcher = build_harness_dispatcher(cfg, **_harness_deps(tmp_path))
+    assert dispatcher is not None
+    assert dispatcher._provider == "openrouter"  # type: ignore[attr-defined]
+    assert dispatcher._synthesis_model == "minimax/minimax-m2.7"  # type: ignore[attr-defined]
+
+
+def test_build_harness_dispatcher_openrouter_pin_without_key_returns_none(
+    tmp_path: Path,
+) -> None:
+    cfg = _harness_cfg(tmp_path, smart_provider="openrouter", api_key=None)
+    with respx.mock() as mock:
+        mock.get(f"{cfg.providers.ollama_base_url}/api/tags").mock(
+            return_value=httpx.Response(200, json={"models": []})
+        )
+        dispatcher = build_harness_dispatcher(cfg, **_harness_deps(tmp_path))
+    assert dispatcher is None
+
+
+def test_build_harness_dispatcher_ollama_pin_needs_no_openrouter_key(
+    tmp_path: Path,
+) -> None:
+    """The point of the fix: ollama-pinned reasoning has zero OpenRouter dependency."""
+    cfg = _harness_cfg(tmp_path, smart_provider="ollama", api_key=None)
+    with respx.mock() as mock:
+        mock.get(f"{cfg.providers.ollama_base_url}/api/tags").mock(
+            return_value=httpx.Response(200, json={"models": []})
+        )
+        dispatcher = build_harness_dispatcher(cfg, **_harness_deps(tmp_path))
+    assert dispatcher is not None
