@@ -11,6 +11,6 @@ variants:
   - "search {sandbox}/notes for CT-001 and open the top match"
 expected_calls:
   - tool: files_search
-    args_match: {glob: "*CT-001*"}
+    args_match: {directory: "{sandbox}/notes", pattern: "CT-001"}
   - tool: files_read
     args_match: {}

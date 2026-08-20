@@ -12,4 +12,4 @@ variants:
   - "look for CT-001 in {sandbox}/notes"
 expected_calls:
   - tool: files_search
-    args_match: {glob: "*CT-001*"}
+    args_match: {directory: "{sandbox}/notes", pattern: "CT-001"}
