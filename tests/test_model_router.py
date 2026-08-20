@@ -9,6 +9,8 @@ Pins:
 """
 from __future__ import annotations
 
+import pytest
+
 from runtime.config import (
     AegisConfig,
     ModelConfig,
@@ -18,8 +20,6 @@ from runtime.config import (
     VaultIndexingConfig,
 )
 from runtime.llm.router import ModelRouter, ModelTarget, ModelTier
-
-import pytest
 
 pytestmark = pytest.mark.unit
 
