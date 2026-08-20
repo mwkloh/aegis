@@ -108,6 +108,7 @@ def _make_pipeline(
         builder=builder,
         model=m,
         model_name="fake-model",
+        provider="ollama",
         events=events,
     )
     return pipe, r, m, tier3
@@ -374,4 +375,28 @@ def test_model_name_required(tmp_path: Path) -> None:
             builder=builder,
             model=_FakeModel(),
             model_name="",
+            provider="ollama",
+        )
+
+
+def test_provider_and_model_name_are_exposed(tmp_path: Path) -> None:
+    pipe, _, _, _ = _make_pipeline(tmp_path)
+    assert pipe.model_name == "fake-model"
+    assert pipe.provider == "ollama"
+
+
+def test_provider_required(tmp_path: Path) -> None:
+    _write(tmp_path / "IDENTITY.md", "i")
+    tier1 = Tier1Loader(tmp_path)
+    tier3 = Tier3Store()
+    builder = ContextBuilder(tier1, tier3)
+    with pytest.raises(ValueError, match="provider"):
+        ChatPipeline(
+            tier1=tier1,
+            tier3=tier3,
+            recall=_FakeRecall(),
+            builder=builder,
+            model=_FakeModel(),
+            model_name="fake-model",
+            provider="",
         )

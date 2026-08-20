@@ -219,6 +219,8 @@ class HarnessDispatcher:
         tier3: Tier3Store,
         tier1_loader: Tier1Loader,
         synthesis_model: str,
+        # default is test-ergonomics only; production always passes explicitly
+        provider: str = "ollama",
         multi_step: bool = False,
         max_steps: int = 5,
         events: EventStream | None = None,
@@ -232,6 +234,7 @@ class HarnessDispatcher:
         self._tier3 = tier3
         self._tier1_loader = tier1_loader
         self._synthesis_model = synthesis_model
+        self._provider = provider
         # multi_step is the Step-1 scaffold for the multi-step agent loop. The
         # Step-2 loop body, the verdict-gate refactor (set-based), and the
         # destructive-tool guard all hang off this flag — keep it gated until
@@ -250,6 +253,9 @@ class HarnessDispatcher:
 
     def _now(self) -> datetime:
         return self._clock() if self._clock is not None else datetime.now(tz=UTC)
+
+    def _footer(self) -> str:
+        return f"\n\n[{self._provider} · {self._synthesis_model}]"
 
     def _append_event(self, event_type: EventType, payload: dict[str, Any]) -> None:
         """Log one structural event, if an EventStream is wired.
@@ -579,7 +585,7 @@ class HarnessDispatcher:
             )
 
         logger.info("harness_dispatcher.send_start")
-        await _send(reply_text)
+        await _send(reply_text + self._footer())
         logger.info("harness_dispatcher.send_done")
         self._tier3.append(str(chat_id), "user", user_text)
         self._tier3.append(str(chat_id), "bot", reply_text)
@@ -632,7 +638,7 @@ class HarnessDispatcher:
         reply_text = await self._synthesize(
             pending.user_text, pending.intent, result, chat_id=chat_id
         )
-        await _send(reply_text)
+        await _send(reply_text + self._footer())
         self._tier3.append(str(chat_id), "user", pending.user_text)
         self._tier3.append(str(chat_id), "bot", reply_text)
         logger.info("harness_dispatcher.confirmed_dispatch_complete")

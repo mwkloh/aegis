@@ -156,8 +156,6 @@ def render_status(snapshot: StatusSnapshot) -> str:
 def render_system_info(info: SystemInfo) -> str:
     """Render the currently-routed model stack + runtime posture."""
     smart_line = f"{info.smart_provider}:{info.smart_model}"
-    if info.smart_degraded:
-        smart_line = f"{smart_line} (degraded)"
     local_state = "reachable" if info.local_ready else "unreachable"
     openrouter_state = "configured" if info.openrouter_configured else "missing"
     vault_line: str
@@ -174,7 +172,6 @@ def render_system_info(info: SystemInfo) -> str:
         f"• fast:       {info.fast_model}\n"
         f"• reflection: {info.reflection_model}\n"
         f"• coding:     {info.coding_model}\n"
-        f"• prefer_local: {str(info.prefer_local).lower()}\n"
         "Runtime:\n"
         f"• ollama:     {info.ollama_base_url} ({local_state})\n"
         f"• openrouter: {openrouter_state}\n"

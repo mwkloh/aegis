@@ -1585,7 +1585,7 @@ async def test_multi_step_task_complete_gates_and_skips_chain_synthesis() -> Non
     assert recorder.calls == 0
     # Reply is the gated summary verbatim — no unverified claim, no failed
     # tools, so no annotation is added.
-    assert message.replies == ["Found the markdown files."]
+    assert message.replies == ["Found the markdown files.\n\n[ollama · stub-model]"]
 
 
 async def test_task_complete_empty_history_returns_pass() -> None:
@@ -1824,7 +1824,7 @@ async def test_task_complete_ledger_read_failure_falls_back_to_history() -> None
     # files_search ran and succeeded — the history fallback finds it
     # verified, so the plain summary ships with no unverified-claim banner
     # and no exception ever escaped the ledger read.
-    assert message.replies[0] == "Searched for the files."
+    assert message.replies[0] == "Searched for the files.\n\n[ollama · stub-model]"
 
 
 async def test_task_complete_identical_args_retry_still_warns_oq7(tmp_path: Path) -> None:
@@ -1950,7 +1950,7 @@ async def test_task_complete_recovered_tool_not_branded_failure(
     assert outcome == DispatchOutcome.FIRED
     assert len(message.replies) == 1
     reply = message.replies[0]
-    assert reply == "Found the markdown files."
+    assert reply == "Found the markdown files.\n\n[ollama · stub-model]"
     assert "⚠️" not in reply
 
     raw_events = [

@@ -49,7 +49,7 @@ from runtime.chat.memory.vault_indexer import (
     FilesystemVaultBodyLoader,
     VaultIndexer,
 )
-from runtime.chat.pipeline import ChatPipeline
+from runtime.chat.pipeline import STUB_REPLY, ChatPipeline
 from runtime.chat.telegram.auth import Authorizer
 from runtime.chat.telegram.dispatch import Dispatcher, IncomingMessage, parse_command
 from runtime.chat.telegram.handlers import (
@@ -481,6 +481,8 @@ async def route_chat(
     try:
         try:
             reply = await pipeline.turn(str(chat_id), text)
+            if reply and reply != STUB_REPLY:
+                reply = f"{reply}\n\n[{pipeline.provider} · {pipeline.model_name}]"
         except Exception:
             logger.exception(
                 "telegram.chat.pipeline_crashed", extra={"chat_id": chat_id}
@@ -727,12 +729,14 @@ def build_chat_pipeline(
 
     Picks the SMART-tier chat client through `ModelRouter.route(SMART)`:
 
-    1. `cfg.models.prefer_local=True` and Ollama reachable → local
-       (`OllamaClient` with `cfg.models.smart_local`).
-    2. `OPENROUTER_API_KEY` set → remote (`OpenRouterClient` with
-       `cfg.models.smart`).
-    3. Otherwise, if Ollama is reachable → local fallback (degraded).
-    4. Otherwise → `None`, so `route_chat` falls back to its stub reply.
+    1. `cfg.models.smart_provider == "ollama"` → `OllamaClient` with
+       `cfg.models.smart_local`, only if Ollama is reachable; otherwise
+       `None`.
+    2. `cfg.models.smart_provider == "openrouter"` → `OpenRouterClient`
+       with `cfg.models.smart`, only if `OPENROUTER_API_KEY` is set;
+       otherwise `None`.
+    3. `None` means `route_chat` falls back to its stub reply. No
+       cross-provider reroute happens in either branch.
 
     Embedder follows the same liveness signal: `Bgem3Embedder`
     (bge-m3 via Ollama, dim=1024) when local is reachable, else
@@ -758,7 +762,7 @@ def build_chat_pipeline(
     if target.provider == "ollama":
         if not local_is_up:
             logger.info(
-                "chat.pipeline.disabled", extra={"reason": "no_local_no_remote"}
+                "chat.pipeline.disabled", extra={"reason": "ollama_pinned_but_local_down"}
             )
             return None
         try:
@@ -795,7 +799,6 @@ def build_chat_pipeline(
         extra={
             "provider": target.provider,
             "model": target.model,
-            "degraded": target.degraded,
             "embedder": type(embedder).__name__,
         },
     )
@@ -806,6 +809,7 @@ def build_chat_pipeline(
         builder=builder,
         model=model,
         model_name=target.model,
+        provider=target.provider,
         events=events,
     )
 
@@ -851,13 +855,18 @@ def build_harness_dispatcher(
         )
         return None
 
-    try:
-        openrouter_client = OpenRouterClient(cfg)
-    except OpenRouterConfigError:
-        logger.warning(
-            "harness_dispatcher.disabled", extra={"reason": "no_openrouter"}
-        )
-        return None
+    target = router.route(ModelTier.SMART)
+    reasoning_client: ModelClient
+    if target.provider == "ollama":
+        reasoning_client = ollama_client
+    else:
+        try:
+            reasoning_client = OpenRouterClient(cfg)
+        except OpenRouterConfigError:
+            logger.warning(
+                "harness_dispatcher.disabled", extra={"reason": "no_openrouter"}
+            )
+            return None
 
     _file_tools: dict = {}
     if files_client is not None:
@@ -899,7 +908,7 @@ def build_harness_dispatcher(
         model=cfg.models.smart_local,
         known_intents=known_intents,
     )
-    tier1_reasoner = Tier1Reasoner(client=openrouter_client, model=cfg.models.smart)
+    tier1_reasoner = Tier1Reasoner(client=reasoning_client, model=target.model)
     runner = SkillRunner(tier1=tier1_reasoner)
 
     return HarnessDispatcher(
@@ -907,10 +916,11 @@ def build_harness_dispatcher(
         registry=skill_registry,
         runner=runner,
         harness=harness,
-        synthesizer=openrouter_client,
+        synthesizer=reasoning_client,
         tier3=tier3,
         tier1_loader=tier1_loader,
-        synthesis_model=cfg.models.smart,
+        synthesis_model=target.model,
+        provider=target.provider,
         multi_step=cfg.harness.multi_step,
         max_steps=cfg.harness.max_steps,
         events=events,
@@ -920,18 +930,25 @@ def build_harness_dispatcher(
 def _startup_message_body(cfg: AegisConfig, *, now: datetime | None = None) -> str:
     """Compose the "AEGIS online" notification body. Pure function — tested.
 
-    Includes a UTC timestamp, the configured SMART-tier model, and
-    whether the conversational pipeline is wired (OpenRouter key
-    present) or running in stub mode. Operator uses /status for the
-    full picture; this is just a heartbeat-on-boot signal.
+    Includes a UTC timestamp, the live-routed SMART-tier provider:model
+    (via `ModelRouter.route` — a pure config lookup post smart_provider
+    pin, no network probe), and whether the conversational pipeline is
+    wired. An `ollama` pin is always "wired" (no API key required); an
+    `openrouter` pin is "wired" only when `OPENROUTER_API_KEY` is set,
+    otherwise it reports stub mode. Operator uses /status for the full
+    picture; this is just a heartbeat-on-boot signal.
     """
     stamp = (now or datetime.now(UTC)).strftime("%Y-%m-%d %H:%M UTC")
-    chat_status = (
-        "wired" if cfg.providers.openrouter_api_key else "stub (no OPENROUTER_API_KEY)"
-    )
+    target = ModelRouter(cfg).route(ModelTier.SMART)
+    if target.provider == "openrouter":
+        chat_status = (
+            "wired" if cfg.providers.openrouter_api_key else "stub (no OPENROUTER_API_KEY)"
+        )
+    else:
+        chat_status = "wired"
     return (
         f"🟢 AEGIS online — {stamp}\n"
-        f"model: {cfg.models.smart}\n"
+        f"model: {target.provider}:{target.model}\n"
         f"chat: {chat_status}"
     )
 

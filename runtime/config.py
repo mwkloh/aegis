@@ -11,7 +11,7 @@ import logging
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -40,16 +40,16 @@ class ModelConfig(BaseModel):
     )
     smart_local: str = Field(
         default="llama3.1:8b",
-        description="Tier 1 local fallback when prefer_local=True or OpenRouter unavailable.",
+        description="Tier 1 reasoning via Ollama — local weights or an Ollama Cloud tag.",
     )
     reflection: str = Field(default="gemma4:e4b", description="Reflection plane.")
     coding: str = Field(
         default="minimax/minimax-m2.7",
         description="Plane 3 coding harness (OpenRouter by default).",
     )
-    prefer_local: bool = Field(
-        default=False,
-        description="If True AND Ollama is reachable, route SMART to local.",
+    smart_provider: Literal["ollama", "openrouter"] = Field(
+        default="ollama",
+        description="Explicit SMART-tier provider pin — no silent fallback between them.",
     )
 
 
@@ -259,6 +259,21 @@ def _env_bool(raw: str | None, *, default: bool) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def _parse_smart_provider(raw: str | None) -> Literal["ollama", "openrouter"]:
+    """Explicit SMART-tier provider pin. Unset/invalid -> 'ollama' (local-first default)."""
+    if raw is None:
+        return "ollama"
+    normalized = raw.strip().lower()
+    if normalized == "openrouter":
+        return "openrouter"
+    if normalized and normalized != "ollama":
+        logger.warning(
+            "config.smart_provider.unrecognized_value",
+            extra={"raw": raw},
+        )
+    return "ollama"
+
+
 def _parse_env_allowlist(raw: str | None) -> list[int] | None:
     """Comma-separated ids → list[int]. `None` means "env var unset"."""
     if raw is None:
@@ -284,7 +299,7 @@ def _coerce(env: dict[str, str], cfg: dict[str, Any]) -> dict[str, Any]:
             "MODEL_CODING",
             env.get("MODEL_SMART", ModelConfig.model_fields["coding"].default),
         ),
-        prefer_local=_env_bool(env.get("MODELS_PREFER_LOCAL"), default=False),
+        smart_provider=_parse_smart_provider(env.get("MODEL_SMART_PROVIDER")),
     )
     providers = ProviderConfig(
         ollama_base_url=env.get(

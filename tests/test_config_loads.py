@@ -271,3 +271,26 @@ def test_harness_ignores_malformed_max_steps(aegis_sandbox: Path) -> None:
     cfg = get_config()
     assert cfg.harness.max_steps == 5  # falls back to default
 
+
+def test_config_smart_provider_defaults_to_ollama(aegis_sandbox: Path) -> None:
+    cfg = get_config()
+    assert cfg.models.smart_provider == "ollama"
+
+
+def test_config_smart_provider_reads_openrouter_from_env(
+    aegis_sandbox: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MODEL_SMART_PROVIDER", "openrouter")
+    reset_config()
+    cfg = get_config()
+    assert cfg.models.smart_provider == "openrouter"
+
+
+def test_config_smart_provider_invalid_value_falls_back_to_ollama(
+    aegis_sandbox: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MODEL_SMART_PROVIDER", "not-a-real-provider")
+    reset_config()
+    cfg = get_config()
+    assert cfg.models.smart_provider == "ollama"
+

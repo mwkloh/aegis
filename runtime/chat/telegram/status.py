@@ -59,7 +59,7 @@ class SystemInfo(BaseModel):
 
     Pure data — `render_system_info` formats it and the handler prepends
     the block to the 24h activity rollup. Computed on demand, never
-    cached: `prefer_local` + Ollama liveness can flip between `/status`
+    cached: `smart_provider` + Ollama liveness can flip between `/status`
     calls and operators expect the answer to reflect reality *now*.
     """
 
@@ -67,12 +67,10 @@ class SystemInfo(BaseModel):
 
     smart_model: str
     smart_provider: str
-    smart_degraded: bool
     smart_local_model: str
     fast_model: str
     reflection_model: str
     coding_model: str
-    prefer_local: bool
     local_ready: bool
     ollama_base_url: str
     openrouter_configured: bool
@@ -97,12 +95,10 @@ def collect_system_info(cfg: AegisConfig, *, router: ModelRouter) -> SystemInfo:
     return SystemInfo(
         smart_model=smart_target.model,
         smart_provider=smart_target.provider,
-        smart_degraded=smart_target.degraded,
         smart_local_model=cfg.models.smart_local,
         fast_model=cfg.models.fast,
         reflection_model=cfg.models.reflection,
         coding_model=cfg.models.coding,
-        prefer_local=cfg.models.prefer_local,
         local_ready=router.is_local_ready(),
         ollama_base_url=cfg.providers.ollama_base_url,
         openrouter_configured=bool(cfg.providers.openrouter_api_key),
