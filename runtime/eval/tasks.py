@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class FixtureFile(BaseModel):
@@ -22,6 +22,27 @@ class FixtureFile(BaseModel):
 
     path: str = Field(min_length=1, description="Relative to the sandbox root.")
     content: str = Field(default="")
+
+    @field_validator("path")
+    @classmethod
+    def _reject_escaping_path(cls, v: str) -> str:
+        """Reject anything that could land `sandbox / path` outside the sandbox.
+
+        `_seed_fixture` (runner.py) does `sandbox / f.path` to seed this file.
+        `pathlib` discards the left operand of `/` when the right operand is
+        absolute, and a `..` segment walks back up past the sandbox root --
+        either would let a fixture write outside the sandbox, which this
+        codebase treats as non-negotiable. Mirrors the reasoning (though not
+        the code) of `_has_dotdot_segment`/`_check_path_arg` in
+        `runtime/harness/tools/command_tool.py`.
+        """
+        if v.startswith("/") or v.startswith("~"):
+            raise ValueError(
+                f"fixture path must be relative to the sandbox root, got {v!r}"
+            )
+        if ".." in v.split("/"):
+            raise ValueError(f"fixture path contains a '..' segment: {v!r}")
+        return v
 
 
 class TaskFixture(BaseModel):

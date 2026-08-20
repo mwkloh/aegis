@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from runtime.eval.tasks import EvalTask, load_tasks, substitute_sandbox
+from runtime.eval.tasks import EvalTask, FixtureFile, load_tasks, substitute_sandbox
 
 pytestmark = pytest.mark.unit
 
@@ -119,3 +119,28 @@ def test_evaltask_requires_at_least_one_variant() -> None:
 def test_evaltask_requires_at_least_one_expected_call() -> None:
     with pytest.raises(ValidationError):
         EvalTask(id="x", description="x", variants=("hi",), expected_calls=())
+
+
+def test_fixturefile_rejects_absolute_path() -> None:
+    with pytest.raises(ValidationError):
+        FixtureFile(path="/etc/evil", content="x")
+
+
+def test_fixturefile_rejects_home_relative_path() -> None:
+    with pytest.raises(ValidationError):
+        FixtureFile(path="~/evil", content="x")
+
+
+def test_fixturefile_rejects_dotdot_segment() -> None:
+    with pytest.raises(ValidationError):
+        FixtureFile(path="../escape", content="x")
+
+
+def test_fixturefile_rejects_nested_dotdot_segment() -> None:
+    with pytest.raises(ValidationError):
+        FixtureFile(path="notes/../../escape", content="x")
+
+
+def test_fixturefile_accepts_relative_path() -> None:
+    f = FixtureFile(path="notes/ok.md", content="x")
+    assert f.path == "notes/ok.md"

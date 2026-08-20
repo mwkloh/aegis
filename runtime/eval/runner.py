@@ -65,69 +65,79 @@ async def run_variant(
     """Run one (task, variant) pair against a fresh sandbox and fresh dispatcher."""
     t0 = time.monotonic()
     sandbox = Path(tempfile.mkdtemp(prefix="aegis-eval-"))
+    # Events live in a sibling temp dir, never nested under `sandbox` -- the
+    # sandbox is also what FilesClient(allowed_roots=[sandbox]) exposes to
+    # the model via files_list/files_search, and an undeclared `sessions/`
+    # directory growing inside it would pollute the model's view of the
+    # fixture the task author actually declared.
+    events_dir = Path(tempfile.mkdtemp(prefix="aegis-eval-events-"))
     try:
-        _seed_fixture(task, sandbox)
-        resolved_text = substitute_sandbox(variant_text, sandbox)
+        try:
+            _seed_fixture(task, sandbox)
+            resolved_text = substitute_sandbox(variant_text, sandbox)
 
-        tier3 = Tier3Store()
-        events = EventStream(sandbox / "sessions")
-        files_client = FilesClient(allowed_roots=[sandbox])
+            tier3 = Tier3Store()
+            events = EventStream(events_dir)
+            files_client = FilesClient(allowed_roots=[sandbox])
 
-        dispatcher = build_harness_dispatcher(
-            cfg,
-            skill_registry=registry,
-            tier3=tier3,
-            tier1_loader=tier1_loader,
-            files_client=files_client,
-            events=events,
-        )
-        if dispatcher is None:
+            dispatcher = build_harness_dispatcher(
+                cfg,
+                skill_registry=registry,
+                tier3=tier3,
+                tier1_loader=tier1_loader,
+                files_client=files_client,
+                events=events,
+            )
+            if dispatcher is None:
+                return VariantResult(
+                    task_id=task.id,
+                    variant_text=variant_text,
+                    passed=False,
+                    reason=(
+                        "build_harness_dispatcher returned None "
+                        "(a hard dependency is unavailable)"
+                    ),
+                    duration_s=time.monotonic() - t0,
+                )
+
+            observing = _ObservingHarness(dispatcher._harness)
+            dispatcher._harness = observing
+
+            collected: list[str] = []
+
+            async def _capture(text: str) -> None:
+                collected.append(text)
+
+            await dispatcher.dispatch(
+                chat_id=1, user_text=resolved_text, message=None, reply=_capture
+            )
+
+            resolved_expected = tuple(
+                ExpectedCall(
+                    tool=ec.tool,
+                    args_match=substitute_sandbox(ec.args_match, sandbox),
+                )
+                for ec in task.expected_calls
+            )
+            grade = grade_calls(resolved_expected, observing.calls)
             return VariantResult(
                 task_id=task.id,
                 variant_text=variant_text,
-                passed=False,
-                reason="build_harness_dispatcher returned None (a hard dependency is unavailable)",
+                passed=grade.passed,
+                reason=grade.reason,
                 duration_s=time.monotonic() - t0,
-            )
-
-        observing = _ObservingHarness(dispatcher._harness)
-        dispatcher._harness = observing
-
-        collected: list[str] = []
-
-        async def _capture(text: str) -> None:
-            collected.append(text)
-
-        try:
-            await dispatcher.dispatch(
-                chat_id=1, user_text=resolved_text, message=None, reply=_capture
             )
         except Exception as exc:  # eval harness must never crash the batch
             return VariantResult(
                 task_id=task.id,
                 variant_text=variant_text,
                 passed=False,
-                reason=f"dispatch raised: {exc!r}",
+                reason=f"run_variant raised: {exc!r}",
                 duration_s=time.monotonic() - t0,
             )
-
-        resolved_expected = tuple(
-            ExpectedCall(
-                tool=ec.tool,
-                args_match=substitute_sandbox(ec.args_match, sandbox),
-            )
-            for ec in task.expected_calls
-        )
-        grade = grade_calls(resolved_expected, observing.calls)
-        return VariantResult(
-            task_id=task.id,
-            variant_text=variant_text,
-            passed=grade.passed,
-            reason=grade.reason,
-            duration_s=time.monotonic() - t0,
-        )
     finally:
         shutil.rmtree(sandbox, ignore_errors=True)
+        shutil.rmtree(events_dir, ignore_errors=True)
 
 
 async def run_task(
