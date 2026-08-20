@@ -74,7 +74,30 @@ Per `(task, variant)` run, constructed fresh: `Tier3Store()`, `EventStream` (poi
 
 ## Grading
 
-After each run, the runner reads back `load_tool_calls(events)` for that run's `EventStream`, filters to `verdict_for_result(...) == "verified"` entries (reusing the existing helper from `runtime/tools/record.py`), and walks `expected_calls` as an ordered **subsequence** match against the actual verified calls — each expected call must match some actual call at or after the position of the previous match. This tolerates incidental extra tool calls (e.g. a preliminary lookup) without failing the task, while still requiring the expected calls to happen, with matching args, in the right relative order. A variant that never gets far enough to make an expected call fails at the point of the missing match.
+**Correction from the first draft of this spec**: grading cannot read tool-call arguments back from the production evidence ledger (`runtime/tools/record.py`). `ToolCallRecord` deliberately stores only `argv_hash` — a one-way SHA-256 hash — never argument contents ("Structural only... never args contents," by design, for the real bot's audit trail). A hash cannot support the partial/substring `args_match` this design needs; there is nothing to compare it against without already knowing the exact full argument set in advance, which defeats the purpose of a lenient, partial-match oracle. Production code is not changed to work around this — the privacy-preserving ledger stays exactly as it is for the real bot.
+
+Instead, the eval runner wraps `HarnessAdapter` in a thin, eval-side observer *after* building the dispatcher via the normal `build_harness_dispatcher` path:
+
+```python
+class _ObservingHarness:
+    """Wraps a real HarnessAdapter; records (tool, args, status) before delegating."""
+
+    def __init__(self, inner: HarnessAdapter) -> None:
+        self._inner = inner
+        self.calls: list[tuple[str, dict[str, Any], str]] = []
+
+    def has_tool(self, name: str) -> bool:
+        return self._inner.has_tool(name)
+
+    def execute(self, intent: ToolIntent) -> ToolResult:
+        result = self._inner.execute(intent)
+        self.calls.append((intent.tool, dict(intent.args), result.status))
+        return result
+```
+
+The runner builds the dispatcher normally via `build_harness_dispatcher(...)`, then substitutes `dispatcher._harness` with an `_ObservingHarness` wrapping the real one it just built — the dispatcher still calls the *real* tools through the wrapper, unaware anything changed. (Reaching into `_harness`, a private attribute, is eval-only test-seam code, not a pattern used in production — matches how the model-provider-routing work's own final review already accepted reaching into `dispatcher._provider` for test assertions as reasonable.)
+
+Grading walks `expected_calls` as an ordered **subsequence** match against `observing.calls` — each expected call must match some actual call (by tool name, `args_match` against the real args dict, and `status != "error"`) at or after the position of the previous match. This tolerates incidental extra tool calls without failing the task, while still requiring the expected calls to happen, with matching args, in the right relative order. A variant that never gets far enough to make an expected call fails at the point of the missing match.
 
 ## Metrics & Reporting
 
