@@ -1,0 +1,16 @@
+id: search_then_read
+description: "Multi-step: search for a file, then read the result. Exercises HarnessDispatcher._run_multi_step."
+fixture:
+  files:
+    - path: "notes/CT-001-notes.md"
+      content: "Some notes about CT-001."
+    - path: "notes/other.md"
+      content: "Unrelated notes."
+variants:
+  - "find files about CT-001 in {sandbox}/notes and read the first one"
+  - "search {sandbox}/notes for CT-001 and open the top match"
+expected_calls:
+  - tool: files_search
+    args_match: {glob: "*CT-001*"}
+  - tool: files_read
+    args_match: {}

@@ -1,0 +1,8 @@
+id: time_check
+description: "Ask the current time -- no fixture needed."
+variants:
+  - "what time is it?"
+  - "tell me the current time"
+expected_calls:
+  - tool: time
+    args_match: {}

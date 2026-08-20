@@ -76,6 +76,7 @@ Thumbs.db
 # --- Generated artifacts ---
 coding_harness/diffs/*.patch
 coding_harness/diffs/*.diff
+eval/results/
 runtime/harness/openharness/   # vendored as submodule later — not tracked here
 
 # --- Logs ---

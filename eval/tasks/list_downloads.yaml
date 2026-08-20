@@ -1,0 +1,15 @@
+id: list_downloads
+description: "List files in a folder."
+fixture:
+  files:
+    - path: "report.txt"
+      content: "hello"
+    - path: "notes.md"
+      content: "notes"
+variants:
+  - "list files in {sandbox}"
+  - "what's in {sandbox}?"
+  - "show me the files under {sandbox}"
+expected_calls:
+  - tool: files_list
+    args_match: {path: "{sandbox}"}

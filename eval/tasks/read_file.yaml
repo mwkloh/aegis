@@ -1,0 +1,13 @@
+id: read_file
+description: "Read the contents of a specific file."
+fixture:
+  files:
+    - path: "report.txt"
+      content: "Q3 numbers look good."
+variants:
+  - "read {sandbox}/report.txt"
+  - "what does {sandbox}/report.txt say?"
+  - "open {sandbox}/report.txt and tell me what's in it"
+expected_calls:
+  - tool: files_read
+    args_match: {path: "{sandbox}/report.txt"}
