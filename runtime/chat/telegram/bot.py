@@ -49,7 +49,7 @@ from runtime.chat.memory.vault_indexer import (
     FilesystemVaultBodyLoader,
     VaultIndexer,
 )
-from runtime.chat.pipeline import ChatPipeline
+from runtime.chat.pipeline import STUB_REPLY, ChatPipeline
 from runtime.chat.telegram.auth import Authorizer
 from runtime.chat.telegram.dispatch import Dispatcher, IncomingMessage, parse_command
 from runtime.chat.telegram.handlers import (
@@ -481,6 +481,8 @@ async def route_chat(
     try:
         try:
             reply = await pipeline.turn(str(chat_id), text)
+            if reply and reply != STUB_REPLY:
+                reply = f"{reply}\n\n_[{pipeline.provider} · {pipeline.model_name}]_"
         except Exception:
             logger.exception(
                 "telegram.chat.pipeline_crashed", extra={"chat_id": chat_id}
@@ -806,6 +808,7 @@ def build_chat_pipeline(
         builder=builder,
         model=model,
         model_name=target.model,
+        provider=target.provider,
         events=events,
     )
 

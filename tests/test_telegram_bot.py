@@ -283,6 +283,8 @@ class _FakePipeline:
     canned_reply: str = "acknowledged"
     calls: list[tuple[str, str]] = field(default_factory=list)
     raises: Exception | None = None
+    provider: str = "ollama"
+    model_name: str = "stub-model"
 
     async def turn(self, chat_id: str, user_text: str) -> str:
         self.calls.append((chat_id, user_text))
@@ -318,7 +320,7 @@ async def test_route_chat_routes_to_pipeline() -> None:
     await route_chat(update, None, pipeline=pipeline, authorizer=authorizer)  # type: ignore[arg-type]
     assert pipeline.calls == [("111", "hi bot")]
     assert update.effective_message is not None
-    assert update.effective_message.replies == ["hello back"]
+    assert update.effective_message.replies == ["hello back\n\n_[ollama · stub-model]_"]
 
 
 async def test_route_chat_denied_when_unauthorized() -> None:
@@ -364,7 +366,7 @@ async def test_route_chat_routes_without_authorizer() -> None:
     await route_chat(update, None, pipeline=pipeline)  # type: ignore[arg-type]
     assert pipeline.calls == [("111", "hello")]
     assert update.effective_message is not None
-    assert update.effective_message.replies == ["ok"]
+    assert update.effective_message.replies == ["ok\n\n_[ollama · stub-model]_"]
 
 
 async def test_route_chat_hybrid_typing_indicator() -> None:
@@ -400,7 +402,10 @@ async def test_route_chat_hybrid_typing_indicator() -> None:
     assert reply_text.await_count == 2
     placeholder_text = reply_text.await_args_list[0].args[0]
     assert "Thinking" in placeholder_text
-    assert reply_text.await_args_list[1].args[0] == "final answer"
+    assert (
+        reply_text.await_args_list[1].args[0]
+        == "final answer\n\n_[ollama · stub-model]_"
+    )
     # Placeholder is deleted so the chat doesn't show an orphaned
     # "Thinking…" bubble above the real reply.
     placeholder.delete.assert_awaited_once()
@@ -527,7 +532,7 @@ async def test_route_chat_intent_miss_falls_through_to_pipeline() -> None:
     assert pipeline.calls == [("111", "how are you today")]
     assert long_runner.skill_calls == []
     assert update.effective_message is not None
-    assert update.effective_message.replies == ["hi back"]
+    assert update.effective_message.replies == ["hi back\n\n_[ollama · stub-model]_"]
 
 
 async def test_route_chat_intent_hit_but_unresolvable_replies_plainly() -> None:
@@ -922,7 +927,7 @@ def _build_cfg(
     return AegisConfig(
         aegis_home=tmp_path,
         aegis_root=tmp_path,
-        models=ModelConfig(smart="minimax/minimax-m2.7"),
+        models=ModelConfig(smart="minimax/minimax-m2.7", smart_provider="openrouter"),
         providers=ProviderConfig(
             openrouter_base_url=base_url,
             openrouter_api_key=api_key,
@@ -1013,7 +1018,7 @@ def test_build_chat_pipeline_local_path_selects_ollama_and_bgem3(
         models=ModelConfig(
             smart="minimax/minimax-m2.7",
             smart_local="qwen3:8b",
-            prefer_local=True,
+            smart_provider="ollama",
         ),
         providers=ProviderConfig(openrouter_api_key="sk-test"),
         telegram=TelegramConfig(),
@@ -1025,7 +1030,7 @@ def test_build_chat_pipeline_local_path_selects_ollama_and_bgem3(
     )
     pipe = build_chat_pipeline(cfg, local_ready=_LOCAL_UP)
     assert isinstance(pipe, ChatPipeline)
-    # Model name follows the local target when prefer_local wins.
+    # Model name follows the local target since smart_provider='ollama'.
     assert pipe._model_name == cfg.models.smart_local
     assert captured["expected_dim"] == 1024
 
@@ -1169,7 +1174,7 @@ def _cfg_with_allowlist(
     return AegisConfig(
         aegis_home=tmp_path,
         aegis_root=tmp_path,
-        models=ModelConfig(smart=smart),
+        models=ModelConfig(smart=smart, smart_provider="openrouter"),
         providers=ProviderConfig(openrouter_api_key=api_key),
         telegram=TelegramConfig(user_allowlist=allowlist),
         storage=StorageConfig(
