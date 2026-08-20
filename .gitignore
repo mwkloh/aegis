@@ -62,6 +62,7 @@ coverage.xml
 *.swp
 *.swo
 .DS_Store
+._*
 Thumbs.db
 
 # --- Databases / vector indexes (always local) ---
