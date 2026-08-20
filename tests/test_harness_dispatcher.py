@@ -993,6 +993,51 @@ async def test_multi_step_plan_leads_with_actual_tool_called() -> None:
     assert [d.tool for d in runner.plan_next_calls[1]["available_skills"]] == ["files_read"]
 
 
+async def test_multi_step_no_restriction_after_first_step_fails() -> None:
+    """A failing FIRST step must not lock step 2 into retrying only that
+    tool -- the model must retain access to a legitimate recovery tool
+    (e.g. files_search) that a too-early lock would have foreclosed."""
+    registry, harness = _two_skill_setup(read_fails=True)
+    runner = _StubPlanRunner(
+        plan_steps=[
+            PlanStep(kind="tool_call", tool="files_read", args={"path": "/tmp/guess.md"}),
+            PlanStep(kind="tool_call", tool="files_search", args={"glob": "*.md"}),
+        ],
+    )
+    dispatcher = _make_loop_dispatcher(runner=runner, registry=registry, harness=harness)
+
+    await dispatcher.dispatch(chat_id=1, user_text="read a file", message=_FakeMessage())
+
+    # files_read failed on step 1 -- step 2 must see the FULL catalog, not
+    # be restricted to files_read alone.
+    assert {d.tool for d in runner.plan_next_calls[1]["available_skills"]} == {
+        "files_search",
+        "files_read",
+    }
+
+
+async def test_multi_step_empty_remaining_exhausts_plan_after_one_success() -> None:
+    """A step-1 tool_call with an empty `remaining` must be trusted: the
+    plan is just that one tool, and once it succeeds the plan is
+    immediately exhausted -- step 2 sees the full catalog again, not a
+    restriction to a plan of length zero or one stale entry."""
+    registry, harness = _two_skill_setup()
+    runner = _StubPlanRunner(
+        plan_steps=[
+            PlanStep(kind="tool_call", tool="files_search", args={"glob": "*.md"}, remaining=[]),
+            PlanStep(kind="respond"),
+        ],
+    )
+    dispatcher = _make_loop_dispatcher(runner=runner, registry=registry, harness=harness)
+
+    await dispatcher.dispatch(chat_id=1, user_text="find files", message=_FakeMessage())
+
+    assert {d.tool for d in runner.plan_next_calls[1]["available_skills"]} == {
+        "files_search",
+        "files_read",
+    }
+
+
 async def test_multi_step_immediate_respond_returns_pass() -> None:
     runner = _StubPlanRunner(plan_steps=[PlanStep(kind="respond")])
     registry, harness = _two_skill_setup()

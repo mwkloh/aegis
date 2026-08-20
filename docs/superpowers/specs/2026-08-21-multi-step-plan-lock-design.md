@@ -199,6 +199,41 @@ stub-planner multi-step tests):
   — a flat result there is not a failure of this design.
 - No regression on any currently-passing task at 4B.
 
+## Known limitation (measured after implementation)
+
+The lock's efficacy is entirely gated on the model's step-1 `remaining`
+self-report being complete. `plan_ids` is derived from `plan.tool` plus
+whatever `plan.remaining` names at step 1; if the model omits a tool it
+will in fact call later, that tool is simply absent from `plan_ids`, and
+once the one entry the model *did* self-report is consumed, `cursor`
+reaches `len(plan_ids)` immediately — the restriction never engages for
+the rest of the turn, and Patterns 2/3 (the exact failures this design
+targets) can reappear unconstrained.
+
+This was measured directly on `search_then_read` variant 2 against
+`gemma4:e2b-mlx` (Task 1 report, root-cause trace): step 1 returned
+`tool=files_search remaining=[files_search]` — self-reporting no future
+work even though the task needs a subsequent `files_read`. `plan_ids`
+therefore collapsed to `["files_search"]`, and the instant that step
+succeeded `cursor` reached `len(plan_ids)`, so step 2 onward saw the full,
+unrestricted catalog again — the model went on to call `run_command` as
+an improvised substitute (Pattern 3) and repeat `files_search` after a
+later `files_read` error (Pattern 2). By contrast, variant 1's step 1
+returned `remaining=[files_search, files_read]`, `plan_ids` correctly
+carried both tools, and the restriction held through a failure exactly as
+designed (matches `test_multi_step_restriction_persists_after_step_failure`).
+
+This isn't a new failure mode — it's the same unreliable signal that
+motivated `PlanStep.remaining` itself (commit 97eb1da) surfacing at a
+different layer: that change already measured the field's self-report as
+an incomplete predictor of the model's actual future behavior at 2B
+(overall TGC/SGC improved, but genuine multi-step tasks stayed flat). This
+design's restriction mechanism inherits that same unreliability as its
+own upper bound — it can only be as complete as the self-report it is
+built from. No fix is proposed here; a dedicated upfront planning call
+(rejected above as approach 1) or a different plan-derivation signal
+entirely would be needed to close this, and either is future work.
+
 ## Non-goals
 
 - Fixing Pattern 1 (zero engagement) — tracked separately.

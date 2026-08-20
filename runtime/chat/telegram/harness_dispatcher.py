@@ -699,8 +699,22 @@ class HarnessDispatcher:
         )
 
         for step_no in range(1, self._max_steps + 1):
+            # Restriction computation. Plan derivation + cursor advancement
+            # happen below, only on a verified execution (see the block
+            # right after `history.append(...)`); the destructive-guard
+            # check sits between the two, at `plan.tool in DESTRUCTIVE_TOOLS`.
             if plan_ids and cursor < len(plan_ids):
                 step_available = [d for d in available if d.tool == plan_ids[cursor]]
+                if not step_available:
+                    # Defensive guard: unreachable today (plan_ids[cursor] is
+                    # always drawn from `available` at derivation time via
+                    # plan.tool/plan.remaining), but if a future plan_next
+                    # implementation is looser about validating `remaining`,
+                    # an empty step_available here would starve the planner
+                    # of any tool -- Tier1Reasoner.plan_next raises on an
+                    # empty skill list, which SkillRunner.plan_next swallows
+                    # into a silent respond. Fall back to the full catalog.
+                    step_available = available
             else:
                 step_available = available
             logger.info(
@@ -736,10 +750,6 @@ class HarnessDispatcher:
             if plan.kind != "tool_call" or plan.tool is None:
                 break
 
-            if not plan_ids:
-                plan_ids = [plan.tool] + [t for t in plan.remaining if t != plan.tool]
-                cursor = 0
-
             tool_intent = ToolIntent(
                 tool=plan.tool,
                 args=dict(plan.args or {}),
@@ -763,7 +773,12 @@ class HarnessDispatcher:
             result = self._harness.execute(tool_intent)
             logger.info(
                 "harness_dispatcher.harness_execute_done",
-                extra={"step": step_no, "status": result.status},
+                extra={
+                    "step": step_no,
+                    "status": result.status,
+                    "plan_len": len(plan_ids),
+                    "cursor": cursor,
+                },
             )
             self._record_tool_call(
                 turn_id=turn_id,
@@ -773,13 +788,23 @@ class HarnessDispatcher:
             )
             history.append((tool_intent, result))
 
-            if (
-                plan_ids
-                and cursor < len(plan_ids)
-                and plan.tool == plan_ids[cursor]
-                and verdict_for_result(result) == "verified"
-            ):
-                cursor += 1
+            # Plan derivation + cursor advancement, gated on a verified
+            # execution (see the restriction computation above, and the
+            # destructive-guard check above that). A failing FIRST step
+            # leaves plan_ids empty, so the NEXT step's restriction check
+            # falls through to the full catalog -- the model retains access
+            # to a legitimate recovery tool instead of being locked into
+            # retrying the tool that just failed.
+            if verdict_for_result(result) == "verified":
+                if not plan_ids:
+                    plan_ids = list(
+                        dict.fromkeys(
+                            [plan.tool] + [t for t in plan.remaining if t != plan.tool]
+                        )
+                    )
+                    cursor = 0
+                if cursor < len(plan_ids) and plan.tool == plan_ids[cursor]:
+                    cursor += 1
 
         logger.info(
             "harness_dispatcher.multi_step_done",
