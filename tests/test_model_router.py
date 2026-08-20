@@ -58,7 +58,6 @@ def test_fast_routes_to_local_ollama() -> None:
     assert t.provider == "ollama"
     assert t.model == "gemma4:e2b"
     assert t.base_url == "http://127.0.0.1:11434"
-    assert t.degraded is False
 
 
 def test_fast_local_always_local() -> None:
@@ -92,7 +91,6 @@ def test_smart_pinned_to_ollama_ignores_probe() -> None:
     t = r.route(ModelTier.SMART)
     assert t.provider == "ollama"
     assert t.model == "llama3.1:8b"
-    assert t.degraded is False
 
 
 def test_smart_pinned_to_openrouter_ignores_missing_key() -> None:
@@ -104,7 +102,6 @@ def test_smart_pinned_to_openrouter_ignores_missing_key() -> None:
     t = r.route(ModelTier.SMART)
     assert t.provider == "openrouter"
     assert t.model == "minimax/minimax-m2.7"
-    assert t.degraded is False
 
 
 def test_smart_pinned_to_ollama_uses_smart_local_model() -> None:

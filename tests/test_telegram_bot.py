@@ -326,7 +326,7 @@ async def test_route_chat_routes_to_pipeline() -> None:
     await route_chat(update, None, pipeline=pipeline, authorizer=authorizer)  # type: ignore[arg-type]
     assert pipeline.calls == [("111", "hi bot")]
     assert update.effective_message is not None
-    assert update.effective_message.replies == ["hello back\n\n_[ollama · stub-model]_"]
+    assert update.effective_message.replies == ["hello back\n\n[ollama · stub-model]"]
 
 
 async def test_route_chat_denied_when_unauthorized() -> None:
@@ -372,7 +372,7 @@ async def test_route_chat_routes_without_authorizer() -> None:
     await route_chat(update, None, pipeline=pipeline)  # type: ignore[arg-type]
     assert pipeline.calls == [("111", "hello")]
     assert update.effective_message is not None
-    assert update.effective_message.replies == ["ok\n\n_[ollama · stub-model]_"]
+    assert update.effective_message.replies == ["ok\n\n[ollama · stub-model]"]
 
 
 async def test_route_chat_hybrid_typing_indicator() -> None:
@@ -410,7 +410,7 @@ async def test_route_chat_hybrid_typing_indicator() -> None:
     assert "Thinking" in placeholder_text
     assert (
         reply_text.await_args_list[1].args[0]
-        == "final answer\n\n_[ollama · stub-model]_"
+        == "final answer\n\n[ollama · stub-model]"
     )
     # Placeholder is deleted so the chat doesn't show an orphaned
     # "Thinking…" bubble above the real reply.
@@ -538,7 +538,7 @@ async def test_route_chat_intent_miss_falls_through_to_pipeline() -> None:
     assert pipeline.calls == [("111", "how are you today")]
     assert long_runner.skill_calls == []
     assert update.effective_message is not None
-    assert update.effective_message.replies == ["hi back\n\n_[ollama · stub-model]_"]
+    assert update.effective_message.replies == ["hi back\n\n[ollama · stub-model]"]
 
 
 async def test_route_chat_intent_hit_but_unresolvable_replies_plainly() -> None:
@@ -975,6 +975,7 @@ def test_build_chat_pipeline_happy_path(tmp_path: Path) -> None:
     # Model name is pinned to cfg.models.smart so telemetry carries the
     # real id the operator configured.
     assert pipe._model_name == cfg.models.smart  # type: ignore[attr-defined]
+    assert pipe.provider == "openrouter"
     # sqlite file was created lazily under the configured memory_db path.
     assert cfg.storage.memory_db.exists()
 
@@ -1004,7 +1005,7 @@ def test_build_chat_pipeline_threads_events(tmp_path: Path) -> None:
 def test_build_chat_pipeline_local_path_selects_ollama_and_bgem3(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # prefer_local=True + Ollama reachable → OllamaClient + Bgem3Embedder.
+    # smart_provider="ollama" + Ollama reachable → OllamaClient + Bgem3Embedder.
     # We stub Bgem3Embedder so the test doesn't touch the network, but we
     # still verify it was selected (the type name is what the factory logs).
     captured: dict[str, Any] = {}
@@ -1038,6 +1039,7 @@ def test_build_chat_pipeline_local_path_selects_ollama_and_bgem3(
     assert isinstance(pipe, ChatPipeline)
     # Model name follows the local target since smart_provider='ollama'.
     assert pipe._model_name == cfg.models.smart_local
+    assert pipe.provider == "ollama"
     assert captured["expected_dim"] == 1024
 
 

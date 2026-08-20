@@ -261,8 +261,16 @@ def _env_bool(raw: str | None, *, default: bool) -> bool:
 
 def _parse_smart_provider(raw: str | None) -> Literal["ollama", "openrouter"]:
     """Explicit SMART-tier provider pin. Unset/invalid -> 'ollama' (local-first default)."""
-    if raw is not None and raw.strip().lower() == "openrouter":
+    if raw is None:
+        return "ollama"
+    normalized = raw.strip().lower()
+    if normalized == "openrouter":
         return "openrouter"
+    if normalized and normalized != "ollama":
+        logger.warning(
+            "config.smart_provider.unrecognized_value",
+            extra={"raw": raw},
+        )
     return "ollama"
 
 

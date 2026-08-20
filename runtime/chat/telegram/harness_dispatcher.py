@@ -219,6 +219,7 @@ class HarnessDispatcher:
         tier3: Tier3Store,
         tier1_loader: Tier1Loader,
         synthesis_model: str,
+        # default is test-ergonomics only; production always passes explicitly
         provider: str = "ollama",
         multi_step: bool = False,
         max_steps: int = 5,
@@ -254,7 +255,7 @@ class HarnessDispatcher:
         return self._clock() if self._clock is not None else datetime.now(tz=UTC)
 
     def _footer(self) -> str:
-        return f"\n\n_[{self._provider} · {self._synthesis_model}]_"
+        return f"\n\n[{self._provider} · {self._synthesis_model}]"
 
     def _append_event(self, event_type: EventType, payload: dict[str, Any]) -> None:
         """Log one structural event, if an EventStream is wired.

@@ -156,8 +156,6 @@ def render_status(snapshot: StatusSnapshot) -> str:
 def render_system_info(info: SystemInfo) -> str:
     """Render the currently-routed model stack + runtime posture."""
     smart_line = f"{info.smart_provider}:{info.smart_model}"
-    if info.smart_degraded:
-        smart_line = f"{smart_line} (degraded)"
     local_state = "reachable" if info.local_ready else "unreachable"
     openrouter_state = "configured" if info.openrouter_configured else "missing"
     vault_line: str

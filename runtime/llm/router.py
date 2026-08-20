@@ -47,14 +47,6 @@ class ModelTarget(BaseModel):
     model: str = Field(min_length=1)
     provider: str = Field(min_length=1)
     base_url: str = Field(min_length=1)
-    degraded: bool = Field(
-        default=False,
-        description=(
-            "True when the route was downgraded from a preferred target — "
-            "e.g. SMART→local because OpenRouter wasn't configured, or "
-            "SMART→local because prefer_local=True won. Informational only."
-        ),
-    )
 
 
 LocalReadyProbe = Callable[[], bool]

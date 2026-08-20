@@ -67,7 +67,6 @@ class SystemInfo(BaseModel):
 
     smart_model: str
     smart_provider: str
-    smart_degraded: bool
     smart_local_model: str
     fast_model: str
     reflection_model: str
@@ -96,7 +95,6 @@ def collect_system_info(cfg: AegisConfig, *, router: ModelRouter) -> SystemInfo:
     return SystemInfo(
         smart_model=smart_target.model,
         smart_provider=smart_target.provider,
-        smart_degraded=smart_target.degraded,
         smart_local_model=cfg.models.smart_local,
         fast_model=cfg.models.fast,
         reflection_model=cfg.models.reflection,
