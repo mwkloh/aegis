@@ -929,18 +929,20 @@ def build_harness_dispatcher(
 def _startup_message_body(cfg: AegisConfig, *, now: datetime | None = None) -> str:
     """Compose the "AEGIS online" notification body. Pure function — tested.
 
-    Includes a UTC timestamp, the configured SMART-tier model, and
-    whether the conversational pipeline is wired (OpenRouter key
-    present) or running in stub mode. Operator uses /status for the
-    full picture; this is just a heartbeat-on-boot signal.
+    Includes a UTC timestamp, the live-routed SMART-tier provider:model
+    (via `ModelRouter.route` — a pure config lookup post smart_provider
+    pin, no network probe), and whether the conversational pipeline is
+    wired (OpenRouter key present) or running in stub mode. Operator uses
+    /status for the full picture; this is just a heartbeat-on-boot signal.
     """
     stamp = (now or datetime.now(UTC)).strftime("%Y-%m-%d %H:%M UTC")
     chat_status = (
         "wired" if cfg.providers.openrouter_api_key else "stub (no OPENROUTER_API_KEY)"
     )
+    target = ModelRouter(cfg).route(ModelTier.SMART)
     return (
         f"🟢 AEGIS online — {stamp}\n"
-        f"model: {cfg.models.smart}\n"
+        f"model: {target.provider}:{target.model}\n"
         f"chat: {chat_status}"
     )
 

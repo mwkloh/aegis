@@ -174,7 +174,6 @@ def render_system_info(info: SystemInfo) -> str:
         f"• fast:       {info.fast_model}\n"
         f"• reflection: {info.reflection_model}\n"
         f"• coding:     {info.coding_model}\n"
-        f"• prefer_local: {str(info.prefer_local).lower()}\n"
         "Runtime:\n"
         f"• ollama:     {info.ollama_base_url} ({local_state})\n"
         f"• openrouter: {openrouter_state}\n"
