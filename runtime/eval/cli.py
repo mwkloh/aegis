@@ -58,6 +58,7 @@ async def _run(args: argparse.Namespace) -> int:
     registry = SkillRegistry.from_directory(cfg.skills.catalog_dir)
     tier1_loader = Tier1Loader(cfg.storage.workspace)
 
+    started_at = datetime.now(UTC)
     task_results: list[TaskResult] = []
     for task in tasks:
         print(f"Running {task.id}...")
@@ -67,7 +68,7 @@ async def _run(args: argparse.Namespace) -> int:
     report = EvalReport(
         provider=target.provider,
         model=target.model,
-        started_at=datetime.now(UTC),
+        started_at=started_at,
         tasks=tuple(task_results),
     )
     print()
