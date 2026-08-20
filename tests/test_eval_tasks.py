@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from runtime.eval.tasks import EvalTask, load_tasks, substitute_sandbox
 
@@ -67,8 +68,16 @@ expected_calls:
 
 
 def test_load_tasks_sorted_by_filename(tmp_path: Path) -> None:
-    _write(tmp_path / "b_task.yaml", "id: b\ndescription: b\nvariants: ['x']\nexpected_calls: [{tool: echo, args_match: {}}]\n")
-    _write(tmp_path / "a_task.yaml", "id: a\ndescription: a\nvariants: ['x']\nexpected_calls: [{tool: echo, args_match: {}}]\n")
+    _write(
+        tmp_path / "b_task.yaml",
+        "id: b\ndescription: b\nvariants: ['x']\nexpected_calls: "
+        "[{tool: echo, args_match: {}}]\n",
+    )
+    _write(
+        tmp_path / "a_task.yaml",
+        "id: a\ndescription: a\nvariants: ['x']\nexpected_calls: "
+        "[{tool: echo, args_match: {}}]\n",
+    )
     tasks = load_tasks(tmp_path)
     assert [t.id for t in tasks] == ["a", "b"]
 
@@ -98,10 +107,15 @@ def test_substitute_sandbox_passthrough_non_string() -> None:
 
 
 def test_evaltask_requires_at_least_one_variant() -> None:
-    with pytest.raises(Exception):
-        EvalTask(id="x", description="x", variants=(), expected_calls=({"tool": "echo", "args_match": {}},))
+    with pytest.raises(ValidationError):
+        EvalTask(
+            id="x",
+            description="x",
+            variants=(),
+            expected_calls=({"tool": "echo", "args_match": {}},),
+        )
 
 
 def test_evaltask_requires_at_least_one_expected_call() -> None:
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         EvalTask(id="x", description="x", variants=("hi",), expected_calls=())

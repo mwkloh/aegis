@@ -22,16 +22,36 @@ def _report() -> EvalReport:
                 task_id="list_downloads",
                 description="List files.",
                 variants=(
-                    VariantResult(task_id="list_downloads", variant_text="v1", passed=True, duration_s=1.0),
-                    VariantResult(task_id="list_downloads", variant_text="v2", passed=True, duration_s=1.0),
-                    VariantResult(task_id="list_downloads", variant_text="v3", passed=True, duration_s=1.0),
+                    VariantResult(
+                        task_id="list_downloads",
+                        variant_text="v1",
+                        passed=True,
+                        duration_s=1.0,
+                    ),
+                    VariantResult(
+                        task_id="list_downloads",
+                        variant_text="v2",
+                        passed=True,
+                        duration_s=1.0,
+                    ),
+                    VariantResult(
+                        task_id="list_downloads",
+                        variant_text="v3",
+                        passed=True,
+                        duration_s=1.0,
+                    ),
                 ),
             ),
             TaskResult(
                 task_id="search_then_read",
                 description="Search then read.",
                 variants=(
-                    VariantResult(task_id="search_then_read", variant_text="v1", passed=True, duration_s=1.0),
+                    VariantResult(
+                        task_id="search_then_read",
+                        variant_text="v1",
+                        passed=True,
+                        duration_s=1.0,
+                    ),
                     VariantResult(
                         task_id="search_then_read",
                         variant_text="v2",
