@@ -68,10 +68,22 @@ class PlanStep(BaseModel):
     done, grounded in the tool results already in the chain history. The
     dispatcher gates task_complete summaries against the turn's evidence
     ledger (C2) — see docs/PLAN_PHASE_11_CAPABILITY_FLOOR.md.
+
+    `remaining` is the model's own self-reported list of tool ids it still
+    believes are needed to satisfy the operator's request, not counting
+    tools already called successfully. It has no default in the JSON schema
+    sent to the model (`_build_planner_schema` marks it required, ordered
+    before `kind`) so a small model is forced to externalize its own
+    decomposition of the request before committing to a next step, rather
+    than deciding both in one implicit judgement. It defaults to `[]` here
+    at the Python model level (not the wire schema) so callers that build a
+    `PlanStep` directly — the `SkillRunner` degrade path, older test
+    fixtures — don't need to supply it.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    remaining: list[str] = Field(default_factory=list, max_length=16)
     kind: str = Field(pattern="^(tool_call|respond|task_complete)$")
     tool: str | None = Field(default=None, max_length=64)
     args: dict[str, Any] | None = Field(default=None)
@@ -272,13 +284,33 @@ def _build_planner_schema(skills: Sequence[SkillDescriptor]) -> dict[str, Any]:
     to Ollama as a `format` constraint (Track A, A2). The explicit `True`
     keeps the decoder grammar open, matching the client-side
     Draft202012Validator's (already-open) interpretation.
+
+    `remaining` is declared FIRST in `properties` and is required, ahead of
+    `kind`. Grammar-constrained decoding (this schema arrives at Ollama as a
+    `format` constraint, compiled via llama.cpp's json-schema-to-grammar)
+    generates object keys in declaration order, so forcing `remaining`
+    first means the model must externalize which tool ids it still believes
+    are needed — as real generated tokens, self-attended to by everything
+    that follows — before it is allowed to commit to `kind`. This targets
+    two measured small-model failure modes: skipping a required earlier
+    step, and concluding `task_complete` after only the first of several
+    required tool calls. Its items are constrained to the same tool-id
+    enum as `tool` — `remaining` names tool ids, not prose.
     """
     tool_ids = sorted({d.tool for d in skills})
+    tool_enum: dict[str, Any] = {"type": "string", "enum": tool_ids} if tool_ids else {
+        "type": "string"
+    }
     return {
         "type": "object",
         "additionalProperties": False,
-        "required": ["kind"],
+        "required": ["remaining", "kind"],
         "properties": {
+            "remaining": {
+                "type": "array",
+                "items": tool_enum,
+                "maxItems": 16,
+            },
             "kind": {"type": "string", "enum": ["tool_call", "respond", "task_complete"]},
             "tool": {"type": "string", "enum": tool_ids} if tool_ids else {"type": "string"},
             "args": {"type": "object", "properties": {}, "additionalProperties": True},
