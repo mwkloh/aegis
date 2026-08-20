@@ -18,7 +18,7 @@ from runtime.chat.memory.tier3 import Tier3Store
 from runtime.chat.telegram.bot import build_harness_dispatcher
 from runtime.config import AegisConfig
 from runtime.eval.grading import CallRecord, grade_calls
-from runtime.eval.report import TaskResult, VariantResult
+from runtime.eval.report import ObservedCall, TaskResult, VariantResult
 from runtime.eval.tasks import EvalTask, ExpectedCall, substitute_sandbox
 from runtime.events import EventStream
 from runtime.files.client import FilesClient
@@ -126,6 +126,10 @@ async def run_variant(
                 passed=grade.passed,
                 reason=grade.reason,
                 duration_s=time.monotonic() - t0,
+                actual_calls=tuple(
+                    ObservedCall(tool=tool, args=args, status=status)
+                    for tool, args, status in observing.calls
+                ),
             )
         except Exception as exc:  # eval harness must never crash the batch
             return VariantResult(

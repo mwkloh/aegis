@@ -3,8 +3,27 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
+
+
+class ObservedCall(BaseModel):
+    """One (tool, args, status) tuple as actually executed by `_ObservingHarness`.
+
+    Distinct from `ExpectedCall` (runtime/eval/tasks.py) -- this is what the
+    model really did, not what a task author declared it should do. Kept on
+    `VariantResult` so a failed variant's JSON shows the real call sequence,
+    not just the grader's pass/fail reason -- previously the JSON gave no
+    way to tell, e.g., a skipped-a-required-step failure from a
+    stopped-after-one-step failure without re-running the harness.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    tool: str
+    args: dict[str, Any]
+    status: str
 
 
 class VariantResult(BaseModel):
@@ -15,6 +34,7 @@ class VariantResult(BaseModel):
     passed: bool
     reason: str = ""
     duration_s: float = Field(ge=0.0)
+    actual_calls: tuple[ObservedCall, ...] = ()
 
 
 class TaskResult(BaseModel):
@@ -85,4 +105,11 @@ def write_json(report: EvalReport, out_dir: Path) -> Path:
     return path
 
 
-__all__ = ["EvalReport", "TaskResult", "VariantResult", "render_console", "write_json"]
+__all__ = [
+    "EvalReport",
+    "ObservedCall",
+    "TaskResult",
+    "VariantResult",
+    "render_console",
+    "write_json",
+]
