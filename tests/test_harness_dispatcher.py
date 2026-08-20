@@ -785,7 +785,9 @@ class _MultiSkillRegistry:
         return list(self._descriptors)
 
 
-def _two_skill_setup() -> tuple[_MultiSkillRegistry, _RecordingHarness]:
+def _two_skill_setup(
+    *, read_fails: bool = False
+) -> tuple[_MultiSkillRegistry, _RecordingHarness]:
     search = SkillDescriptor(
         id="search_files",
         description="Search for files matching a glob.",
@@ -803,10 +805,16 @@ def _two_skill_setup() -> tuple[_MultiSkillRegistry, _RecordingHarness]:
         requires_tier1=True,
     )
     registry = _MultiSkillRegistry([search, read], primary_intent="search_files")
+
+    def _read(args: dict[str, Any]) -> dict[str, Any]:
+        if read_fails:
+            raise RuntimeError("boom")
+        return {"content": "hello"}
+
     harness = _RecordingHarness(
         tools={
             "files_search": lambda args: {"matches": ["/tmp/a.md", "/tmp/b.md"]},
-            "files_read": lambda args: {"content": "hello"},
+            "files_read": _read,
         }
     )
     return registry, harness
@@ -895,6 +903,94 @@ async def test_multi_step_single_tool_then_respond() -> None:
     assert len(harness.calls) == 1
     # Synthesis got exactly the one call's history.
     assert len(runner.plan_next_calls[1]["history"]) == 1
+
+
+async def test_multi_step_restricts_tool_choices_to_plan_cursor() -> None:
+    """Step 1 sees the full catalog. After it succeeds, step 2 is narrowed
+    to just the next planned tool. After that succeeds too (plan
+    exhausted), step 3 sees the full catalog again."""
+    registry, harness = _two_skill_setup()
+    runner = _StubPlanRunner(
+        plan_steps=[
+            PlanStep(
+                kind="tool_call",
+                tool="files_search",
+                args={"glob": "*.md"},
+                remaining=["files_search", "files_read"],
+            ),
+            PlanStep(kind="tool_call", tool="files_read", args={"path": "/tmp/a.md"}),
+            PlanStep(kind="respond"),
+        ],
+    )
+    dispatcher = _make_loop_dispatcher(runner=runner, registry=registry, harness=harness)
+
+    await dispatcher.dispatch(chat_id=1, user_text="find and read", message=_FakeMessage())
+
+    assert len(runner.plan_next_calls) == 3
+    assert {d.tool for d in runner.plan_next_calls[0]["available_skills"]} == {
+        "files_search",
+        "files_read",
+    }
+    assert [d.tool for d in runner.plan_next_calls[1]["available_skills"]] == ["files_read"]
+    assert {d.tool for d in runner.plan_next_calls[2]["available_skills"]} == {
+        "files_search",
+        "files_read",
+    }
+
+
+async def test_multi_step_restriction_persists_after_step_failure() -> None:
+    """A failing planned step keeps the same single-tool restriction on the
+    next call -- the cursor does not advance, and the model does not regain
+    access to files_search, an earlier already-succeeded tool."""
+    registry, harness = _two_skill_setup(read_fails=True)
+    runner = _StubPlanRunner(
+        plan_steps=[
+            PlanStep(
+                kind="tool_call",
+                tool="files_search",
+                args={"glob": "*.md"},
+                remaining=["files_search", "files_read"],
+            ),
+            PlanStep(kind="tool_call", tool="files_read", args={"path": "/tmp/a.md"}),
+        ],
+    )
+    dispatcher = _make_loop_dispatcher(runner=runner, registry=registry, harness=harness)
+
+    await dispatcher.dispatch(chat_id=1, user_text="find and read", message=_FakeMessage())
+
+    # files_read fails every time it's called (read_fails=True), so the
+    # runner keeps returning the last queued step (files_read) and the loop
+    # runs to the default max_steps=5. Steps 2 through 5 (call indices 1-4)
+    # must all stay restricted to files_read only.
+    assert len(runner.plan_next_calls) == 5
+    for call in runner.plan_next_calls[1:]:
+        assert [d.tool for d in call["available_skills"]] == ["files_read"]
+
+
+async def test_multi_step_plan_leads_with_actual_tool_called() -> None:
+    """If the model's first-step `remaining` omits its own tool, the
+    derived plan must still lead with the tool actually called, not just
+    whatever the model self-reported -- otherwise the plan would appear
+    exhausted after one step and step 2 would wrongly see the full catalog
+    instead of being restricted to files_read."""
+    registry, harness = _two_skill_setup()
+    runner = _StubPlanRunner(
+        plan_steps=[
+            PlanStep(
+                kind="tool_call",
+                tool="files_search",
+                args={"glob": "*.md"},
+                remaining=["files_read"],  # omits its own tool, "files_search"
+            ),
+            PlanStep(kind="tool_call", tool="files_read", args={"path": "/tmp/a.md"}),
+            PlanStep(kind="respond"),
+        ],
+    )
+    dispatcher = _make_loop_dispatcher(runner=runner, registry=registry, harness=harness)
+
+    await dispatcher.dispatch(chat_id=1, user_text="find and read", message=_FakeMessage())
+
+    assert [d.tool for d in runner.plan_next_calls[1]["available_skills"]] == ["files_read"]
 
 
 async def test_multi_step_immediate_respond_returns_pass() -> None:

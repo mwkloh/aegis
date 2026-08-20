@@ -681,6 +681,14 @@ class HarnessDispatcher:
         """
         available = list(self._registry.all())
         history: list[tuple[ToolIntent, ToolResult]] = []
+        # Turn-local plan lock (spec: docs/superpowers/specs/2026-08-21-
+        # multi-step-plan-lock-design.md). Derived from the first tool_call
+        # step's own `tool` + `remaining`; empty until then. While the
+        # cursor is inside plan_ids, available_skills is narrowed to just
+        # that one step's tool -- the model can retry a failed step but
+        # cannot regress to an earlier one or substitute an unplanned tool.
+        plan_ids: list[str] = []
+        cursor = 0
         logger.info(
             "harness_dispatcher.multi_step_start",
             extra={
@@ -691,13 +699,17 @@ class HarnessDispatcher:
         )
 
         for step_no in range(1, self._max_steps + 1):
+            if plan_ids and cursor < len(plan_ids):
+                step_available = [d for d in available if d.tool == plan_ids[cursor]]
+            else:
+                step_available = available
             logger.info(
                 "harness_dispatcher.plan_next_start",
                 extra={"step": step_no, "history_len": len(history)},
             )
             plan = await self._runner.plan_next(
                 user_text=user_text,
-                available_skills=available,
+                available_skills=step_available,
                 history=tuple(history),
                 recent=recent,
             )
@@ -723,6 +735,10 @@ class HarnessDispatcher:
 
             if plan.kind != "tool_call" or plan.tool is None:
                 break
+
+            if not plan_ids:
+                plan_ids = [plan.tool] + [t for t in plan.remaining if t != plan.tool]
+                cursor = 0
 
             tool_intent = ToolIntent(
                 tool=plan.tool,
@@ -756,6 +772,14 @@ class HarnessDispatcher:
                 result=result,
             )
             history.append((tool_intent, result))
+
+            if (
+                plan_ids
+                and cursor < len(plan_ids)
+                and plan.tool == plan_ids[cursor]
+                and verdict_for_result(result) == "verified"
+            ):
+                cursor += 1
 
         logger.info(
             "harness_dispatcher.multi_step_done",
