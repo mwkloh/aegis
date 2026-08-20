@@ -6,7 +6,7 @@ PY := $(VENV)/bin/python
 PIP := $(VENV)/bin/pip
 PYTHON_BIN ?= $(shell command -v python3.12 || command -v python3.11 || command -v python3.13 || command -v python3)
 
-.PHONY: help setup venv install bootstrap doctor lint type test test-unit test-e2e security run reflect review harness apply clean
+.PHONY: help setup venv install bootstrap doctor lint type test test-unit test-e2e security run reflect review harness apply clean eval
 
 help:  ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -47,6 +47,9 @@ security:  ## Bandit + Semgrep (Semgrep already on system)
 
 run:  ## Launch the CLI walking skeleton
 	$(PY) -m runtime.chat.cli
+
+eval:  ## Live-model benchmark of the multi-step harness (slow, costs tokens)
+	$(PY) -m runtime.eval.cli
 
 reflect:  ## Run the Reflection plane over today's events (read-only)
 	$(PY) -m runtime.reflection.cli
