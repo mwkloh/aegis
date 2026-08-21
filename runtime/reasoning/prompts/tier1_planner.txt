@@ -46,6 +46,11 @@ Rules:
 - Any filesystem path (keys named `path`, `directory`, etc.) MUST be absolute —
   begin with "/" or "~". If a prior tool result established the directory,
   reuse that absolute path.
+- When a prior tool result in "Tool calls already made" above contains a
+  file path, copy that exact string for any later `path` argument that
+  refers to the same file. Do not reconstruct, abbreviate, or guess a path
+  from the search pattern or the operator's wording — only from what a
+  tool result actually returned.
 - Do not chain destructive tools (`files_delete`, `files_move`,
   `files_write`) without explicit operator confirmation in the request.
 - One step at a time. Do not pack multiple actions into one reply.
