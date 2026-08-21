@@ -81,6 +81,22 @@ _SYNTHESIS_CHAIN_PROMPT_PATH = (
 _MAX_CHAIN_RESULT_CHARS = 1024
 _GUARD_MIN_STEP = 2  # destructive-tool guard applies from step 2 onward
 
+# Classification-fallback sentinel (spec: docs/superpowers/specs/2026-08-21-
+# classification-fallback-design.md). Used only as a label when intent
+# classification finds no matching skill and the multi-step planner is given
+# the full catalog instead. `tool` is a non-empty sentinel string -- never
+# checked against harness.has_tool() or passed to harness.execute(); the
+# planner's own plan.tool is what actually runs. Never registered as a real
+# skill, never imported elsewhere.
+_UNCLASSIFIED_DESCRIPTOR = SkillDescriptor(
+    id="unclassified_fallback",
+    description="Classification miss — multi-step planner chose from the full catalog.",
+    intents=[],
+    tool="_unclassified",
+    args_schema={},
+    requires_tier1=True,
+)
+
 __all__ = ["DESTRUCTIVE_TOOLS", "DispatchOutcome", "HarnessDispatcher"]
 
 
@@ -460,22 +476,31 @@ class HarnessDispatcher:
         )
 
         descriptor = self._registry.for_intent(intent)
+        is_fallback = False
         if descriptor is None:
             logger.info("harness_dispatcher.no_descriptor", extra={"intent": intent})
-            return DispatchOutcome.PASS
-
-        if not self._harness.has_tool(descriptor.tool):
+            if not self._multi_step:
+                return DispatchOutcome.PASS
+            descriptor = _UNCLASSIFIED_DESCRIPTOR
+            is_fallback = True
             logger.info(
-                "harness_dispatcher.no_tool", extra={"tool": descriptor.tool}
+                "harness_dispatcher.classification_fallback_start",
+                extra={"chat_id": chat_id, "available_skills": len(self._registry.all())},
             )
-            return DispatchOutcome.PASS
 
-        if confidence < HARNESS_CONFIDENCE_THRESHOLD:
-            question = _clarify_question(descriptor)
-            await _send(question)
-            self._tier3.append(str(chat_id), "user", user_text)
-            self._tier3.append(str(chat_id), "bot", question)
-            return DispatchOutcome.CLARIFY
+        if not is_fallback:
+            if not self._harness.has_tool(descriptor.tool):
+                logger.info(
+                    "harness_dispatcher.no_tool", extra={"tool": descriptor.tool}
+                )
+                return DispatchOutcome.PASS
+
+            if confidence < HARNESS_CONFIDENCE_THRESHOLD:
+                question = _clarify_question(descriptor)
+                await _send(question)
+                self._tier3.append(str(chat_id), "user", user_text)
+                self._tier3.append(str(chat_id), "bot", question)
+                return DispatchOutcome.CLARIFY
 
         logger.info(
             "harness_dispatcher.recent_turns_start", extra={"chat_id": chat_id}
@@ -487,6 +512,7 @@ class HarnessDispatcher:
                 user_text=user_text,
                 recent=recent,
                 turn_id=turn_id,
+                guard_min_step=1 if is_fallback else _GUARD_MIN_STEP,
             )
             if chain.guarded_intent is not None:
                 # Destructive guard tripped beyond step 1. Skip synthesis and
@@ -651,6 +677,7 @@ class HarnessDispatcher:
         user_text: str,
         recent: tuple[tuple[str, str], ...],
         turn_id: str,
+        guard_min_step: int = _GUARD_MIN_STEP,
     ) -> _ChainResult:
         """Bounded multi-step planner loop (Steps 2 + 4).
 
@@ -757,7 +784,7 @@ class HarnessDispatcher:
                 rationale=f"multi-step planner: step {step_no}",
             )
 
-            if plan.tool in DESTRUCTIVE_TOOLS and step_no >= _GUARD_MIN_STEP:
+            if plan.tool in DESTRUCTIVE_TOOLS and step_no >= guard_min_step:
                 logger.info(
                     "harness_dispatcher.destructive_guard_triggered",
                     extra={"tool": plan.tool, "step": step_no},

@@ -228,6 +228,76 @@ async def test_pass_on_unknown_intent() -> None:
     assert message.replies == []
 
 
+async def test_classification_fallback_reaches_planner_with_unclassified_skill_id() -> None:
+    """Unknown intent + multi_step=True must reach the planner (not PASS
+    immediately), and the resulting tool call must carry the sentinel
+    skill_id so the fallback path is distinguishable in recorded calls."""
+    registry, harness = _two_skill_setup()
+    runner = _StubPlanRunner(
+        plan_steps=[
+            PlanStep(kind="tool_call", tool="files_search", args={"glob": "*.md"}),
+            PlanStep(kind="respond"),
+        ],
+    )
+    dispatcher = _make_loop_dispatcher(
+        runner=runner,
+        registry=registry,
+        harness=harness,
+        classifier=_StubClassifier("unknown", 0.0),
+    )
+    message = _FakeMessage()
+
+    outcome = await dispatcher.dispatch(
+        chat_id=1, user_text="do the compound thing", message=message
+    )
+
+    assert outcome == DispatchOutcome.FIRED
+    assert len(runner.plan_next_calls) >= 1
+    assert harness.calls[0].tool == "files_search"
+    assert harness.calls[0].skill_id == "unclassified_fallback"
+
+
+async def test_classification_fallback_guards_destructive_tool_at_step_1() -> None:
+    """The fallback path has no classification signal at all, so unlike
+    normal classified dispatch, a destructive tool is guarded even at
+    step 1 -- the operator must confirm before it runs."""
+    registry, harness = _destructive_setup("files_delete")
+    runner = _StubPlanRunner(
+        plan_steps=[
+            PlanStep(kind="tool_call", tool="files_delete", args={"path": "/tmp/x"}),
+            PlanStep(kind="respond"),
+        ],
+    )
+    dispatcher = _make_loop_dispatcher(
+        runner=runner,
+        registry=registry,
+        harness=harness,
+        classifier=_StubClassifier("unknown", 0.0),
+    )
+    message = _FakeMessage()
+
+    outcome = await dispatcher.dispatch(
+        chat_id=1, user_text="delete something", message=message
+    )
+
+    assert outcome == DispatchOutcome.FIRED
+    assert harness.calls == []  # destructive tool never actually executed
+    assert "⚠️ I'd like to run `files_delete`" in message.replies[0]
+
+
+async def test_multi_step_false_unknown_intent_ignores_fallback() -> None:
+    """multi_step=False must keep today's PASS behavior on descriptor is
+    None -- the fallback only ever applies to the multi-step path, since
+    the single-shot reasoner needs a real descriptor to reason about."""
+    dispatcher = _make_dispatcher(classifier=_StubClassifier("unknown", 0.0))
+    message = _FakeMessage()
+
+    outcome = await dispatcher.dispatch(chat_id=1, user_text="hmm", message=message)
+
+    assert outcome == DispatchOutcome.PASS
+    assert message.replies == []
+
+
 async def test_pass_when_tool_not_in_harness() -> None:
     harness = HarnessAdapter(tools={"echo": lambda args: {"echoed": "x", "length": 1}})
     dispatcher = _make_dispatcher(
