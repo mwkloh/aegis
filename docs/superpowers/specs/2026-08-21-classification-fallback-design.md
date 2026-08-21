@@ -36,13 +36,17 @@ descriptor = self._registry.for_intent(intent)
 is_fallback = False
 if descriptor is None:
     logger.info("harness_dispatcher.no_descriptor", extra={"intent": intent})
-    if not self._multi_step:
+    # The fallback is for classification MISSES ("unknown") only -- a
+    # confident classification for a real intent that simply has no
+    # registered skill (a catalog/config mismatch, not a miss) must still
+    # PASS, not get swept into the fallback planner too.
+    if not self._multi_step or intent != "unknown":
         return DispatchOutcome.PASS
     descriptor = _UNCLASSIFIED_DESCRIPTOR
     is_fallback = True
     logger.info(
         "harness_dispatcher.classification_fallback_start",
-        extra={"chat_id": chat_id, "available_skills": len(self._registry.all())},
+        extra={"chat_id": chat_id, "intent": intent},
     )
 
 if not is_fallback:
@@ -114,9 +118,21 @@ The destructive-guard check (`harness_dispatcher.py:734`) changes from `step_no 
 
 Cost: a genuinely destructive first action cannot complete in one step through the fallback path, even if it's exactly what the user wanted. They see a confirmation prompt on step 2 instead. Given zero classification signal, that's the correct default — not overcaution.
 
+### Safety: the fallback's trigger condition is broader than compound requests
+
+`dispatch()` gates the fallback on `descriptor is None and intent == "unknown"` (the `intent != "unknown"` half of that guard was added during merge-blocking review to keep a confidently-classified-but-unregistered intent from being swept into the fallback too — see Testing, `test_classified_but_unregistered_intent_still_returns_pass_in_multi_step`). In production this guard is a no-op: `ModelBackedClassifier`'s own JSON schema (`_build_schema` in `runtime/intent/classifier.py`) constrains the model's `intent` output to `known_intents ∪ {"unknown"}`, so `for_intent(intent) is None` and `intent == "unknown"` are structurally equivalent whenever the real classifier is in the loop — the guard only matters for classifiers (or test doubles) that don't respect that invariant. That equivalence is exactly why the trigger condition is still broader than the compound-request case that motivates this branch:
+
+1. **Every unclassifiable message reaches the fallback, not just compound requests.** Chit-chat, greetings, typos, and any other input the classifier can't place all resolve to `intent="unknown"` — the same value a genuinely-compound "do X then Y" request produces on a classification miss. `dispatch()` has no way to tell "this needs the planner" from "this needs nothing at all" using `intent`/`confidence` alone, so a plain conversational message now pays one extra SMART-model planner round-trip before falling through to chat. This is bounded, not open-ended: if the planner's first move is `respond` with empty history — the expected outcome when there's nothing to plan — `dispatch()`'s existing PASS-on-empty-history handling still returns `PASS`, and the conversation is preserved exactly as before this branch. The cost is one extra round-trip's latency, not a functional regression.
+
+2. **A classifier failure now fails open instead of failing safe.** `ModelBackedClassifier.classify()` returns `IntentClassification(intent="unknown", confidence=0.0)` for two situations that are indistinguishable from the return value alone: a genuine "I can't classify this," and an internal transport/schema failure it catches and converts into a value rather than raising (`runtime/intent/classifier.py`'s `except (httpx.HTTPError, ValueError, RuntimeError)` branch and the two schema/validation-failure branches in `_ask_model`, all three collapsing to the same `unknown`/`0.0` result). Both look identical to `dispatch()`. Before this branch, either case meant "touch nothing" — safe regardless of which one happened. After this branch, both reach the full multi-step planner with the entire catalog and zero classification signal: a genuine classifier *outage* now fails open (routes everything to the fallback planner) instead of failing safe (routing everything to `PASS`, as it did before this branch).
+
+3. **Fixing (2) is a real follow-up, not something this branch treats as acceptable.** Distinguishing "genuinely unclassifiable" from "the classifier itself failed" requires changing `ModelBackedClassifier`/`runtime/intent/classifier.py`'s own return contract — e.g. raising on transport/schema failure instead of degrading to a value, or returning a distinct sentinel for infra failures so `dispatch()` can tell the two apart. That interface change is explicitly out of scope for this branch (see Scope, above — ruled out during brainstorming). This section exists so that ruling is a stated, deliberate tradeoff instead of an undocumented side effect discovered later.
+
 ### Observability
 
-`dispatch()` logs a distinct event when the fallback triggers, before calling `_run_multi_step` — shown already in the "Fallback mechanism" code above (`harness_dispatcher.classification_fallback_start`). Deliberately excludes raw `user_text` from the log payload, matching this codebase's existing practice elsewhere in this file (tool args are logged, but the evidence ledger stores only `argv_hash`, never real argument values — see `runtime/tools/record.py`). This is a new, previously-unreachable code path; being able to find every turn that took it in production logs is worth the one extra log line, but logging raw user text is a precedent this spec should not set.
+`dispatch()` logs a distinct event when the fallback triggers, before calling `_run_multi_step` — shown already in the "Fallback mechanism" code above (`harness_dispatcher.classification_fallback_start`, carrying `chat_id` and `intent`). Deliberately excludes raw `user_text` from the log payload, matching this codebase's existing practice elsewhere in this file (tool args are logged, but the evidence ledger stores only `argv_hash`, never real argument values — see `runtime/tools/record.py`). This is a new, previously-unreachable code path; being able to find every turn that took it in production logs is worth the one extra log line, but logging raw user text is a precedent this spec should not set.
+
+`available_skills` is deliberately omitted from this log line (added during merge-blocking review): `_run_multi_step`'s own `multi_step_start` log, fired immediately next in the same turn, already reports it from `available`, which that method has to materialize anyway to run the loop. Computing `len(self._registry.all())` a second time here would only build a throwaway list for this one field.
 
 ## Testing
 
@@ -126,6 +142,7 @@ Cost: a genuinely destructive first action cannot complete in one step through t
 - A tool call recorded via the fallback path carries `skill_id="unclassified_fallback"` in its `ToolIntent`.
 - A destructive tool chosen as the planner's very first step through the fallback path trips the guard (new behavior — `guard_min_step=1`).
 - A destructive tool chosen as the very first step through *normal*, classified multi-step dispatch (existing call site, no `guard_min_step` override) still does **not** trip the guard at step 1 — a regression guard confirming today's behavior at every unmodified call site is unchanged.
+- A confidently classified intent (`confidence=0.95`, a real intent string, not `"unknown"`) with no matching skill still returns `PASS` under `multi_step=True` — confirms the fallback triggers on classification *misses* specifically, not on every `descriptor is None` case (`test_classified_but_unregistered_intent_still_returns_pass_in_multi_step`, added during merge-blocking review alongside the `intent != "unknown"` guard in "Safety: the fallback's trigger condition is broader than compound requests").
 
 **Live validation:** re-run `runtime/eval/cli.py` against `gemma4:e2b-mlx`. Success: `list_then_read`'s `actual_calls` show a real `files_list` → `files_read` chain (whether or not the task's specific grading passes — this fix's job is reaching the planner, not guaranteeing task completion), and `search_then_read` and every currently-passing task show no regression.
 

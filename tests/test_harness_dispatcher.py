@@ -207,6 +207,9 @@ def _make_dispatcher(
 
 
 async def test_pass_on_non_tool_intent() -> None:
+    # multi_step=False here -- see
+    # test_classified_but_unregistered_intent_still_returns_pass_in_multi_step
+    # for the multi_step=True case.
     descriptor = _stub_descriptor("list_files", "files_list", ["list_files"])
     registry = SkillRegistry([descriptor])
     dispatcher = _make_dispatcher(
@@ -221,6 +224,9 @@ async def test_pass_on_non_tool_intent() -> None:
 
 
 async def test_pass_on_unknown_intent() -> None:
+    # multi_step=False here -- see
+    # test_classified_but_unregistered_intent_still_returns_pass_in_multi_step
+    # for the multi_step=True case.
     dispatcher = _make_dispatcher(classifier=_StubClassifier("unknown", 0.0))
     message = _FakeMessage()
     outcome = await dispatcher.dispatch(chat_id=123, user_text="hmm", message=message)
@@ -283,6 +289,30 @@ async def test_classification_fallback_guards_destructive_tool_at_step_1() -> No
     assert outcome == DispatchOutcome.FIRED
     assert harness.calls == []  # destructive tool never actually executed
     assert "⚠️ I'd like to run `files_delete`" in message.replies[0]
+
+
+async def test_classified_but_unregistered_intent_still_returns_pass_in_multi_step() -> None:
+    """A confidently classified intent with no matching skill (not an
+    'unknown' classification miss) must still return PASS under
+    multi_step=True -- the fallback is for classification MISSES, not for
+    every intent that happens to lack a registered skill."""
+    registry, harness = _two_skill_setup()
+    runner = _StubPlanRunner(plan_steps=[PlanStep(kind="respond")])
+    dispatcher = _make_loop_dispatcher(
+        runner=runner,
+        registry=registry,
+        harness=harness,
+        classifier=_StubClassifier("ask_question", 0.95),
+    )
+    message = _FakeMessage()
+
+    outcome = await dispatcher.dispatch(
+        chat_id=1, user_text="what time is it?", message=message
+    )
+
+    assert outcome == DispatchOutcome.PASS
+    assert harness.calls == []
+    assert runner.plan_next_calls == []
 
 
 async def test_multi_step_false_unknown_intent_ignores_fallback() -> None:

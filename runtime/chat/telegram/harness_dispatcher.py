@@ -479,13 +479,22 @@ class HarnessDispatcher:
         is_fallback = False
         if descriptor is None:
             logger.info("harness_dispatcher.no_descriptor", extra={"intent": intent})
-            if not self._multi_step:
+            # The fallback is for classification MISSES ("unknown") only --
+            # a confident classification for a real intent that simply has
+            # no registered skill (a catalog/config mismatch, not a miss)
+            # must still PASS, not get swept into the fallback planner too.
+            if not self._multi_step or intent != "unknown":
                 return DispatchOutcome.PASS
             descriptor = _UNCLASSIFIED_DESCRIPTOR
             is_fallback = True
+            # available_skills count is omitted here -- _run_multi_step's own
+            # multi_step_start log (fired next, same turn) already reports it
+            # via `available`, which it must materialize anyway to run the
+            # loop, so recomputing len(self._registry.all()) here would just
+            # be a second throwaway list built solely for this log field.
             logger.info(
                 "harness_dispatcher.classification_fallback_start",
-                extra={"chat_id": chat_id, "available_skills": len(self._registry.all())},
+                extra={"chat_id": chat_id, "intent": intent},
             )
 
         if not is_fallback:
