@@ -905,7 +905,7 @@ def build_harness_dispatcher(
     known_intents = [intent for d in skill_registry.all() for intent in d.intents]
     classifier = ModelBackedClassifier(
         client=ollama_client,
-        model=cfg.models.smart_local,
+        model=cfg.models.fast,
         known_intents=known_intents,
     )
     tier1_reasoner = Tier1Reasoner(client=reasoning_client, model=target.model)

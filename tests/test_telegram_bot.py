@@ -1796,6 +1796,26 @@ def test_build_harness_dispatcher_openrouter_pin_uses_openrouter_for_reasoning(
     assert dispatcher._synthesis_model == "minimax/minimax-m2.7"  # type: ignore[attr-defined]
 
 
+def test_build_harness_dispatcher_classifier_uses_fast_not_smart_local(
+    tmp_path: Path,
+) -> None:
+    """The intent classifier is Tier 0 (ModelConfig.fast's own documented
+    purpose) and must stay pinned there regardless of which model
+    smart_local is set to -- swapping the SMART-tier planning model must
+    not silently also change classification quality."""
+    cfg = _harness_cfg(tmp_path, smart_provider="ollama", api_key=None)
+    assert cfg.models.fast != cfg.models.smart_local, (
+        "fixture must use distinct fast/smart_local values to be a real test"
+    )
+    with respx.mock() as mock:
+        mock.get(f"{cfg.providers.ollama_base_url}/api/tags").mock(
+            return_value=httpx.Response(200, json={"models": []})
+        )
+        dispatcher = build_harness_dispatcher(cfg, **_harness_deps(tmp_path))
+    assert dispatcher is not None
+    assert dispatcher._classifier._model == cfg.models.fast  # type: ignore[attr-defined]
+
+
 def test_build_harness_dispatcher_openrouter_pin_without_key_returns_none(
     tmp_path: Path,
 ) -> None:
