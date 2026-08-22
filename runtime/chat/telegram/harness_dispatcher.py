@@ -45,6 +45,17 @@ DESTRUCTIVE_TOOLS: frozenset[str] = frozenset({
     "files_write",
 })
 
+# Deterministic path auto-fill (Open threads #2, 2026-08-21 session
+# handoff): models reliably retype a plausible-but-wrong path for a
+# `files_read` step immediately following `files_search`, even though the
+# search result already names the correct one (confirmed via code trace,
+# not a truncation bug). Rather than asking the model to get the retype
+# right, `_autofill_path_from_prior_search` below trusts the prior search's
+# own first match whenever the model's guess isn't one of the actual
+# matches — never overrides a guess that's already correct.
+_PATH_SOURCE_TOOL = "files_search"
+_PATH_CONSUMER_TOOLS: frozenset[str] = frozenset({"files_read"})
+
 
 @dataclass(frozen=True)
 class _PendingConfirmation:
@@ -210,6 +221,39 @@ def _history_verified_tools(history: list[tuple[ToolIntent, ToolResult]]) -> set
     return {
         call.tool for call, res in history if verdict_for_result(res) == "verified"
     }
+
+
+def _autofill_path_from_prior_search(
+    tool_intent: ToolIntent, history: list[tuple[ToolIntent, ToolResult]]
+) -> ToolIntent:
+    """Correct `path` for a path-consuming tool immediately following a
+    successful `files_search` step, when the model's own guess doesn't
+    match any of that search's actual results. See `_PATH_CONSUMER_TOOLS`.
+
+    Never overrides a guess that already matches a real result — this only
+    ever turns a guaranteed-wrong path into the search's own top match, it
+    never second-guesses a model that got it right.
+    """
+    if tool_intent.tool not in _PATH_CONSUMER_TOOLS or not history:
+        return tool_intent
+    prior_intent, prior_result = history[-1]
+    if prior_intent.tool != _PATH_SOURCE_TOOL or prior_result.status != "ok":
+        return tool_intent
+    raw = str(prior_result.payload.get("result", ""))
+    matches = [line for line in raw.splitlines() if line and line != "No matches."]
+    if not matches or tool_intent.args.get("path") in matches:
+        return tool_intent
+    logger.info(
+        "harness_dispatcher.path_autofilled",
+        extra={
+            "tool": tool_intent.tool,
+            "guessed_path": tool_intent.args.get("path"),
+            "corrected_path": matches[0],
+        },
+    )
+    return tool_intent.model_copy(
+        update={"args": {**tool_intent.args, "path": matches[0]}}
+    )
 
 
 def _clip(text: str) -> str:
@@ -792,6 +836,7 @@ class HarnessDispatcher:
                 skill_id=descriptor.id,
                 rationale=f"multi-step planner: step {step_no}",
             )
+            tool_intent = _autofill_path_from_prior_search(tool_intent, history)
 
             if plan.tool in DESTRUCTIVE_TOOLS and step_no >= guard_min_step:
                 logger.info(

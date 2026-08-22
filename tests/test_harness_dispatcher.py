@@ -1009,6 +1009,90 @@ async def test_multi_step_happy_two_step_chain() -> None:
     assert [t[1] for t in tier3.turns] == ["user", "bot"]
 
 
+async def test_wrong_guessed_path_autofilled_from_prior_search() -> None:
+    """Open threads #2 (2026-08-21 session handoff): the model retypes a
+    plausible-but-wrong path after files_search, even though the search
+    result already names the correct one. The harness must run files_read
+    against the search's real first match, not the model's guess."""
+    registry = _MultiSkillRegistry(
+        [
+            SkillDescriptor(
+                id="search_files",
+                description="Search for files matching a glob.",
+                intents=["search_files"],
+                tool="files_search",
+                args_schema={"type": "object", "properties": {"glob": {"type": "string"}}},
+                requires_tier1=True,
+            ),
+            SkillDescriptor(
+                id="read_file",
+                description="Read a file's contents.",
+                intents=["read_file"],
+                tool="files_read",
+                args_schema={"type": "object", "properties": {"path": {"type": "string"}}},
+                requires_tier1=True,
+            ),
+        ],
+        primary_intent="search_files",
+    )
+    harness = _RecordingHarness(
+        tools={
+            # Mirrors the real files_search tool's payload shape
+            # (runtime/harness/tools/files_tool.py): a newline-joined
+            # "result" string of real matches, not a structured list.
+            "files_search": lambda args: {
+                "result": "notes/CT-001-notes.md\nnotes/other.md"
+            },
+            "files_read": lambda args: {"content": "hello"},
+        }
+    )
+    runner = _StubPlanRunner(
+        plan_steps=[
+            PlanStep(kind="tool_call", tool="files_search", args={"glob": "CT-001"}),
+            # A guessed path that's close but wrong -- not one of the two
+            # real matches above.
+            PlanStep(kind="tool_call", tool="files_read", args={"path": "notes/CT-001.md"}),
+            PlanStep(kind="respond"),
+        ],
+    )
+    dispatcher = _make_loop_dispatcher(runner=runner, registry=registry, harness=harness)
+    message = _FakeMessage()
+
+    outcome = await dispatcher.dispatch(
+        chat_id=1, user_text="find files about CT-001 and read the first one", message=message
+    )
+
+    assert outcome == DispatchOutcome.FIRED
+    assert [c.tool for c in harness.calls] == ["files_search", "files_read"]
+    assert harness.calls[1].args["path"] == "notes/CT-001-notes.md"
+
+
+async def test_correctly_guessed_path_not_overridden() -> None:
+    """A model guess that already matches a real search result must pass
+    through untouched -- the auto-fill only ever corrects a guaranteed-wrong
+    guess, never second-guesses a correct one."""
+    registry, _ = _two_skill_setup()
+    harness = _RecordingHarness(
+        tools={
+            "files_search": lambda args: {"result": "/tmp/a.md\n/tmp/b.md"},
+            "files_read": lambda args: {"content": "hello"},
+        }
+    )
+    runner = _StubPlanRunner(
+        plan_steps=[
+            PlanStep(kind="tool_call", tool="files_search", args={"glob": "*.md"}),
+            PlanStep(kind="tool_call", tool="files_read", args={"path": "/tmp/b.md"}),
+            PlanStep(kind="respond"),
+        ],
+    )
+    dispatcher = _make_loop_dispatcher(runner=runner, registry=registry, harness=harness)
+    message = _FakeMessage()
+
+    await dispatcher.dispatch(chat_id=1, user_text="find and read b", message=message)
+
+    assert harness.calls[1].args["path"] == "/tmp/b.md"
+
+
 async def test_multi_step_single_tool_then_respond() -> None:
     runner = _StubPlanRunner(
         plan_steps=[
