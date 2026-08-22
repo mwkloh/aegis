@@ -156,6 +156,59 @@ async def test_chat_response_format_json_without_schema_sets_string() -> None:
 
 
 @pytest.mark.asyncio
+async def test_chat_omits_think_by_default() -> None:
+    cfg = _config_with_base("http://127.0.0.1:11434")
+    client = OllamaClient(cfg)
+    request = ChatRequest(
+        model="gemma4:e2b",
+        messages=[ChatMessage(role="user", content="hi")],
+    )
+
+    captured: dict[str, object] = {}
+
+    def _handler(req: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(req.content))
+        return httpx.Response(
+            200, json={"message": {"role": "assistant", "content": "ok"}}
+        )
+
+    with respx.mock() as mock:
+        mock.post("http://127.0.0.1:11434/api/chat").mock(side_effect=_handler)
+        await client.chat(request)
+
+    assert "think" not in captured
+
+
+@pytest.mark.asyncio
+async def test_chat_forwards_think_false() -> None:
+    # A thinking-capable model can burn its entire max_tokens budget on a
+    # hidden reasoning channel and never emit content -- confirmed live
+    # against gemma4:e2b-mlx (2026-08-22). think=False must reach Ollama's
+    # request body exactly, not just live as a no-op on ChatRequest.
+    cfg = _config_with_base("http://127.0.0.1:11434")
+    client = OllamaClient(cfg)
+    request = ChatRequest(
+        model="gemma4:e2b",
+        messages=[ChatMessage(role="user", content="hi")],
+        think=False,
+    )
+
+    captured: dict[str, object] = {}
+
+    def _handler(req: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(req.content))
+        return httpx.Response(
+            200, json={"message": {"role": "assistant", "content": "ok"}}
+        )
+
+    with respx.mock() as mock:
+        mock.post("http://127.0.0.1:11434/api/chat").mock(side_effect=_handler)
+        await client.chat(request)
+
+    assert captured.get("think") is False
+
+
+@pytest.mark.asyncio
 async def test_chat_retries_on_read_timeout_then_succeeds() -> None:
     cfg = _config_with_base("http://127.0.0.1:11434")
     client = OllamaClient(cfg)

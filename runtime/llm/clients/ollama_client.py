@@ -65,6 +65,8 @@ class OllamaClient:
             payload["format"] = request.response_schema
         elif request.response_format == "json":
             payload["format"] = "json"
+        if request.think is not None:
+            payload["think"] = request.think
 
         started = time.perf_counter()
         data = await self._post_with_retry("/api/chat", payload)

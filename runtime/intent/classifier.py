@@ -136,6 +136,7 @@ class ModelBackedClassifier:
             temperature=0.0,
             max_tokens=64,
             max_retries=self._max_retries,
+            think=False,
             events=self._events,
             call_site="intent.classifier",
         )

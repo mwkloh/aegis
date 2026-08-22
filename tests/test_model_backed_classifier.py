@@ -77,6 +77,11 @@ async def test_falls_back_to_model_when_no_rule_fires() -> None:
     assert request.messages[0].role == "system"
     assert "ask_time" in request.messages[0].content
     assert request.messages[1].content == "what time is it in Tokyo?"
+    # A thinking-capable model can burn its whole max_tokens budget on a
+    # hidden reasoning channel and never emit content -- confirmed live
+    # against gemma4:e2b-mlx (2026-08-22). The classifier's task is trivial
+    # enough to not need it, so it must be explicitly disabled.
+    assert request.think is False
 
 
 @pytest.mark.asyncio
