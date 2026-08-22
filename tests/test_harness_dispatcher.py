@@ -364,6 +364,32 @@ async def test_classifier_exception_returns_pass() -> None:
     assert message.replies == []
 
 
+async def test_classifier_outage_fails_safe_not_open_in_multi_step() -> None:
+    """A classifier that raises (ClassifierUnavailableError or otherwise)
+    must still PASS under multi_step=True, exactly like the classified-miss
+    fallback's single-shot counterpart -- an outage is not a genuine
+    "unknown" classification and must not be swept into the fallback
+    planner. See docs/superpowers/specs/2026-08-21-classification-fallback-
+    design.md, Safety section, point 2."""
+    registry, harness = _two_skill_setup()
+    runner = _StubPlanRunner(plan_steps=[PlanStep(kind="respond")])
+    dispatcher = _make_loop_dispatcher(
+        runner=runner,
+        registry=registry,
+        harness=harness,
+        classifier=_RaisingClassifier(),
+    )
+    message = _FakeMessage()
+
+    outcome = await dispatcher.dispatch(
+        chat_id=1, user_text="do the compound thing", message=message
+    )
+
+    assert outcome == DispatchOutcome.PASS
+    assert runner.plan_next_calls == []
+    assert harness.calls == []
+
+
 # ---------------------------------------------------------------------------
 # CLARIFY path tests
 # ---------------------------------------------------------------------------

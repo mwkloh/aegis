@@ -30,6 +30,18 @@ class IntentClassification(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
 
 
+class ClassifierUnavailableError(Exception):
+    """The model-backed classifier could not produce a classification.
+
+    Raised for transport failures, schema/structured-output failures, and
+    malformed model replies — never for a genuine model-produced
+    ``intent="unknown"`` answer, which is a real classification, not a
+    failure. Callers must treat this distinctly from `IntentClassification`:
+    it means "we don't know whether this could be classified," not "this
+    was classified as unclassifiable."
+    """
+
+
 # Phase 0 deterministic rules — exact triggers we want the walking skeleton
 # to recognise without a model in the loop.
 _PREFIX_RULES: tuple[tuple[re.Pattern[str], str, float], ...] = (
@@ -64,8 +76,12 @@ class ModelBackedClassifier:
     """Rule-first → Ollama-fallback. Same `classify()` shape, but async.
 
     Model calls go through `request_structured` so one malformed JSON reply
-    gets a corrective retry before we degrade. Any schema-level failure still
-    collapses to `IntentClassification(intent="unknown", confidence=0.0)`.
+    gets a corrective retry before we give up. A genuine model answer of
+    `intent="unknown"` returns normally; a transport, schema, or validation
+    failure raises `ClassifierUnavailableError` instead of degrading to a
+    value — callers that need "touch nothing" on either outcome should
+    catch it explicitly rather than relying on it happening to also be
+    `intent="unknown"`.
     """
 
     def __init__(
@@ -97,9 +113,12 @@ class ModelBackedClassifier:
         bounded = text[:_MAX_INPUT_CHARS]
         try:
             return await self._ask_model(bounded)
-        except (httpx.HTTPError, ValueError, RuntimeError):
-            # Transport / client failure must never break the pipeline.
-            return IntentClassification(intent="unknown", confidence=0.0)
+        except (httpx.HTTPError, ValueError, RuntimeError) as exc:
+            # Transport / client failure — distinguishable from a genuine
+            # model-produced "unknown" so callers can fail safe instead of
+            # silently fanning out to a full-catalog planner. See
+            # ClassifierUnavailableError.
+            raise ClassifierUnavailableError(str(exc)) from exc
 
     async def _ask_model(self, user_text: str) -> IntentClassification:
         system = self._prompt_template.format(
@@ -121,14 +140,18 @@ class ModelBackedClassifier:
             call_site="intent.classifier",
         )
         if outcome.error_kind != "ok":
-            return IntentClassification(intent="unknown", confidence=0.0)
+            raise ClassifierUnavailableError(
+                f"request_structured failed: {outcome.error_kind}"
+            )
         try:
             return IntentClassification(
                 intent=str(data["intent"]),
                 confidence=float(data["confidence"]),
             )
-        except (ValidationError, KeyError, TypeError, ValueError):
-            return IntentClassification(intent="unknown", confidence=0.0)
+        except (ValidationError, KeyError, TypeError, ValueError) as exc:
+            raise ClassifierUnavailableError(
+                f"malformed structured reply: {exc}"
+            ) from exc
 
 
 def _build_schema(known_intents: tuple[str, ...]) -> dict[str, Any]:
