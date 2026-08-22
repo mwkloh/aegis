@@ -209,6 +209,97 @@ async def test_chat_forwards_think_false() -> None:
 
 
 @pytest.mark.asyncio
+async def test_chat_falls_back_to_thinking_when_content_empty_and_json_requested() -> None:
+    # qwen3-vl:4b (live-confirmed 2026-08-22): think=False doesn't stop this
+    # model from routing its structured answer into `thinking` instead of
+    # `content`. done_reason="stop" -- not a truncation, the model considers
+    # itself finished, `content` is just genuinely empty.
+    cfg = _config_with_base("http://127.0.0.1:11434")
+    client = OllamaClient(cfg)
+    request = ChatRequest(
+        model="qwen3-vl:4b",
+        messages=[ChatMessage(role="user", content="hi")],
+        response_format="json",
+        think=False,
+    )
+
+    with respx.mock() as mock:
+        mock.post("http://127.0.0.1:11434/api/chat").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                        "thinking": '{"intent": "list_files", "confidence": 0.95}',
+                    },
+                    "done_reason": "stop",
+                },
+            )
+        )
+        resp = await client.chat(request)
+
+    assert resp.content == '{"intent": "list_files", "confidence": 0.95}'
+
+
+@pytest.mark.asyncio
+async def test_chat_does_not_fall_back_to_thinking_in_text_mode() -> None:
+    # `thinking` is the model's private reasoning -- never surface it to a
+    # plain-text chat reply just because content came back empty.
+    cfg = _config_with_base("http://127.0.0.1:11434")
+    client = OllamaClient(cfg)
+    request = ChatRequest(
+        model="qwen3-vl:4b",
+        messages=[ChatMessage(role="user", content="hi")],
+    )
+
+    with respx.mock() as mock:
+        mock.post("http://127.0.0.1:11434/api/chat").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                        "thinking": "internal reasoning, not for the user",
+                    },
+                },
+            )
+        )
+        resp = await client.chat(request)
+
+    assert resp.content == ""
+
+
+@pytest.mark.asyncio
+async def test_chat_prefers_content_over_thinking_when_both_present() -> None:
+    cfg = _config_with_base("http://127.0.0.1:11434")
+    client = OllamaClient(cfg)
+    request = ChatRequest(
+        model="qwen3-vl:4b",
+        messages=[ChatMessage(role="user", content="hi")],
+        response_format="json",
+    )
+
+    with respx.mock() as mock:
+        mock.post("http://127.0.0.1:11434/api/chat").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "message": {
+                        "role": "assistant",
+                        "content": '{"intent": "ping", "confidence": 0.9}',
+                        "thinking": "some reasoning trace",
+                    },
+                },
+            )
+        )
+        resp = await client.chat(request)
+
+    assert resp.content == '{"intent": "ping", "confidence": 0.9}'
+
+
+@pytest.mark.asyncio
 async def test_chat_retries_on_read_timeout_then_succeeds() -> None:
     cfg = _config_with_base("http://127.0.0.1:11434")
     client = OllamaClient(cfg)

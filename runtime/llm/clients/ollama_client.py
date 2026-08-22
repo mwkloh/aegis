@@ -6,6 +6,7 @@ remote-Ollama leakage.
 """
 from __future__ import annotations
 
+import logging
 import time
 from typing import Final
 from urllib.parse import urlparse
@@ -21,6 +22,8 @@ from tenacity import (
 from runtime.config import AegisConfig
 
 from .base import ChatRequest, ChatResponse
+
+logger = logging.getLogger(__name__)
 
 _ALLOWED_HOSTS: Final[frozenset[str]] = frozenset({"127.0.0.1", "localhost", "::1"})
 _TIMEOUT: Final[httpx.Timeout] = httpx.Timeout(connect=2.0, read=30.0, write=10.0, pool=5.0)
@@ -74,6 +77,25 @@ class OllamaClient:
 
         message_raw = data.get("message", {})
         content = message_raw.get("content", "") if isinstance(message_raw, dict) else ""
+        wants_structured = (
+            request.response_schema is not None or request.response_format == "json"
+        )
+        if not content and wants_structured and isinstance(message_raw, dict):
+            # Some models/templates route structured output into `thinking`
+            # instead of `content` even with think=False in the request --
+            # confirmed live on qwen3-vl:4b (2026-08-22): done_reason="stop",
+            # content empty, thinking holds a valid JSON reply matching the
+            # requested schema. Scoped to JSON/schema requests only -- for a
+            # free-text chat reply, `thinking` is the model's private
+            # reasoning, not something to surface to the user, so this must
+            # never fall back there.
+            thinking = message_raw.get("thinking")
+            if thinking:
+                logger.info(
+                    "ollama_client.content_from_thinking_fallback",
+                    extra={"model": request.model},
+                )
+                content = thinking
         tokens_in = _coerce_int(data.get("prompt_eval_count", 0))
         tokens_out = _coerce_int(data.get("eval_count", 0))
 
