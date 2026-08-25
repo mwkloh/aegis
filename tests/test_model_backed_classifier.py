@@ -18,6 +18,7 @@ import pytest
 
 from runtime.events.stream import EventStream
 from runtime.intent import (
+    ClassifierUnavailableError,
     IntentClassification,
     ModelBackedClassifier,
     parse_intent_json,
@@ -76,6 +77,11 @@ async def test_falls_back_to_model_when_no_rule_fires() -> None:
     assert request.messages[0].role == "system"
     assert "ask_time" in request.messages[0].content
     assert request.messages[1].content == "what time is it in Tokyo?"
+    # A thinking-capable model can burn its whole max_tokens budget on a
+    # hidden reasoning channel and never emit content -- confirmed live
+    # against gemma4:e2b-mlx (2026-08-22). The classifier's task is trivial
+    # enough to not need it, so it must be explicitly disabled.
+    assert request.think is False
 
 
 @pytest.mark.asyncio
@@ -91,35 +97,46 @@ async def test_oversized_input_is_truncated_before_send() -> None:
 
 
 @pytest.mark.asyncio
-async def test_unknown_intent_from_model_collapses_to_unknown() -> None:
+async def test_intent_outside_schema_enum_raises_unavailable() -> None:
+    # "rocket_launch" isn't in known_intents plus {"unknown"}, so it trips the
+    # JSON-schema enum on every retry — a schema failure, not a genuine
+    # model answer, so it must be distinguishable from a real "unknown".
     stub = _StubClient(content='{"intent": "rocket_launch", "confidence": 0.99}')
+    classifier = _classifier(stub)
+
+    with pytest.raises(ClassifierUnavailableError):
+        await classifier.classify("anything novel here")
+
+
+@pytest.mark.asyncio
+async def test_model_explicit_unknown_returns_normally() -> None:
+    # A genuine model-produced "unknown" is a real classification, not a
+    # failure — must NOT raise, unlike the schema/transport failure cases
+    # below.
+    stub = _StubClient(content='{"intent": "unknown", "confidence": 0.0}')
     classifier = _classifier(stub)
 
     result = await classifier.classify("anything novel here")
 
-    assert result.intent == "unknown"
-    assert result.confidence == 0.0
+    assert result == IntentClassification(intent="unknown", confidence=0.0)
 
 
 @pytest.mark.asyncio
-async def test_garbage_response_collapses_to_unknown() -> None:
+async def test_garbage_response_raises_unavailable() -> None:
     stub = _StubClient(content="this is not JSON at all, sorry")
     classifier = _classifier(stub)
 
-    result = await classifier.classify("anything novel")
-
-    assert result.intent == "unknown"
-    assert result.confidence == 0.0
+    with pytest.raises(ClassifierUnavailableError):
+        await classifier.classify("anything novel")
 
 
 @pytest.mark.asyncio
-async def test_transport_failure_degrades_to_unknown() -> None:
+async def test_transport_failure_raises_unavailable() -> None:
     stub = _StubClient(raises=httpx.ConnectError("refused"))
     classifier = _classifier(stub)
 
-    result = await classifier.classify("anything novel")
-
-    assert result.intent == "unknown"
+    with pytest.raises(ClassifierUnavailableError):
+        await classifier.classify("anything novel")
 
 
 def test_parser_rejects_extra_keys_silently() -> None:

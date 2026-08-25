@@ -153,6 +153,8 @@ async def _one_call(
     temperature: float,
     max_tokens: int,
     schema: dict[str, Any],
+    *,
+    think: bool | None,
 ) -> ChatResponse:
     request = ChatRequest(
         model=model,
@@ -161,6 +163,7 @@ async def _one_call(
         max_tokens=max_tokens,
         response_format="json",
         response_schema=schema,
+        think=think,
     )
     return await client.chat(request)
 
@@ -177,6 +180,7 @@ async def request_structured(
     escalate_to: EscalationTarget | None = None,
     events: EventStream | None = None,
     call_site: str = "unknown",
+    think: bool | None = None,
 ) -> tuple[dict[str, Any], StructuredOutcome]:
     """Run a structured LLM call with retry + optional tier escalation.
 
@@ -184,6 +188,13 @@ async def request_structured(
     Transport errors from the client (e.g. connection refused) still
     propagate; those are a different failure class handled by the
     caller's own `try/except`.
+
+    `think`: forwarded to `ChatRequest.think` on every attempt, including
+    escalation. `None` (default) leaves each model's own default
+    untouched. Pass `False` for cheap, trivial calls where a thinking-
+    capable model can spend its entire `max_tokens` budget on a hidden
+    reasoning channel and never emit content at all — see
+    `ModelBackedClassifier`, which hit exactly this on `gemma4:e2b-mlx`.
     """
     attempts = 0
     current_messages = list(messages)
@@ -195,7 +206,7 @@ async def request_structured(
     for attempt_idx in range(max_retries + 1):
         attempts += 1
         resp = await _one_call(
-            client, model, current_messages, temperature, max_tokens, schema
+            client, model, current_messages, temperature, max_tokens, schema, think=think
         )
         last_raw = resp.content
         data, kind, reason, repaired = _validate(resp.content, schema)
@@ -254,6 +265,7 @@ async def request_structured(
             escalate_to.temperature,
             escalate_to.max_tokens,
             schema,
+            think=think,
         )
         data, kind, reason, repaired = _validate(resp.content, schema)
         if kind == "ok" and data is not None:

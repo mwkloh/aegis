@@ -1,0 +1,15 @@
+id: search_files
+description: "Search a folder for files matching a pattern."
+fixture:
+  files:
+    - path: "notes/CT-001-notes.md"
+      content: "notes about CT-001"
+    - path: "notes/other.md"
+      content: "unrelated"
+variants:
+  - "search {sandbox}/notes for CT-001"
+  - "find files about CT-001 in {sandbox}/notes"
+  - "look for CT-001 in {sandbox}/notes"
+expected_calls:
+  - tool: files_search
+    args_match: {directory: "{sandbox}/notes", pattern: "CT-001"}

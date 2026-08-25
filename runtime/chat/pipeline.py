@@ -152,6 +152,7 @@ class ChatPipeline:
         builder: ContextBuilder,
         model: ModelClient,
         model_name: str,
+        provider: str,
         events: EventStream | None = None,
         system_prefix: str = DEFAULT_SYSTEM_PROMPT,
         max_tokens: int = DEFAULT_MAX_TOKENS,
@@ -159,16 +160,27 @@ class ChatPipeline:
     ) -> None:
         if not model_name:
             raise ValueError("model_name must be non-empty")
+        if not provider:
+            raise ValueError("provider must be non-empty")
         self._tier1 = tier1
         self._tier3 = tier3
         self._recall = recall
         self._builder = builder
         self._model = model
         self._model_name = model_name
+        self._provider = provider
         self._events = events
         self._system_prefix = system_prefix
         self._max_tokens = max_tokens
         self._temperature = temperature
+
+    @property
+    def model_name(self) -> str:
+        return self._model_name
+
+    @property
+    def provider(self) -> str:
+        return self._provider
 
     async def turn(self, chat_id: str, user_text: str) -> str:
         """Run one conversational turn. Never raises."""

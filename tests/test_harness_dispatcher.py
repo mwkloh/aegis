@@ -207,6 +207,9 @@ def _make_dispatcher(
 
 
 async def test_pass_on_non_tool_intent() -> None:
+    # multi_step=False here -- see
+    # test_classified_but_unregistered_intent_still_returns_pass_in_multi_step
+    # for the multi_step=True case.
     descriptor = _stub_descriptor("list_files", "files_list", ["list_files"])
     registry = SkillRegistry([descriptor])
     dispatcher = _make_dispatcher(
@@ -221,9 +224,106 @@ async def test_pass_on_non_tool_intent() -> None:
 
 
 async def test_pass_on_unknown_intent() -> None:
+    # multi_step=False here -- see
+    # test_classified_but_unregistered_intent_still_returns_pass_in_multi_step
+    # for the multi_step=True case.
     dispatcher = _make_dispatcher(classifier=_StubClassifier("unknown", 0.0))
     message = _FakeMessage()
     outcome = await dispatcher.dispatch(chat_id=123, user_text="hmm", message=message)
+    assert outcome == DispatchOutcome.PASS
+    assert message.replies == []
+
+
+async def test_classification_fallback_reaches_planner_with_unclassified_skill_id() -> None:
+    """Unknown intent + multi_step=True must reach the planner (not PASS
+    immediately), and the resulting tool call must carry the sentinel
+    skill_id so the fallback path is distinguishable in recorded calls."""
+    registry, harness = _two_skill_setup()
+    runner = _StubPlanRunner(
+        plan_steps=[
+            PlanStep(kind="tool_call", tool="files_search", args={"glob": "*.md"}),
+            PlanStep(kind="respond"),
+        ],
+    )
+    dispatcher = _make_loop_dispatcher(
+        runner=runner,
+        registry=registry,
+        harness=harness,
+        classifier=_StubClassifier("unknown", 0.0),
+    )
+    message = _FakeMessage()
+
+    outcome = await dispatcher.dispatch(
+        chat_id=1, user_text="do the compound thing", message=message
+    )
+
+    assert outcome == DispatchOutcome.FIRED
+    assert len(runner.plan_next_calls) >= 1
+    assert harness.calls[0].tool == "files_search"
+    assert harness.calls[0].skill_id == "unclassified_fallback"
+
+
+async def test_classification_fallback_guards_destructive_tool_at_step_1() -> None:
+    """The fallback path has no classification signal at all, so unlike
+    normal classified dispatch, a destructive tool is guarded even at
+    step 1 -- the operator must confirm before it runs."""
+    registry, harness = _destructive_setup("files_delete")
+    runner = _StubPlanRunner(
+        plan_steps=[
+            PlanStep(kind="tool_call", tool="files_delete", args={"path": "/tmp/x"}),
+            PlanStep(kind="respond"),
+        ],
+    )
+    dispatcher = _make_loop_dispatcher(
+        runner=runner,
+        registry=registry,
+        harness=harness,
+        classifier=_StubClassifier("unknown", 0.0),
+    )
+    message = _FakeMessage()
+
+    outcome = await dispatcher.dispatch(
+        chat_id=1, user_text="delete something", message=message
+    )
+
+    assert outcome == DispatchOutcome.FIRED
+    assert harness.calls == []  # destructive tool never actually executed
+    assert "⚠️ I'd like to run `files_delete`" in message.replies[0]
+
+
+async def test_classified_but_unregistered_intent_still_returns_pass_in_multi_step() -> None:
+    """A confidently classified intent with no matching skill (not an
+    'unknown' classification miss) must still return PASS under
+    multi_step=True -- the fallback is for classification MISSES, not for
+    every intent that happens to lack a registered skill."""
+    registry, harness = _two_skill_setup()
+    runner = _StubPlanRunner(plan_steps=[PlanStep(kind="respond")])
+    dispatcher = _make_loop_dispatcher(
+        runner=runner,
+        registry=registry,
+        harness=harness,
+        classifier=_StubClassifier("ask_question", 0.95),
+    )
+    message = _FakeMessage()
+
+    outcome = await dispatcher.dispatch(
+        chat_id=1, user_text="what time is it?", message=message
+    )
+
+    assert outcome == DispatchOutcome.PASS
+    assert harness.calls == []
+    assert runner.plan_next_calls == []
+
+
+async def test_multi_step_false_unknown_intent_ignores_fallback() -> None:
+    """multi_step=False must keep today's PASS behavior on descriptor is
+    None -- the fallback only ever applies to the multi-step path, since
+    the single-shot reasoner needs a real descriptor to reason about."""
+    dispatcher = _make_dispatcher(classifier=_StubClassifier("unknown", 0.0))
+    message = _FakeMessage()
+
+    outcome = await dispatcher.dispatch(chat_id=1, user_text="hmm", message=message)
+
     assert outcome == DispatchOutcome.PASS
     assert message.replies == []
 
@@ -262,6 +362,32 @@ async def test_classifier_exception_returns_pass() -> None:
     outcome = await dispatcher.dispatch(chat_id=123, user_text="list my downloads", message=message)
     assert outcome == DispatchOutcome.PASS
     assert message.replies == []
+
+
+async def test_classifier_outage_fails_safe_not_open_in_multi_step() -> None:
+    """A classifier that raises (ClassifierUnavailableError or otherwise)
+    must still PASS under multi_step=True, exactly like the classified-miss
+    fallback's single-shot counterpart -- an outage is not a genuine
+    "unknown" classification and must not be swept into the fallback
+    planner. See docs/superpowers/specs/2026-08-21-classification-fallback-
+    design.md, Safety section, point 2."""
+    registry, harness = _two_skill_setup()
+    runner = _StubPlanRunner(plan_steps=[PlanStep(kind="respond")])
+    dispatcher = _make_loop_dispatcher(
+        runner=runner,
+        registry=registry,
+        harness=harness,
+        classifier=_RaisingClassifier(),
+    )
+    message = _FakeMessage()
+
+    outcome = await dispatcher.dispatch(
+        chat_id=1, user_text="do the compound thing", message=message
+    )
+
+    assert outcome == DispatchOutcome.PASS
+    assert runner.plan_next_calls == []
+    assert harness.calls == []
 
 
 # ---------------------------------------------------------------------------
@@ -785,7 +911,9 @@ class _MultiSkillRegistry:
         return list(self._descriptors)
 
 
-def _two_skill_setup() -> tuple[_MultiSkillRegistry, _RecordingHarness]:
+def _two_skill_setup(
+    *, read_fails: bool = False
+) -> tuple[_MultiSkillRegistry, _RecordingHarness]:
     search = SkillDescriptor(
         id="search_files",
         description="Search for files matching a glob.",
@@ -803,10 +931,16 @@ def _two_skill_setup() -> tuple[_MultiSkillRegistry, _RecordingHarness]:
         requires_tier1=True,
     )
     registry = _MultiSkillRegistry([search, read], primary_intent="search_files")
+
+    def _read(args: dict[str, Any]) -> dict[str, Any]:
+        if read_fails:
+            raise RuntimeError("boom")
+        return {"content": "hello"}
+
     harness = _RecordingHarness(
         tools={
             "files_search": lambda args: {"matches": ["/tmp/a.md", "/tmp/b.md"]},
-            "files_read": lambda args: {"content": "hello"},
+            "files_read": _read,
         }
     )
     return registry, harness
@@ -875,6 +1009,90 @@ async def test_multi_step_happy_two_step_chain() -> None:
     assert [t[1] for t in tier3.turns] == ["user", "bot"]
 
 
+async def test_wrong_guessed_path_autofilled_from_prior_search() -> None:
+    """Open threads #2 (2026-08-21 session handoff): the model retypes a
+    plausible-but-wrong path after files_search, even though the search
+    result already names the correct one. The harness must run files_read
+    against the search's real first match, not the model's guess."""
+    registry = _MultiSkillRegistry(
+        [
+            SkillDescriptor(
+                id="search_files",
+                description="Search for files matching a glob.",
+                intents=["search_files"],
+                tool="files_search",
+                args_schema={"type": "object", "properties": {"glob": {"type": "string"}}},
+                requires_tier1=True,
+            ),
+            SkillDescriptor(
+                id="read_file",
+                description="Read a file's contents.",
+                intents=["read_file"],
+                tool="files_read",
+                args_schema={"type": "object", "properties": {"path": {"type": "string"}}},
+                requires_tier1=True,
+            ),
+        ],
+        primary_intent="search_files",
+    )
+    harness = _RecordingHarness(
+        tools={
+            # Mirrors the real files_search tool's payload shape
+            # (runtime/harness/tools/files_tool.py): a newline-joined
+            # "result" string of real matches, not a structured list.
+            "files_search": lambda args: {
+                "result": "notes/CT-001-notes.md\nnotes/other.md"
+            },
+            "files_read": lambda args: {"content": "hello"},
+        }
+    )
+    runner = _StubPlanRunner(
+        plan_steps=[
+            PlanStep(kind="tool_call", tool="files_search", args={"glob": "CT-001"}),
+            # A guessed path that's close but wrong -- not one of the two
+            # real matches above.
+            PlanStep(kind="tool_call", tool="files_read", args={"path": "notes/CT-001.md"}),
+            PlanStep(kind="respond"),
+        ],
+    )
+    dispatcher = _make_loop_dispatcher(runner=runner, registry=registry, harness=harness)
+    message = _FakeMessage()
+
+    outcome = await dispatcher.dispatch(
+        chat_id=1, user_text="find files about CT-001 and read the first one", message=message
+    )
+
+    assert outcome == DispatchOutcome.FIRED
+    assert [c.tool for c in harness.calls] == ["files_search", "files_read"]
+    assert harness.calls[1].args["path"] == "notes/CT-001-notes.md"
+
+
+async def test_correctly_guessed_path_not_overridden() -> None:
+    """A model guess that already matches a real search result must pass
+    through untouched -- the auto-fill only ever corrects a guaranteed-wrong
+    guess, never second-guesses a correct one."""
+    registry, _ = _two_skill_setup()
+    harness = _RecordingHarness(
+        tools={
+            "files_search": lambda args: {"result": "/tmp/a.md\n/tmp/b.md"},
+            "files_read": lambda args: {"content": "hello"},
+        }
+    )
+    runner = _StubPlanRunner(
+        plan_steps=[
+            PlanStep(kind="tool_call", tool="files_search", args={"glob": "*.md"}),
+            PlanStep(kind="tool_call", tool="files_read", args={"path": "/tmp/b.md"}),
+            PlanStep(kind="respond"),
+        ],
+    )
+    dispatcher = _make_loop_dispatcher(runner=runner, registry=registry, harness=harness)
+    message = _FakeMessage()
+
+    await dispatcher.dispatch(chat_id=1, user_text="find and read b", message=message)
+
+    assert harness.calls[1].args["path"] == "/tmp/b.md"
+
+
 async def test_multi_step_single_tool_then_respond() -> None:
     runner = _StubPlanRunner(
         plan_steps=[
@@ -895,6 +1113,139 @@ async def test_multi_step_single_tool_then_respond() -> None:
     assert len(harness.calls) == 1
     # Synthesis got exactly the one call's history.
     assert len(runner.plan_next_calls[1]["history"]) == 1
+
+
+async def test_multi_step_restricts_tool_choices_to_plan_cursor() -> None:
+    """Step 1 sees the full catalog. After it succeeds, step 2 is narrowed
+    to just the next planned tool. After that succeeds too (plan
+    exhausted), step 3 sees the full catalog again."""
+    registry, harness = _two_skill_setup()
+    runner = _StubPlanRunner(
+        plan_steps=[
+            PlanStep(
+                kind="tool_call",
+                tool="files_search",
+                args={"glob": "*.md"},
+                remaining=["files_search", "files_read"],
+            ),
+            PlanStep(kind="tool_call", tool="files_read", args={"path": "/tmp/a.md"}),
+            PlanStep(kind="respond"),
+        ],
+    )
+    dispatcher = _make_loop_dispatcher(runner=runner, registry=registry, harness=harness)
+
+    await dispatcher.dispatch(chat_id=1, user_text="find and read", message=_FakeMessage())
+
+    assert len(runner.plan_next_calls) == 3
+    assert {d.tool for d in runner.plan_next_calls[0]["available_skills"]} == {
+        "files_search",
+        "files_read",
+    }
+    assert [d.tool for d in runner.plan_next_calls[1]["available_skills"]] == ["files_read"]
+    assert {d.tool for d in runner.plan_next_calls[2]["available_skills"]} == {
+        "files_search",
+        "files_read",
+    }
+
+
+async def test_multi_step_restriction_persists_after_step_failure() -> None:
+    """A failing planned step keeps the same single-tool restriction on the
+    next call -- the cursor does not advance, and the model does not regain
+    access to files_search, an earlier already-succeeded tool."""
+    registry, harness = _two_skill_setup(read_fails=True)
+    runner = _StubPlanRunner(
+        plan_steps=[
+            PlanStep(
+                kind="tool_call",
+                tool="files_search",
+                args={"glob": "*.md"},
+                remaining=["files_search", "files_read"],
+            ),
+            PlanStep(kind="tool_call", tool="files_read", args={"path": "/tmp/a.md"}),
+        ],
+    )
+    dispatcher = _make_loop_dispatcher(runner=runner, registry=registry, harness=harness)
+
+    await dispatcher.dispatch(chat_id=1, user_text="find and read", message=_FakeMessage())
+
+    # files_read fails every time it's called (read_fails=True), so the
+    # runner keeps returning the last queued step (files_read) and the loop
+    # runs to the default max_steps=5. Steps 2 through 5 (call indices 1-4)
+    # must all stay restricted to files_read only.
+    assert len(runner.plan_next_calls) == 5
+    for call in runner.plan_next_calls[1:]:
+        assert [d.tool for d in call["available_skills"]] == ["files_read"]
+
+
+async def test_multi_step_plan_leads_with_actual_tool_called() -> None:
+    """If the model's first-step `remaining` omits its own tool, the
+    derived plan must still lead with the tool actually called, not just
+    whatever the model self-reported -- otherwise the plan would appear
+    exhausted after one step and step 2 would wrongly see the full catalog
+    instead of being restricted to files_read."""
+    registry, harness = _two_skill_setup()
+    runner = _StubPlanRunner(
+        plan_steps=[
+            PlanStep(
+                kind="tool_call",
+                tool="files_search",
+                args={"glob": "*.md"},
+                remaining=["files_read"],  # omits its own tool, "files_search"
+            ),
+            PlanStep(kind="tool_call", tool="files_read", args={"path": "/tmp/a.md"}),
+            PlanStep(kind="respond"),
+        ],
+    )
+    dispatcher = _make_loop_dispatcher(runner=runner, registry=registry, harness=harness)
+
+    await dispatcher.dispatch(chat_id=1, user_text="find and read", message=_FakeMessage())
+
+    assert [d.tool for d in runner.plan_next_calls[1]["available_skills"]] == ["files_read"]
+
+
+async def test_multi_step_no_restriction_after_first_step_fails() -> None:
+    """A failing FIRST step must not lock step 2 into retrying only that
+    tool -- the model must retain access to a legitimate recovery tool
+    (e.g. files_search) that a too-early lock would have foreclosed."""
+    registry, harness = _two_skill_setup(read_fails=True)
+    runner = _StubPlanRunner(
+        plan_steps=[
+            PlanStep(kind="tool_call", tool="files_read", args={"path": "/tmp/guess.md"}),
+            PlanStep(kind="tool_call", tool="files_search", args={"glob": "*.md"}),
+        ],
+    )
+    dispatcher = _make_loop_dispatcher(runner=runner, registry=registry, harness=harness)
+
+    await dispatcher.dispatch(chat_id=1, user_text="read a file", message=_FakeMessage())
+
+    # files_read failed on step 1 -- step 2 must see the FULL catalog, not
+    # be restricted to files_read alone.
+    assert {d.tool for d in runner.plan_next_calls[1]["available_skills"]} == {
+        "files_search",
+        "files_read",
+    }
+
+
+async def test_multi_step_empty_remaining_exhausts_plan_after_one_success() -> None:
+    """A step-1 tool_call with an empty `remaining` must be trusted: the
+    plan is just that one tool, and once it succeeds the plan is
+    immediately exhausted -- step 2 sees the full catalog again, not a
+    restriction to a plan of length zero or one stale entry."""
+    registry, harness = _two_skill_setup()
+    runner = _StubPlanRunner(
+        plan_steps=[
+            PlanStep(kind="tool_call", tool="files_search", args={"glob": "*.md"}, remaining=[]),
+            PlanStep(kind="respond"),
+        ],
+    )
+    dispatcher = _make_loop_dispatcher(runner=runner, registry=registry, harness=harness)
+
+    await dispatcher.dispatch(chat_id=1, user_text="find files", message=_FakeMessage())
+
+    assert {d.tool for d in runner.plan_next_calls[1]["available_skills"]} == {
+        "files_search",
+        "files_read",
+    }
 
 
 async def test_multi_step_immediate_respond_returns_pass() -> None:
@@ -1585,7 +1936,7 @@ async def test_multi_step_task_complete_gates_and_skips_chain_synthesis() -> Non
     assert recorder.calls == 0
     # Reply is the gated summary verbatim — no unverified claim, no failed
     # tools, so no annotation is added.
-    assert message.replies == ["Found the markdown files."]
+    assert message.replies == ["Found the markdown files.\n\n[ollama · stub-model]"]
 
 
 async def test_task_complete_empty_history_returns_pass() -> None:
@@ -1824,7 +2175,7 @@ async def test_task_complete_ledger_read_failure_falls_back_to_history() -> None
     # files_search ran and succeeded — the history fallback finds it
     # verified, so the plain summary ships with no unverified-claim banner
     # and no exception ever escaped the ledger read.
-    assert message.replies[0] == "Searched for the files."
+    assert message.replies[0] == "Searched for the files.\n\n[ollama · stub-model]"
 
 
 async def test_task_complete_identical_args_retry_still_warns_oq7(tmp_path: Path) -> None:
@@ -1950,7 +2301,7 @@ async def test_task_complete_recovered_tool_not_branded_failure(
     assert outcome == DispatchOutcome.FIRED
     assert len(message.replies) == 1
     reply = message.replies[0]
-    assert reply == "Found the markdown files."
+    assert reply == "Found the markdown files.\n\n[ollama · stub-model]"
     assert "⚠️" not in reply
 
     raw_events = [

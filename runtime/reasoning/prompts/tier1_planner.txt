@@ -18,13 +18,27 @@ Tool calls already made on this turn (oldest → newest), with their results:
 Operator request:
 {user_text}
 
+First decide "remaining": the tool ids (from Available tools, above) still
+required to fully satisfy the operator's request, NOT including tools
+already called successfully in "Tool calls already made" above. Empty list
+[] means nothing further is needed. List multiple tool ids in the order
+they still need to run.
+
+Then decide "kind" from "remaining":
+- "remaining" non-empty → "kind" is "tool_call", for the next tool id in
+  "remaining".
+- "remaining" empty AND at least one tool has been called this turn →
+  "kind" is "task_complete".
+- "remaining" empty AND no tool has been called this turn → "kind" is
+  "respond".
+
 Respond with EXACTLY one of these three JSON shapes and nothing else:
 
-  {{"kind": "tool_call", "tool": "<tool_id>", "args": {{<field>: <value>, ...}}}}
+  {{"remaining": [<tool_id>, ...], "kind": "tool_call", "tool": "<tool_id>", "args": {{<field>: <value>, ...}}}}
 
-  {{"kind": "respond"}}
+  {{"remaining": [], "kind": "respond"}}
 
-  {{"kind": "task_complete", "summary": "<one sentence stating what was done>"}}
+  {{"remaining": [], "kind": "task_complete", "summary": "<one sentence stating what was done>"}}
 
 Rules:
 - "tool" must be one of the tool ids listed above. Do not invent tools.
@@ -32,12 +46,12 @@ Rules:
 - Any filesystem path (keys named `path`, `directory`, etc.) MUST be absolute —
   begin with "/" or "~". If a prior tool result established the directory,
   reuse that absolute path.
-- Pick `respond` only when no available tool can make progress, or when you
-  have not yet called any tool this turn and can already answer without one.
-  Do not chain destructive tools (`files_delete`, `files_move`,
+- When a prior tool result in "Tool calls already made" above contains a
+  file path, copy that exact string for any later `path` argument that
+  refers to the same file. Do not reconstruct, abbreviate, or guess a path
+  from the search pattern or the operator's wording — only from what a
+  tool result actually returned.
+- Do not chain destructive tools (`files_delete`, `files_move`,
   `files_write`) without explicit operator confirmation in the request.
 - One step at a time. Do not pack multiple actions into one reply.
-- When the user's request has been satisfied by the tool calls above, emit
-  {{"kind": "task_complete", "summary": "<one sentence stating what was done>"}}.
-  Only state things the tool results above actually show. If you have not
-  called any tool yet, use "respond" instead — never "task_complete".
+- In "summary", only state things the tool results above actually show.

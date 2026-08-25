@@ -20,6 +20,12 @@ from tenacity import (
 )
 
 from runtime.config import AegisConfig
+from runtime.llm.telemetry import (
+    PRODUCTION_READ_TIMEOUT_S,
+    CallTelemetry,
+    record_call,
+)
+from runtime.llm.timeouts import resolve_read_timeout
 
 from .base import ChatRequest, ChatResponse
 
@@ -55,6 +61,19 @@ def _normalise_model_id(model: str) -> str:
             model, fixed,
         )
     return fixed
+
+
+def _timeout_for_call() -> httpx.Timeout:
+    """Shipped timeout, unless the eval harness has widened `read`.
+
+    Only `read` moves -- see `runtime.llm.timeouts`.
+    """
+    return httpx.Timeout(
+        connect=_TIMEOUT.connect,
+        read=resolve_read_timeout(PRODUCTION_READ_TIMEOUT_S),
+        write=_TIMEOUT.write,
+        pool=_TIMEOUT.pool,
+    )
 
 
 class OpenRouterConfigError(ValueError):
@@ -101,7 +120,22 @@ class OpenRouterClient:
             payload["response_format"] = {"type": "json_object"}
 
         started = time.perf_counter()
-        data = await self._post_with_retry("/chat/completions", payload)
+        attempts: list[int] = [1]
+        try:
+            data = await self._post_with_retry("/chat/completions", payload, attempts)
+        except httpx.ReadTimeout:
+            # Parity with the Ollama client: a retry-exhausted timeout must be
+            # distinguishable from a fast wrong answer in the eval JSON.
+            record_call(
+                CallTelemetry(
+                    provider="openrouter",
+                    model=wire_model,
+                    wall_ms=int((time.perf_counter() - started) * 1000),
+                    attempts=attempts[0],
+                    timed_out=True,
+                )
+            )
+            raise
         latency_ms = int((time.perf_counter() - started) * 1000)
 
         choices_raw = data.get("choices", [])
@@ -115,6 +149,24 @@ class OpenRouterClient:
         tokens_in = _coerce_int(usage.get("prompt_tokens", 0))
         tokens_out = _coerce_int(usage.get("completion_tokens", 0))
 
+        finish_reason = first.get("finish_reason")
+        record_call(
+            CallTelemetry(
+                provider="openrouter",
+                model=wire_model,
+                wall_ms=latency_ms,
+                # No load_ms: weights are the provider's problem, not a cold
+                # local load, so there is nothing analogous to measure.
+                eval_ms=latency_ms,
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+                done_reason=(
+                    finish_reason if isinstance(finish_reason, str) and finish_reason else None
+                ),
+                attempts=attempts[0],
+            )
+        )
+
         return ChatResponse(
             content=str(content),
             model=wire_model,
@@ -127,7 +179,7 @@ class OpenRouterClient:
         try:
             async with httpx.AsyncClient(
                 base_url=self._base_url,
-                timeout=_TIMEOUT,
+                timeout=_timeout_for_call(),
                 follow_redirects=False,
                 headers=self._headers(),
             ) as client:
@@ -144,7 +196,9 @@ class OpenRouterClient:
             "Content-Type": "application/json",
         }
 
-    async def _post_with_retry(self, path: str, payload: dict[str, object]) -> dict[str, object]:
+    async def _post_with_retry(
+        self, path: str, payload: dict[str, object], attempts: list[int] | None = None
+    ) -> dict[str, object]:
         retryer = AsyncRetrying(
             stop=stop_after_attempt(3),
             wait=wait_exponential(multiplier=0.4, min=0.4, max=4.0),
@@ -155,9 +209,11 @@ class OpenRouterClient:
         )
         async for attempt in retryer:
             with attempt:
+                if attempts is not None:
+                    attempts[0] = attempt.retry_state.attempt_number
                 async with httpx.AsyncClient(
                     base_url=self._base_url,
-                    timeout=_TIMEOUT,
+                    timeout=_timeout_for_call(),
                     follow_redirects=False,
                     headers=self._headers(),
                 ) as client:

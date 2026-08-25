@@ -36,6 +36,17 @@ class ChatRequest(BaseModel):
             "response_format."
         ),
     )
+    think: bool | None = Field(
+        default=None,
+        description=(
+            "Explicit reasoning-mode override for clients that support it "
+            "(Ollama's `think` request field). `None` leaves the model's "
+            "own default untouched. `False` is for cheap, trivial structured "
+            "calls (e.g. Tier-0 intent classification) where a thinking-"
+            "capable model can otherwise spend its entire max_tokens budget "
+            "on a hidden reasoning channel and never emit content at all."
+        ),
+    )
 
 
 class ChatResponse(BaseModel):

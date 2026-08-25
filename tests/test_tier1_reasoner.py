@@ -188,7 +188,7 @@ def _files_list_skill() -> SkillDescriptor:
 async def test_plan_next_tool_call_returns_validated_step() -> None:
     stub = _StubClient(
         content=(
-            '{"kind": "tool_call", "tool": "files_list", '
+            '{"remaining": ["files_list"], "kind": "tool_call", "tool": "files_list", '
             '"args": {"path": "/Users/me/Downloads"}}'
         )
     )
@@ -202,11 +202,12 @@ async def test_plan_next_tool_call_returns_validated_step() -> None:
     assert step.kind == "tool_call"
     assert step.tool == "files_list"
     assert step.args == {"path": "/Users/me/Downloads"}
+    assert step.remaining == ["files_list"]
 
 
 @pytest.mark.asyncio
 async def test_plan_next_respond_kind_terminates() -> None:
-    stub = _StubClient(content='{"kind": "respond"}')
+    stub = _StubClient(content='{"remaining": [], "kind": "respond"}')
     reasoner = Tier1Reasoner(client=stub, model="minimax/minimax-m2.7")
 
     step = await reasoner.plan_next(
@@ -216,12 +217,16 @@ async def test_plan_next_respond_kind_terminates() -> None:
 
     assert step.kind == "respond"
     assert step.tool is None
+    assert step.remaining == []
 
 
 @pytest.mark.asyncio
 async def test_plan_next_rejects_unknown_tool() -> None:
     stub = _StubClient(
-        content='{"kind": "tool_call", "tool": "files_delete", "args": {"path": "/x"}}'
+        content=(
+            '{"remaining": [], "kind": "tool_call", "tool": "files_delete", '
+            '"args": {"path": "/x"}}'
+        )
     )
     reasoner = Tier1Reasoner(client=stub, model="minimax/minimax-m2.7")
 
@@ -234,7 +239,7 @@ async def test_plan_next_rejects_unknown_tool() -> None:
 
 @pytest.mark.asyncio
 async def test_plan_next_threads_call_history_into_prompt() -> None:
-    stub = _StubClient(content='{"kind": "respond"}')
+    stub = _StubClient(content='{"remaining": [], "kind": "respond"}')
     reasoner = Tier1Reasoner(client=stub, model="minimax/minimax-m2.7")
     prior_call = ToolIntent(
         tool="files_list",
@@ -331,6 +336,27 @@ def test_build_planner_schema_includes_task_complete_and_summary() -> None:
     assert schema["additionalProperties"] is False
 
 
+def test_build_planner_schema_includes_remaining() -> None:
+    schema = _build_planner_schema([_files_list_skill()])
+
+    assert schema["properties"]["remaining"]["type"] == "array"
+    assert schema["properties"]["remaining"]["items"]["enum"] == ["files_list"]
+    assert "remaining" in schema["required"]
+    assert "kind" in schema["required"]
+
+
+def test_build_planner_schema_orders_remaining_before_kind() -> None:
+    """`remaining` must be declared before `kind` in `properties` — grammar-
+    constrained decoders (llama.cpp's json-schema-to-grammar, used when this
+    schema is sent to Ollama as a `format` constraint, per A2) generate
+    object keys in declaration order. A small model's self-generated
+    `remaining` list becomes real, attended-to context by the time it
+    commits to `kind`, rather than both being decided independently."""
+    schema = _build_planner_schema([_files_list_skill()])
+    keys = list(schema["properties"].keys())
+    assert keys.index("remaining") < keys.index("kind")
+
+
 def _iter_schema_nodes(node: Any) -> list[dict[str, Any]]:
     """Flatten every dict node reachable in a JSON-schema tree."""
     nodes: list[dict[str, Any]] = []
@@ -382,7 +408,10 @@ async def test_plan_next_accepts_task_complete_step_with_no_tool() -> None:
     """A task_complete step (tool=None) must pass plan_next's post-validation
     unchanged — the tool-membership check is gated on kind == "tool_call"."""
     stub = _StubClient(
-        content='{"kind": "task_complete", "summary": "Listed the Downloads folder."}'
+        content=(
+            '{"remaining": [], "kind": "task_complete", '
+            '"summary": "Listed the Downloads folder."}'
+        )
     )
     reasoner = Tier1Reasoner(client=stub, model="minimax/minimax-m2.7")
 
@@ -400,7 +429,10 @@ async def test_plan_next_accepts_task_complete_step_with_no_tool() -> None:
 async def test_plan_next_still_rejects_unknown_tool_on_tool_call() -> None:
     """Pin: the kind == "tool_call" gate must not loosen unknown-tool rejection."""
     stub = _StubClient(
-        content='{"kind": "tool_call", "tool": "files_delete", "args": {"path": "/x"}}'
+        content=(
+            '{"remaining": [], "kind": "tool_call", "tool": "files_delete", '
+            '"args": {"path": "/x"}}'
+        )
     )
     reasoner = Tier1Reasoner(client=stub, model="minimax/minimax-m2.7")
 
@@ -426,3 +458,65 @@ def test_plan_step_accepts_summary_at_max_length() -> None:
 def test_plan_step_rejects_summary_over_max_length() -> None:
     with pytest.raises(ValidationError):
         PlanStep(kind="task_complete", summary="x" * 2049)
+
+
+def test_plan_step_remaining_defaults_to_empty_list() -> None:
+    """Constructing a `PlanStep` without `remaining` (as the degrade-path in
+    `SkillRunner.plan_next` and older-shaped test fixtures do) must not
+    require it — only the JSON schema sent to the model requires it."""
+    step = PlanStep(kind="respond")
+    assert step.remaining == []
+
+
+# --- Thinking mode on the SMART tier ------------------------------------
+# Measured both ways on 2026-08-25 across the 6-task suite. Disabling thinking
+# is NOT a global win, so it is a knob rather than a hardcoded choice:
+#   qwen3-vl:4b     TGC 40.0% -> 80.0%, truncated calls 22 -> 4   (large win)
+#   qwen3.5:4b-mlx  in-budget 73.3% -> 6.7%, calls 57 -> 89       (large loss)
+#   gemma4 family   unchanged
+# See docs/superpowers/plans/2026-08-24-eval-measurement-confounds.md.
+
+
+@pytest.mark.asyncio
+async def test_think_is_unset_by_default() -> None:
+    """Default must preserve each model's own behaviour -- the measurement
+    shows no setting is right for every model."""
+    stub = _StubClient(content='{"remaining": [], "kind": "respond"}')
+    reasoner = Tier1Reasoner(client=stub, model="qwen3-vl:4b")
+
+    await reasoner.plan_next(user_text="hi", available_skills=[_files_list_skill()])
+
+    assert stub.calls[0].think is None
+
+
+@pytest.mark.asyncio
+async def test_plan_next_forwards_think_when_configured() -> None:
+    stub = _StubClient(content='{"remaining": [], "kind": "respond"}')
+    reasoner = Tier1Reasoner(client=stub, model="qwen3-vl:4b", think=False)
+
+    await reasoner.plan_next(user_text="hi", available_skills=[_files_list_skill()])
+
+    assert stub.calls[0].think is False
+
+
+@pytest.mark.asyncio
+async def test_reason_forwards_think_when_configured() -> None:
+    """The reply-synthesis call takes the same setting -- same schema-constrained
+    shape, and the 2026-08-21 article recorded a timeout there too."""
+    stub = _StubClient(content='{"args": {"message": "ok"}, "rationale": "r"}')
+    reasoner = Tier1Reasoner(client=stub, model="qwen3-vl:4b", think=False)
+
+    await reasoner.reason(_ask_question(), "hello")
+
+    assert stub.calls[0].think is False
+
+
+@pytest.mark.asyncio
+async def test_think_true_is_forwarded_explicitly() -> None:
+    """A tri-state knob: None means 'leave the model alone', not 'off'."""
+    stub = _StubClient(content='{"remaining": [], "kind": "respond"}')
+    reasoner = Tier1Reasoner(client=stub, model="qwen3.5:4b-mlx", think=True)
+
+    await reasoner.plan_next(user_text="hi", available_skills=[_files_list_skill()])
+
+    assert stub.calls[0].think is True

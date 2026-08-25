@@ -45,6 +45,17 @@ DESTRUCTIVE_TOOLS: frozenset[str] = frozenset({
     "files_write",
 })
 
+# Deterministic path auto-fill (Open threads #2, 2026-08-21 session
+# handoff): models reliably retype a plausible-but-wrong path for a
+# `files_read` step immediately following `files_search`, even though the
+# search result already names the correct one (confirmed via code trace,
+# not a truncation bug). Rather than asking the model to get the retype
+# right, `_autofill_path_from_prior_search` below trusts the prior search's
+# own first match whenever the model's guess isn't one of the actual
+# matches — never overrides a guess that's already correct.
+_PATH_SOURCE_TOOL = "files_search"
+_PATH_CONSUMER_TOOLS: frozenset[str] = frozenset({"files_read"})
+
 
 @dataclass(frozen=True)
 class _PendingConfirmation:
@@ -80,6 +91,22 @@ _SYNTHESIS_CHAIN_PROMPT_PATH = (
 )
 _MAX_CHAIN_RESULT_CHARS = 1024
 _GUARD_MIN_STEP = 2  # destructive-tool guard applies from step 2 onward
+
+# Classification-fallback sentinel (spec: docs/superpowers/specs/2026-08-21-
+# classification-fallback-design.md). Used only as a label when intent
+# classification finds no matching skill and the multi-step planner is given
+# the full catalog instead. `tool` is a non-empty sentinel string -- never
+# checked against harness.has_tool() or passed to harness.execute(); the
+# planner's own plan.tool is what actually runs. Never registered as a real
+# skill, never imported elsewhere.
+_UNCLASSIFIED_DESCRIPTOR = SkillDescriptor(
+    id="unclassified_fallback",
+    description="Classification miss — multi-step planner chose from the full catalog.",
+    intents=[],
+    tool="_unclassified",
+    args_schema={},
+    requires_tier1=True,
+)
 
 __all__ = ["DESTRUCTIVE_TOOLS", "DispatchOutcome", "HarnessDispatcher"]
 
@@ -196,6 +223,39 @@ def _history_verified_tools(history: list[tuple[ToolIntent, ToolResult]]) -> set
     }
 
 
+def _autofill_path_from_prior_search(
+    tool_intent: ToolIntent, history: list[tuple[ToolIntent, ToolResult]]
+) -> ToolIntent:
+    """Correct `path` for a path-consuming tool immediately following a
+    successful `files_search` step, when the model's own guess doesn't
+    match any of that search's actual results. See `_PATH_CONSUMER_TOOLS`.
+
+    Never overrides a guess that already matches a real result — this only
+    ever turns a guaranteed-wrong path into the search's own top match, it
+    never second-guesses a model that got it right.
+    """
+    if tool_intent.tool not in _PATH_CONSUMER_TOOLS or not history:
+        return tool_intent
+    prior_intent, prior_result = history[-1]
+    if prior_intent.tool != _PATH_SOURCE_TOOL or prior_result.status != "ok":
+        return tool_intent
+    raw = str(prior_result.payload.get("result", ""))
+    matches = [line for line in raw.splitlines() if line and line != "No matches."]
+    if not matches or tool_intent.args.get("path") in matches:
+        return tool_intent
+    logger.info(
+        "harness_dispatcher.path_autofilled",
+        extra={
+            "tool": tool_intent.tool,
+            "guessed_path": tool_intent.args.get("path"),
+            "corrected_path": matches[0],
+        },
+    )
+    return tool_intent.model_copy(
+        update={"args": {**tool_intent.args, "path": matches[0]}}
+    )
+
+
 def _clip(text: str) -> str:
     """Bound raw tool output used as a synthesis-failure fallback.
 
@@ -219,6 +279,8 @@ class HarnessDispatcher:
         tier3: Tier3Store,
         tier1_loader: Tier1Loader,
         synthesis_model: str,
+        # default is test-ergonomics only; production always passes explicitly
+        provider: str = "ollama",
         multi_step: bool = False,
         max_steps: int = 5,
         events: EventStream | None = None,
@@ -232,6 +294,7 @@ class HarnessDispatcher:
         self._tier3 = tier3
         self._tier1_loader = tier1_loader
         self._synthesis_model = synthesis_model
+        self._provider = provider
         # multi_step is the Step-1 scaffold for the multi-step agent loop. The
         # Step-2 loop body, the verdict-gate refactor (set-based), and the
         # destructive-tool guard all hang off this flag — keep it gated until
@@ -250,6 +313,9 @@ class HarnessDispatcher:
 
     def _now(self) -> datetime:
         return self._clock() if self._clock is not None else datetime.now(tz=UTC)
+
+    def _footer(self) -> str:
+        return f"\n\n[{self._provider} · {self._synthesis_model}]"
 
     def _append_event(self, event_type: EventType, payload: dict[str, Any]) -> None:
         """Log one structural event, if an EventStream is wired.
@@ -454,22 +520,40 @@ class HarnessDispatcher:
         )
 
         descriptor = self._registry.for_intent(intent)
+        is_fallback = False
         if descriptor is None:
             logger.info("harness_dispatcher.no_descriptor", extra={"intent": intent})
-            return DispatchOutcome.PASS
-
-        if not self._harness.has_tool(descriptor.tool):
+            # The fallback is for classification MISSES ("unknown") only --
+            # a confident classification for a real intent that simply has
+            # no registered skill (a catalog/config mismatch, not a miss)
+            # must still PASS, not get swept into the fallback planner too.
+            if not self._multi_step or intent != "unknown":
+                return DispatchOutcome.PASS
+            descriptor = _UNCLASSIFIED_DESCRIPTOR
+            is_fallback = True
+            # available_skills count is omitted here -- _run_multi_step's own
+            # multi_step_start log (fired next, same turn) already reports it
+            # via `available`, which it must materialize anyway to run the
+            # loop, so recomputing len(self._registry.all()) here would just
+            # be a second throwaway list built solely for this log field.
             logger.info(
-                "harness_dispatcher.no_tool", extra={"tool": descriptor.tool}
+                "harness_dispatcher.classification_fallback_start",
+                extra={"chat_id": chat_id, "intent": intent},
             )
-            return DispatchOutcome.PASS
 
-        if confidence < HARNESS_CONFIDENCE_THRESHOLD:
-            question = _clarify_question(descriptor)
-            await _send(question)
-            self._tier3.append(str(chat_id), "user", user_text)
-            self._tier3.append(str(chat_id), "bot", question)
-            return DispatchOutcome.CLARIFY
+        if not is_fallback:
+            if not self._harness.has_tool(descriptor.tool):
+                logger.info(
+                    "harness_dispatcher.no_tool", extra={"tool": descriptor.tool}
+                )
+                return DispatchOutcome.PASS
+
+            if confidence < HARNESS_CONFIDENCE_THRESHOLD:
+                question = _clarify_question(descriptor)
+                await _send(question)
+                self._tier3.append(str(chat_id), "user", user_text)
+                self._tier3.append(str(chat_id), "bot", question)
+                return DispatchOutcome.CLARIFY
 
         logger.info(
             "harness_dispatcher.recent_turns_start", extra={"chat_id": chat_id}
@@ -481,6 +565,7 @@ class HarnessDispatcher:
                 user_text=user_text,
                 recent=recent,
                 turn_id=turn_id,
+                guard_min_step=1 if is_fallback else _GUARD_MIN_STEP,
             )
             if chain.guarded_intent is not None:
                 # Destructive guard tripped beyond step 1. Skip synthesis and
@@ -579,7 +664,7 @@ class HarnessDispatcher:
             )
 
         logger.info("harness_dispatcher.send_start")
-        await _send(reply_text)
+        await _send(reply_text + self._footer())
         logger.info("harness_dispatcher.send_done")
         self._tier3.append(str(chat_id), "user", user_text)
         self._tier3.append(str(chat_id), "bot", reply_text)
@@ -632,7 +717,7 @@ class HarnessDispatcher:
         reply_text = await self._synthesize(
             pending.user_text, pending.intent, result, chat_id=chat_id
         )
-        await _send(reply_text)
+        await _send(reply_text + self._footer())
         self._tier3.append(str(chat_id), "user", pending.user_text)
         self._tier3.append(str(chat_id), "bot", reply_text)
         logger.info("harness_dispatcher.confirmed_dispatch_complete")
@@ -645,6 +730,7 @@ class HarnessDispatcher:
         user_text: str,
         recent: tuple[tuple[str, str], ...],
         turn_id: str,
+        guard_min_step: int = _GUARD_MIN_STEP,
     ) -> _ChainResult:
         """Bounded multi-step planner loop (Steps 2 + 4).
 
@@ -675,6 +761,14 @@ class HarnessDispatcher:
         """
         available = list(self._registry.all())
         history: list[tuple[ToolIntent, ToolResult]] = []
+        # Turn-local plan lock (spec: docs/superpowers/specs/2026-08-21-
+        # multi-step-plan-lock-design.md). Derived from the first tool_call
+        # step's own `tool` + `remaining`; empty until then. While the
+        # cursor is inside plan_ids, available_skills is narrowed to just
+        # that one step's tool -- the model can retry a failed step but
+        # cannot regress to an earlier one or substitute an unplanned tool.
+        plan_ids: list[str] = []
+        cursor = 0
         logger.info(
             "harness_dispatcher.multi_step_start",
             extra={
@@ -685,13 +779,31 @@ class HarnessDispatcher:
         )
 
         for step_no in range(1, self._max_steps + 1):
+            # Restriction computation. Plan derivation + cursor advancement
+            # happen below, only on a verified execution (see the block
+            # right after `history.append(...)`); the destructive-guard
+            # check sits between the two, at `plan.tool in DESTRUCTIVE_TOOLS`.
+            if plan_ids and cursor < len(plan_ids):
+                step_available = [d for d in available if d.tool == plan_ids[cursor]]
+                if not step_available:
+                    # Defensive guard: unreachable today (plan_ids[cursor] is
+                    # always drawn from `available` at derivation time via
+                    # plan.tool/plan.remaining), but if a future plan_next
+                    # implementation is looser about validating `remaining`,
+                    # an empty step_available here would starve the planner
+                    # of any tool -- Tier1Reasoner.plan_next raises on an
+                    # empty skill list, which SkillRunner.plan_next swallows
+                    # into a silent respond. Fall back to the full catalog.
+                    step_available = available
+            else:
+                step_available = available
             logger.info(
                 "harness_dispatcher.plan_next_start",
                 extra={"step": step_no, "history_len": len(history)},
             )
             plan = await self._runner.plan_next(
                 user_text=user_text,
-                available_skills=available,
+                available_skills=step_available,
                 history=tuple(history),
                 recent=recent,
             )
@@ -724,8 +836,9 @@ class HarnessDispatcher:
                 skill_id=descriptor.id,
                 rationale=f"multi-step planner: step {step_no}",
             )
+            tool_intent = _autofill_path_from_prior_search(tool_intent, history)
 
-            if plan.tool in DESTRUCTIVE_TOOLS and step_no >= _GUARD_MIN_STEP:
+            if plan.tool in DESTRUCTIVE_TOOLS and step_no >= guard_min_step:
                 logger.info(
                     "harness_dispatcher.destructive_guard_triggered",
                     extra={"tool": plan.tool, "step": step_no},
@@ -741,7 +854,12 @@ class HarnessDispatcher:
             result = self._harness.execute(tool_intent)
             logger.info(
                 "harness_dispatcher.harness_execute_done",
-                extra={"step": step_no, "status": result.status},
+                extra={
+                    "step": step_no,
+                    "status": result.status,
+                    "plan_len": len(plan_ids),
+                    "cursor": cursor,
+                },
             )
             self._record_tool_call(
                 turn_id=turn_id,
@@ -750,6 +868,24 @@ class HarnessDispatcher:
                 result=result,
             )
             history.append((tool_intent, result))
+
+            # Plan derivation + cursor advancement, gated on a verified
+            # execution (see the restriction computation above, and the
+            # destructive-guard check above that). A failing FIRST step
+            # leaves plan_ids empty, so the NEXT step's restriction check
+            # falls through to the full catalog -- the model retains access
+            # to a legitimate recovery tool instead of being locked into
+            # retrying the tool that just failed.
+            if verdict_for_result(result) == "verified":
+                if not plan_ids:
+                    plan_ids = list(
+                        dict.fromkeys(
+                            [plan.tool] + [t for t in plan.remaining if t != plan.tool]
+                        )
+                    )
+                    cursor = 0
+                if cursor < len(plan_ids) and plan.tool == plan_ids[cursor]:
+                    cursor += 1
 
         logger.info(
             "harness_dispatcher.multi_step_done",

@@ -1,0 +1,14 @@
+id: list_then_read
+description: "Multi-step: list a folder, then read one of the listed files. Exercises HarnessDispatcher._run_multi_step."
+fixture:
+  files:
+    - path: "report.txt"
+      content: "Q3 numbers look good."
+variants:
+  - "list files in {sandbox} and then read report.txt"
+  - "show me what's in {sandbox}, then open report.txt and tell me what it says"
+expected_calls:
+  - tool: files_list
+    args_match: {path: "{sandbox}"}
+  - tool: files_read
+    args_match: {path: "{sandbox}/report.txt"}

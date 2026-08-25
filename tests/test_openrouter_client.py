@@ -19,6 +19,7 @@ from runtime.llm.clients.openrouter_client import (
     OpenRouterAuthError,
     OpenRouterConfigError,
 )
+from runtime.llm.telemetry import collect_calls
 
 
 def _config(api_key: str | None, base_url: str = "https://openrouter.ai/api/v1") -> AegisConfig:
@@ -162,3 +163,97 @@ async def test_chat_strips_invalid_openrouter_prefix(
     assert captured_payload["model"] == "x-ai/grok-4.1-fast"
     assert resp.model == "x-ai/grok-4.1-fast"
     assert any("openrouter/" in r.message for r in caplog.records)
+
+
+# --- Per-call telemetry -------------------------------------------------
+# Without this, OpenRouter runs land in the eval JSON with telemetry=None,
+# which `tgc_within_budget` treats as "within budget" -- silently scoring
+# every OpenRouter pass as fast. See
+# docs/superpowers/plans/2026-08-24-eval-measurement-confounds.md.
+
+
+@pytest.mark.asyncio
+async def test_chat_records_usage_and_finish_reason() -> None:
+    cfg = _config("sk-test")
+    client = OpenRouterClient(cfg)
+    request = ChatRequest(
+        model="qwen/qwen3.5-9b",
+        messages=[ChatMessage(role="user", content="hi")],
+    )
+
+    with respx.mock() as mock, collect_calls() as calls:
+        mock.post("https://openrouter.ai/api/v1/chat/completions").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {"role": "assistant", "content": "hello"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 7, "completion_tokens": 3},
+                },
+            )
+        )
+        await client.chat(request)
+
+    assert len(calls) == 1
+    t = calls[0]
+    assert t.provider == "openrouter"
+    assert t.model == "qwen/qwen3.5-9b"
+    assert t.tokens_in == 7
+    assert t.tokens_out == 3
+    assert t.done_reason == "stop"
+    assert not t.timed_out
+
+
+@pytest.mark.asyncio
+async def test_length_finish_reason_marks_the_call_truncated() -> None:
+    """Parity with Ollama: budget truncation must be visible to the taxonomy."""
+    cfg = _config("sk-test")
+    client = OpenRouterClient(cfg)
+    request = ChatRequest(
+        model="qwen/qwen3.5-9b",
+        messages=[ChatMessage(role="user", content="hi")],
+    )
+
+    with respx.mock() as mock, collect_calls() as calls:
+        mock.post("https://openrouter.ai/api/v1/chat/completions").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {"role": "assistant", "content": "x"},
+                            "finish_reason": "length",
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 512},
+                },
+            )
+        )
+        await client.chat(request)
+
+    assert calls[0].truncated_by_budget
+
+
+@pytest.mark.asyncio
+async def test_retry_exhausted_timeout_is_recorded() -> None:
+    cfg = _config("sk-test")
+    client = OpenRouterClient(cfg)
+    request = ChatRequest(
+        model="qwen/qwen3.5-9b",
+        messages=[ChatMessage(role="user", content="hi")],
+    )
+
+    with respx.mock() as mock, collect_calls() as calls:
+        mock.post("https://openrouter.ai/api/v1/chat/completions").mock(
+            side_effect=httpx.ReadTimeout("read timeout")
+        )
+        with pytest.raises(httpx.ReadTimeout):
+            await client.chat(request)
+
+    assert len(calls) == 1
+    assert calls[0].timed_out
+    assert calls[0].attempts == 3
