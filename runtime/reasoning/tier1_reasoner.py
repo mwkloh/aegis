@@ -105,9 +105,29 @@ class Tier1Reasoner:
         events: EventStream | None = None,
         max_retries: int = 1,
         planner_prompt_path: Path | None = None,
+        think: bool | None = None,
     ) -> None:
+        """`think` controls Ollama's reasoning channel on both Tier-1 calls.
+
+        Tri-state, and `None` (leave the model's own default alone) is the
+        default on purpose: measured across the six-task suite on 2026-08-25,
+        no single setting is right for every model.
+
+        * `qwen3-vl:4b`    TGC 40.0% -> 80.0%, truncated calls 22 -> 4
+        * `qwen3.5:4b-mlx` in-budget 73.3% -> 6.7%, model calls 57 -> 89
+        * `gemma4` family  unchanged either way
+
+        Turning thinking off frees the whole token budget for the schema-
+        constrained answer, which rescues a model that was spending all of it
+        on hidden reasoning -- and starves one that was using that reasoning to
+        get the JSON right first time, sending it into the structured-output
+        retry loop instead. Set it per deployment via `MODEL_SMART_THINK`;
+        there is no safe global answer. Ignored by OpenRouter, which has no
+        equivalent request field.
+        """
         self._client = client
         self._model = model
+        self._think = think
         self._prompt_template = (prompt_path or _PROMPT_PATH).read_text(encoding="utf-8")
         self._planner_prompt_template = (
             planner_prompt_path or _PLANNER_PROMPT_PATH
@@ -147,6 +167,9 @@ class Tier1Reasoner:
                 max_retries=self._max_retries,
                 events=self._events,
                 call_site="reasoning.tier1",
+                # Same schema-constrained shape as plan_next, so it takes the
+                # same setting. See __init__ for why this is a knob.
+                think=self._think,
             )
         except httpx.HTTPError as exc:
             raise Tier1ReasonerError(f"transport: {type(exc).__name__}") from exc
@@ -207,6 +230,9 @@ class Tier1Reasoner:
                 max_retries=self._max_retries,
                 events=self._events,
                 call_site="reasoning.tier1.plan_next",
+                # Operator-controlled; see __init__ for the measured
+                # per-model split that makes this a knob and not a default.
+                think=self._think,
             )
         except httpx.HTTPError as exc:
             raise Tier1ReasonerError(f"transport: {type(exc).__name__}") from exc

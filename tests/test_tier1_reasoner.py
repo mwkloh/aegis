@@ -466,3 +466,57 @@ def test_plan_step_remaining_defaults_to_empty_list() -> None:
     require it — only the JSON schema sent to the model requires it."""
     step = PlanStep(kind="respond")
     assert step.remaining == []
+
+
+# --- Thinking mode on the SMART tier ------------------------------------
+# Measured both ways on 2026-08-25 across the 6-task suite. Disabling thinking
+# is NOT a global win, so it is a knob rather than a hardcoded choice:
+#   qwen3-vl:4b     TGC 40.0% -> 80.0%, truncated calls 22 -> 4   (large win)
+#   qwen3.5:4b-mlx  in-budget 73.3% -> 6.7%, calls 57 -> 89       (large loss)
+#   gemma4 family   unchanged
+# See docs/superpowers/plans/2026-08-24-eval-measurement-confounds.md.
+
+
+@pytest.mark.asyncio
+async def test_think_is_unset_by_default() -> None:
+    """Default must preserve each model's own behaviour -- the measurement
+    shows no setting is right for every model."""
+    stub = _StubClient(content='{"remaining": [], "kind": "respond"}')
+    reasoner = Tier1Reasoner(client=stub, model="qwen3-vl:4b")
+
+    await reasoner.plan_next(user_text="hi", available_skills=[_files_list_skill()])
+
+    assert stub.calls[0].think is None
+
+
+@pytest.mark.asyncio
+async def test_plan_next_forwards_think_when_configured() -> None:
+    stub = _StubClient(content='{"remaining": [], "kind": "respond"}')
+    reasoner = Tier1Reasoner(client=stub, model="qwen3-vl:4b", think=False)
+
+    await reasoner.plan_next(user_text="hi", available_skills=[_files_list_skill()])
+
+    assert stub.calls[0].think is False
+
+
+@pytest.mark.asyncio
+async def test_reason_forwards_think_when_configured() -> None:
+    """The reply-synthesis call takes the same setting -- same schema-constrained
+    shape, and the 2026-08-21 article recorded a timeout there too."""
+    stub = _StubClient(content='{"args": {"message": "ok"}, "rationale": "r"}')
+    reasoner = Tier1Reasoner(client=stub, model="qwen3-vl:4b", think=False)
+
+    await reasoner.reason(_ask_question(), "hello")
+
+    assert stub.calls[0].think is False
+
+
+@pytest.mark.asyncio
+async def test_think_true_is_forwarded_explicitly() -> None:
+    """A tri-state knob: None means 'leave the model alone', not 'off'."""
+    stub = _StubClient(content='{"remaining": [], "kind": "respond"}')
+    reasoner = Tier1Reasoner(client=stub, model="qwen3.5:4b-mlx", think=True)
+
+    await reasoner.plan_next(user_text="hi", available_skills=[_files_list_skill()])
+
+    assert stub.calls[0].think is True

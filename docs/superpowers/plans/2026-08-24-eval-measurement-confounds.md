@@ -378,6 +378,56 @@ because the old measurement was wrong, not because anything was fixed.
 
 ---
 
+### Follow-up (2026-08-25): thinking mode measured both ways — it is a knob, not a default
+
+Task 5 Step 3 pointed at disabling thinking on the SMART tier as the only
+evidence-backed lever. Implemented as `think=False` on both Tier-1 calls, then
+re-run across the 7 local configs. **It is not a global win, and the change did
+not ship as a hardcoded default.** (`think` is Ollama-only; the OpenRouter
+client never sends it, so those two configs are unaffected and were not re-run.)
+
+| Model | TGC think | TGC no-think | in-budget think | in-budget no-think | calls | truncated |
+|---|---|---|---|---|---|---|
+| `qwen3-vl:4b` | 40.0% | **80.0%** | 0.0% | 0.0% | 46→77 | **22→4** |
+| `qwen3.5:4b-mlx` | 100.0% | **86.7%** | 73.3% | **6.7%** | 57→**89** | 4→**12** |
+| `lfm2.5:8b` | 6.7% | 0.0% | 6.7% | 0.0% | 43→31 | 3→0 |
+| `gemma4:cloud` | 100.0% | 100.0% | 100.0% | 100.0% | 59→58 | 0→0 |
+| `gemma4:e4b-mlx` | 93.3% | 93.3% | 93.3% | 93.3% | 54→50 | 1→0 |
+| `gemma4:e2b-mlx` | 60.0% | 60.0% | 60.0% | 60.0% | 69→63 | 5→0 |
+| `llama3.2:3b` | 20.0% | 26.7% | 20.0% | 20.0% | 70→70 | 0→0 |
+
+**`qwen3-vl:4b` doubles.** TGC 40%→80%, `thinking_budget_exhausted` eliminated
+entirely, truncated calls 22→4. The prediction held exactly.
+
+**`qwen3.5:4b-mlx` is damaged, via a mechanism worth naming.** Its in-budget
+score collapses 73.3%→6.7% and its model-call count *rises* 57→89 with
+truncations tripling 4→12. Disabling thinking did not make it faster — it made
+it produce worse-formed JSON, which sent `request_structured` into its retry
+loop. Its total eval time went 6.2→20.3 minutes. For this model the reasoning
+channel was not competing with the answer; it was how the answer got well
+formed on the first attempt.
+
+**`llama3.2:3b`'s 20.0%→26.7% is not evidence of anything** — its n=45 baseline
+is 24.4%, and `think` never changes its behaviour (thinking share 0.00, call
+count identical at 70). Its eval-time swing 3.5→13.3 min with identical call
+counts is host variance, a reminder that wall-clock on this setup is noisy even
+when behaviour is not.
+
+**Shipped instead:** `Tier1Reasoner(think=...)`, tri-state, wired to
+`MODEL_SMART_THINK`. Default `None` — leave each model's own behaviour alone —
+because the measurement shows no setting is right for every model. An operator
+running `qwen3-vl:4b` sets it false and roughly doubles their success rate; one
+running `qwen3.5:4b-mlx` must not.
+
+The generalisable finding: **thinking mode is a per-model property, not a tier
+property.** The Tier-0 fix (`2537913`) disabled it for classification and was
+right to; extending the same reasoning to Tier-1 by argument alone would have
+broken the best-performing local model in the suite. The argument was sound and
+the outcome was still model-specific — which is the case for measuring rather
+than reasoning about a change, one more time.
+
+---
+
 ### Task 5: Re-run and re-interpret
 
 - [x] **Step 1: Re-run all 9 configs with instrumentation on**

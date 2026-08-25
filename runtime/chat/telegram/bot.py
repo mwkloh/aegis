@@ -908,7 +908,11 @@ def build_harness_dispatcher(
         model=cfg.models.fast,
         known_intents=known_intents,
     )
-    tier1_reasoner = Tier1Reasoner(client=reasoning_client, model=target.model)
+    tier1_reasoner = Tier1Reasoner(
+        client=reasoning_client,
+        model=target.model,
+        think=cfg.models.smart_think,
+    )
     runner = SkillRunner(tier1=tier1_reasoner)
 
     return HarnessDispatcher(

@@ -47,6 +47,17 @@ class ModelConfig(BaseModel):
         default="minimax/minimax-m2.7",
         description="Plane 3 coding harness (OpenRouter by default).",
     )
+    smart_think: bool | None = Field(
+        default=None,
+        description=(
+            "Ollama reasoning-channel override for the Tier-1 planner and "
+            "reply-synthesis calls. None leaves the model's own default "
+            "alone. Measured 2026-08-25: disabling it took qwen3-vl:4b from "
+            "40% to 80% TGC but dropped qwen3.5:4b-mlx's in-budget score "
+            "from 73.3% to 6.7% -- there is no safe global setting, so this "
+            "is per-deployment. Ignored by OpenRouter."
+        ),
+    )
     smart_provider: Literal["ollama", "openrouter"] = Field(
         default="ollama",
         description="Explicit SMART-tier provider pin — no silent fallback between them.",
@@ -259,6 +270,19 @@ def _env_bool(raw: str | None, *, default: bool) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def _parse_tristate_bool(raw: str | None) -> bool | None:
+    """Unset -> None ("leave the model alone"), which is distinct from False."""
+    if raw is None or not raw.strip():
+        return None
+    normalized = raw.strip().lower()
+    if normalized in ("1", "true", "yes", "on"):
+        return True
+    if normalized in ("0", "false", "no", "off"):
+        return False
+    logger.warning("config.smart_think.unrecognized_value", extra={"raw": raw})
+    return None
+
+
 def _parse_smart_provider(raw: str | None) -> Literal["ollama", "openrouter"]:
     """Explicit SMART-tier provider pin. Unset/invalid -> 'ollama' (local-first default)."""
     if raw is None:
@@ -300,6 +324,7 @@ def _coerce(env: dict[str, str], cfg: dict[str, Any]) -> dict[str, Any]:
             env.get("MODEL_SMART", ModelConfig.model_fields["coding"].default),
         ),
         smart_provider=_parse_smart_provider(env.get("MODEL_SMART_PROVIDER")),
+        smart_think=_parse_tristate_bool(env.get("MODEL_SMART_THINK")),
     )
     providers = ProviderConfig(
         ollama_base_url=env.get(
