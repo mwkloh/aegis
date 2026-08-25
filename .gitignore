@@ -85,3 +85,15 @@ logs/
 
 # --- Git worktrees ---
 .worktrees/
+
+# --- Article drafts (repo root only) ---
+# Long-form write-ups drafted in-repo and published elsewhere. Root-anchored
+# and dated so it cannot match anything nested or any real project doc —
+# CONTEXT.md, AEGIS_BLUEPRINT.md and docs/ stay tracked. Covers future drafts
+# too, which is the point: the moment one gets committed by accident is the
+# moment nobody remembered to add it here.
+#   2026-05-04-aegis-design-philosophy.md
+#   2026-05-04-aegis-header.png
+#   2026-05-04-aegis-medium-article.md
+#   2026-08-20-aegis-medium-article-benchmark-results.md
+/20??-??-??-aegis-*
