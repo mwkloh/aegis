@@ -20,6 +20,12 @@ select = [
 ]
 ignore = [
   "PLR0913",  # too many arguments — pydantic models trip this
+  # Same argument as PLR0913 above, one rule narrower: PLR0917 counts only the
+  # positional ones. Ruff 0.16 promoted it out of preview, so a contributor on
+  # a current ruff saw 6 errors that CI (pinned to 0.15.11 by uv.lock) never
+  # reported — and the tempting fix is contorting call signatures the project
+  # is happy with. Ignoring it keeps local and CI honest with each other.
+  "PLR0917",  # too many positional arguments
   "S101",     # assert used (pytest)
   # Cyclomatic-complexity thresholds are opinionated; the dispatcher/handler
   # entry points (dispatch, _run_multi_step, the Telegram handlers) are
