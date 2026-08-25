@@ -20,16 +20,38 @@ from tenacity import (
 )
 
 from runtime.config import AegisConfig
+from runtime.llm.telemetry import (
+    PRODUCTION_READ_TIMEOUT_S,
+    CallTelemetry,
+    record_call,
+)
+from runtime.llm.timeouts import resolve_read_timeout
 
 from .base import ChatRequest, ChatResponse
 
 logger = logging.getLogger(__name__)
 
 _ALLOWED_HOSTS: Final[frozenset[str]] = frozenset({"127.0.0.1", "localhost", "::1"})
-_TIMEOUT: Final[httpx.Timeout] = httpx.Timeout(connect=2.0, read=30.0, write=10.0, pool=5.0)
+_TIMEOUT: Final[httpx.Timeout] = httpx.Timeout(
+    connect=2.0, read=PRODUCTION_READ_TIMEOUT_S, write=10.0, pool=5.0
+)
 _HTTP_OK: Final[int] = 200
 _HTTP_5XX_MIN: Final[int] = 500
 _HTTP_6XX_MIN: Final[int] = 600
+
+
+def _timeout_for_call() -> httpx.Timeout:
+    """Shipped timeout, unless the eval harness has widened `read`.
+
+    Only `read` moves: `connect`/`write`/`pool` guard a wedged socket rather
+    than a slow model, and widening those would hide real breakage.
+    """
+    return httpx.Timeout(
+        connect=_TIMEOUT.connect,
+        read=resolve_read_timeout(PRODUCTION_READ_TIMEOUT_S),
+        write=_TIMEOUT.write,
+        pool=_TIMEOUT.pool,
+    )
 
 
 class OllamaHostError(ValueError):
@@ -72,7 +94,24 @@ class OllamaClient:
             payload["think"] = request.think
 
         started = time.perf_counter()
-        data = await self._post_with_retry("/api/chat", payload)
+        attempts: list[int] = [1]
+        try:
+            data = await self._post_with_retry("/api/chat", payload, attempts)
+        except httpx.ReadTimeout:
+            # A retry-exhausted timeout is the failure that otherwise reaches the
+            # eval JSON as a bare "expected call never found" -- identical text to
+            # a model that answered quickly and wrongly. Record it before
+            # re-raising so the two stay distinguishable.
+            record_call(
+                CallTelemetry(
+                    provider="ollama",
+                    model=request.model,
+                    wall_ms=int((time.perf_counter() - started) * 1000),
+                    attempts=attempts[0],
+                    timed_out=True,
+                )
+            )
+            raise
         latency_ms = int((time.perf_counter() - started) * 1000)
 
         message_raw = data.get("message", {})
@@ -99,6 +138,22 @@ class OllamaClient:
         tokens_in = _coerce_int(data.get("prompt_eval_count", 0))
         tokens_out = _coerce_int(data.get("eval_count", 0))
 
+        record_call(
+            CallTelemetry(
+                provider="ollama",
+                model=request.model,
+                wall_ms=latency_ms,
+                load_ms=_ns_to_ms(data.get("load_duration")),
+                prompt_eval_ms=_ns_to_ms(data.get("prompt_eval_duration")),
+                eval_ms=_ns_to_ms(data.get("eval_duration")),
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+                thinking_tokens=_thinking_tokens(message_raw, tokens_out),
+                done_reason=_coerce_done_reason(data.get("done_reason")),
+                attempts=attempts[0],
+            )
+        )
+
         return ChatResponse(
             content=str(content),
             model=request.model,
@@ -110,7 +165,7 @@ class OllamaClient:
     async def health(self) -> bool:
         try:
             async with httpx.AsyncClient(
-                base_url=self._base_url, timeout=_TIMEOUT, follow_redirects=False
+                base_url=self._base_url, timeout=_timeout_for_call(), follow_redirects=False
             ) as client:
                 resp = await client.get("/api/tags")
                 return resp.status_code == _HTTP_OK
@@ -119,7 +174,7 @@ class OllamaClient:
 
     async def list_models(self) -> list[str]:
         async with httpx.AsyncClient(
-            base_url=self._base_url, timeout=_TIMEOUT, follow_redirects=False
+            base_url=self._base_url, timeout=_timeout_for_call(), follow_redirects=False
         ) as client:
             resp = await client.get("/api/tags")
             resp.raise_for_status()
@@ -127,7 +182,15 @@ class OllamaClient:
         models = data.get("models", []) if isinstance(data, dict) else []
         return [str(m.get("name", "")) for m in models if isinstance(m, dict)]
 
-    async def _post_with_retry(self, path: str, payload: dict[str, object]) -> dict[str, object]:
+    async def _post_with_retry(
+        self, path: str, payload: dict[str, object], attempts: list[int] | None = None
+    ) -> dict[str, object]:
+        """POST with bounded retries.
+
+        `attempts` is an optional out-parameter: when given, its single element
+        is kept up to date with the number of attempts consumed, so a caller
+        can still report the retry count on the path where tenacity re-raises.
+        """
         retryer = AsyncRetrying(
             stop=stop_after_attempt(3),
             wait=wait_exponential(multiplier=0.2, min=0.2, max=2.0),
@@ -138,8 +201,10 @@ class OllamaClient:
         )
         async for attempt in retryer:
             with attempt:
+                if attempts is not None:
+                    attempts[0] = attempt.retry_state.attempt_number
                 async with httpx.AsyncClient(
-                    base_url=self._base_url, timeout=_TIMEOUT, follow_redirects=False
+                    base_url=self._base_url, timeout=_timeout_for_call(), follow_redirects=False
                 ) as client:
                     resp = await client.post(path, json=payload)
                     if _HTTP_5XX_MIN <= resp.status_code < _HTTP_6XX_MIN:
@@ -164,3 +229,35 @@ def _coerce_int(value: object) -> int:
     if isinstance(value, str) and value.isdigit():
         return int(value)
     return 0
+
+
+def _ns_to_ms(value: object) -> int:
+    """Ollama reports durations in nanoseconds; telemetry stores milliseconds."""
+    return _coerce_int(value) // 1_000_000
+
+
+def _coerce_done_reason(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
+
+
+def _thinking_tokens(message: object, tokens_out: int) -> int:
+    """Approximate how many generated tokens went to the hidden reasoning channel.
+
+    Ollama's `eval_count` covers thinking and content together and it does not
+    break them out, so this splits `tokens_out` by the character ratio between
+    the two fields. It is an estimate, and only ever used to answer a coarse
+    question -- "did this model spend its whole budget thinking?" -- which is
+    exactly the shape of the qwen3-vl:4b finding (512/512 tokens on `thinking`,
+    empty content). Do not read it as an exact token count.
+    """
+    if not isinstance(message, dict) or tokens_out <= 0:
+        return 0
+    thinking = message.get("thinking")
+    if not isinstance(thinking, str) or not thinking:
+        return 0
+    content = message.get("content")
+    content_len = len(content) if isinstance(content, str) else 0
+    total_len = len(thinking) + content_len
+    if total_len <= 0:
+        return 0
+    return round(tokens_out * len(thinking) / total_len)
