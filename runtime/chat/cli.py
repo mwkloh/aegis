@@ -146,7 +146,9 @@ def build_pipeline(config: AegisConfig | None = None) -> Pipeline:
             inner=openrouter_raw, events=events, tier="smart", provider="openrouter"
         )
         tier1 = Tier1Reasoner(
-            client=openrouter, model=cfg.models.smart, think=cfg.models.smart_think
+            client=openrouter,
+            model=cfg.models.smart,
+            think=cfg.think_for(cfg.models.smart),
         )
     except OpenRouterConfigError:
         tier1 = None

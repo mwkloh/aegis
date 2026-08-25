@@ -419,6 +419,36 @@ because the measurement shows no setting is right for every model. An operator
 running `qwen3-vl:4b` sets it false and roughly doubles their success rate; one
 running `qwen3.5:4b-mlx` must not.
 
+**Follow-on (2026-08-25): per-model profiles.** `MODEL_SMART_THINK` is global,
+which is the wrong shape for a per-model property — setting it right for
+`qwen3-vl:4b` sets it wrong for `qwen3.5:4b-mlx`. Added a `modelProfiles`
+section to `config.json`, keyed by exact model id:
+
+```json
+"modelProfiles": {
+  "qwen3-vl:4b":    { "think": false },
+  "qwen3.5:4b-mlx": { "think": true }
+}
+```
+
+Resolution is `AegisConfig.think_for(model)`: env wins (escape hatch for a
+debugging session, same direction `MODEL_SMART_LOCAL` already overrides
+config), then the profile, then `None`. Matching is exact — **no family
+prefixes**, because the two models above share a vendor and need opposite
+values, so inheriting by prefix would encode the assumption the data
+contradicts. Malformed entries are dropped with a warning rather than raising,
+so a half-edited config still boots.
+
+`think` is the only field. Every other candidate (`max_tokens`, retry policy)
+is plausible but unmeasured, and adding knobs on reasoning alone is the failure
+mode this whole line of work exists to stop.
+
+Consequence to remember: the eval harness builds its dispatcher through
+`bot.py`, so **benchmark runs now inherit profiles**. That is deliberate — it
+measures each model at its intended config rather than through a second code
+path that does not match production — but it means eval results depend on
+`config.json` state. Record the active profiles alongside any published number.
+
 The generalisable finding: **thinking mode is a per-model property, not a tier
 property.** The Tier-0 fix (`2537913`) disabled it for classification and was
 right to; extending the same reasoning to Tier-1 by argument alone would have

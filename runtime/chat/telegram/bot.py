@@ -911,7 +911,7 @@ def build_harness_dispatcher(
     tier1_reasoner = Tier1Reasoner(
         client=reasoning_client,
         model=target.model,
-        think=cfg.models.smart_think,
+        think=cfg.think_for(target.model),
     )
     runner = SkillRunner(tier1=tier1_reasoner)
 
