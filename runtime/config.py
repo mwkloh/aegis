@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from dotenv import load_dotenv
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from runtime.board.config import BoardConfig
 
@@ -47,10 +47,71 @@ class ModelConfig(BaseModel):
         default="minimax/minimax-m2.7",
         description="Plane 3 coding harness (OpenRouter by default).",
     )
+    smart_think: bool | None = Field(
+        default=None,
+        description=(
+            "Ollama reasoning-channel override for the Tier-1 planner and "
+            "reply-synthesis calls. None leaves the model's own default "
+            "alone. Measured 2026-08-25: disabling it took qwen3-vl:4b from "
+            "40% to 80% TGC but dropped qwen3.5:4b-mlx's in-budget score "
+            "from 73.3% to 6.7% -- there is no safe global setting, so this "
+            "is per-deployment. Ignored by OpenRouter."
+        ),
+    )
     smart_provider: Literal["ollama", "openrouter"] = Field(
         default="ollama",
         description="Explicit SMART-tier provider pin — no silent fallback between them.",
     )
+
+
+class ModelProfile(BaseModel):
+    """Per-model overrides, keyed by exact model id in `config.json`.
+
+    Exists because a tier-wide setting cannot be right for every model.
+    Measured 2026-08-25 across the six-task eval suite, `think=False`:
+
+    * `qwen3-vl:4b`    TGC 40.0% -> 80.0%  (rescued -- it was spending its
+      whole token budget on hidden reasoning and never emitting content)
+    * `qwen3.5:4b-mlx` in-budget 73.3% -> 6.7%  (broken -- that reasoning was
+      how it got its JSON right first time; without it, retries tripled)
+
+    Only fields with a measured per-model effect belong here. `think` is
+    currently the only one; adding knobs on reasoning alone is what this whole
+    line of work exists to stop.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    think: bool | None = Field(
+        default=None,
+        description="Ollama reasoning channel for Tier-1. None leaves the model alone.",
+    )
+
+
+def _coerce_model_profiles(raw: Any) -> dict[str, ModelProfile]:
+    """Build `{model_id: ModelProfile}` from `config.json` -> `modelProfiles`.
+
+    Tolerant by design, matching `_coerce_files` / `_coerce_board`: a
+    malformed entry is dropped with a warning rather than raising, so a
+    half-edited config.json still boots and the operator can see which key
+    was ignored instead of getting a dead process.
+    """
+    if not isinstance(raw, dict):
+        return {}
+    profiles: dict[str, ModelProfile] = {}
+    for model_id, body in raw.items():
+        if not isinstance(model_id, str) or not isinstance(body, dict):
+            logger.warning("config.model_profiles.skipped", extra={"model": model_id})
+            continue
+        try:
+            profiles[model_id] = ModelProfile(**body)
+        except ValidationError:
+            # extra="forbid" lands here too, so a typo'd key is reported
+            # rather than silently doing nothing for the life of the config.
+            logger.warning(
+                "config.model_profiles.invalid", extra={"model": model_id}
+            )
+    return profiles
 
 
 class ProviderConfig(BaseModel):
@@ -230,11 +291,30 @@ class AegisConfig(BaseModel):
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
     harness: HarnessConfig = Field(default_factory=HarnessConfig)
     commands: CommandsConfig = Field(default_factory=CommandsConfig)
+    model_profiles: dict[str, ModelProfile] = Field(default_factory=dict)
 
     @field_validator("aegis_home", "aegis_root")
     @classmethod
     def _expand_root(cls, v: Path) -> Path:
         return Path(v).expanduser()
+
+    def think_for(self, model: str) -> bool | None:
+        """Resolve the Tier-1 reasoning-channel setting for one model.
+
+        Precedence: `MODEL_SMART_THINK` beats any profile, so an operator can
+        force a setting for a debugging session without editing config.json --
+        the same direction `MODEL_SMART_LOCAL` already overrides config. Note
+        `False` is a real setting and wins like `True` does; only an unset env
+        var falls through to the profile.
+
+        Matching is on exact model id. No family prefixes: `qwen3-vl:4b` wants
+        `think=False` and `qwen3.5:4b-mlx` wants `think=True`, so inheriting
+        by vendor would hand one of them the other's measured-wrong value.
+        """
+        if self.models.smart_think is not None:
+            return self.models.smart_think
+        profile = self.model_profiles.get(model)
+        return profile.think if profile is not None else None
 
 
 def _load_env(env_path: Path) -> None:
@@ -257,6 +337,19 @@ def _env_bool(raw: str | None, *, default: bool) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _parse_tristate_bool(raw: str | None) -> bool | None:
+    """Unset -> None ("leave the model alone"), which is distinct from False."""
+    if raw is None or not raw.strip():
+        return None
+    normalized = raw.strip().lower()
+    if normalized in ("1", "true", "yes", "on"):
+        return True
+    if normalized in ("0", "false", "no", "off"):
+        return False
+    logger.warning("config.smart_think.unrecognized_value", extra={"raw": raw})
+    return None
 
 
 def _parse_smart_provider(raw: str | None) -> Literal["ollama", "openrouter"]:
@@ -300,6 +393,7 @@ def _coerce(env: dict[str, str], cfg: dict[str, Any]) -> dict[str, Any]:
             env.get("MODEL_SMART", ModelConfig.model_fields["coding"].default),
         ),
         smart_provider=_parse_smart_provider(env.get("MODEL_SMART_PROVIDER")),
+        smart_think=_parse_tristate_bool(env.get("MODEL_SMART_THINK")),
     )
     providers = ProviderConfig(
         ollama_base_url=env.get(
@@ -343,6 +437,7 @@ def _coerce(env: dict[str, str], cfg: dict[str, Any]) -> dict[str, Any]:
         "files": _coerce_files(cfg.get("files")),
         "harness": _coerce_harness(cfg.get("harness"), env),
         "commands": _coerce_commands(cfg.get("commands")),
+        "model_profiles": _coerce_model_profiles(cfg.get("modelProfiles")),
     }
 
 
