@@ -7,6 +7,7 @@ Reflection plane has data to chew on later.
 from __future__ import annotations
 
 import asyncio
+import logging
 import sys
 from collections.abc import Iterator
 from typing import Protocol
@@ -15,6 +16,7 @@ from runtime.config import AegisConfig, get_config
 from runtime.events import EventStream, EventType
 from runtime.harness import HarnessAdapter
 from runtime.intent import (
+    ClassifierUnavailableError,
     IntentClassification,
     IntentClassifier,
     ModelBackedClassifier,
@@ -27,6 +29,8 @@ from runtime.llm.clients.openrouter_client import (
 from runtime.reasoning import SkillRunner
 from runtime.reasoning.tier1_reasoner import Tier1Reasoner
 from runtime.skills import SkillRegistry
+
+logger = logging.getLogger(__name__)
 
 
 class _AsyncClassifier(Protocol):
@@ -53,7 +57,27 @@ class Pipeline:
     async def handle(self, user_text: str) -> str:
         self.events.append(EventType.USER_MESSAGE, {"text": user_text})
 
-        classification = await self.classifier.classify(user_text)
+        try:
+            classification = await self.classifier.classify(user_text)
+        except ClassifierUnavailableError as exc:
+            # An outage is not a classification. Since 27bc7ea the classifier
+            # raises rather than collapsing a transport/schema failure into
+            # intent="unknown", so this surface must degrade explicitly --
+            # emitting `intent.classified` here would record an intent that was
+            # never determined, which is the exact conflation that commit
+            # removed. The Telegram dispatcher already guards its own call site.
+            logger.warning("chat.pipeline.classifier_unavailable", extra={"error": str(exc)})
+            self.events.append(
+                EventType.PATTERN_OBSERVED,
+                {"pattern": "classifier_unavailable", "error": str(exc)},
+            )
+            reply = (
+                "I can't classify that right now — the intent classifier is "
+                "unavailable. Check that the local model is running, then try again."
+            )
+            self.events.append(EventType.ASSISTANT_REPLY, {"text": reply})
+            return reply
+
         self.events.append(
             EventType.INTENT_CLASSIFIED,
             {"intent": classification.intent, "confidence": classification.confidence},
