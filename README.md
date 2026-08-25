@@ -111,6 +111,13 @@ The default model stack assumes Ollama or LM Studio is running locally. OpenRout
 ### Memory tiering
 Four-tier memory (preferences / identity / episodic / external knowledge) plus per-task execution memory. Memory is retrieved per-skill, summarized, never wholesale-injected. SQLite + sqlite-vec for embeddings. Optional Obsidian vault integration.
 
+### Instrumented eval harness
+`runtime/eval/` runs the real skill catalog against live models — no replayed transcripts, no mocks — and grades against the same evidence ledger the runtime uses. It reports **TGC** (per-run pass rate) and **SGC** (per-task, strict: every phrasing variant must pass), plus per-call telemetry so a failure says *why* it failed rather than only *that* it did: `timeout_exhausted`, `thinking_budget_exhausted`, `no_tool_call`, `wrong_tool`, `tool_errored`, `incomplete_chain`, `repeated_step`.
+
+Two design points that changed what the numbers mean. **Capability and the shipped budget are reported separately** — `tgc_within_budget` says whether a passing run would also have fit the 30 s production timeout, because a model can be capable and unusable at once. And **the eval gets its own generous read timeout**, so a slow model is measured on what it can do rather than cut off mid-answer; the production path keeps its shipped timeout untouched. Slow and incapable are different findings, and conflating them previously published a working model as a flat 0%.
+
+Never runs in CI, costs real tokens: `python -m runtime.eval.cli --yes` (`--repeat N` for variance, `--read-timeout`, `--no-prewarm`).
+
 ---
 
 ## Installation
@@ -168,6 +175,21 @@ Edit `~/.aegis/config.json` to pick model defaults (see the `models:` and `model
 
 The flag can also be set per-process via `HARNESS_MULTI_STEP=1`.
 
+#### Per-model profiles
+
+Some model settings are not safe to set tier-wide. Ollama's reasoning channel is the measured example: turning it off took `qwen3-vl:4b` from 40% to 80% TGC, and dropped `qwen3.5:4b-mlx`'s within-budget score from 73.3% to 6.7% — the same switch, opposite signs. Set those per model instead:
+
+```json
+{
+  "modelProfiles": {
+    "qwen3-vl:4b":    { "think": false },
+    "qwen3.5:4b-mlx": { "think": true }
+  }
+}
+```
+
+Keys match on **exact model id** — there is no family-prefix fallback, because the two models above share a vendor string and need opposite values. A model with no profile keeps its own default. `MODEL_SMART_THINK` in `.env` is a global override that beats every profile, so it stays the escape hatch for a debugging session; leave it unset for profiles to apply. Ollama-only — OpenRouter has no equivalent request field.
+
 ### Run
 
 ```bash
@@ -210,6 +232,7 @@ runtime/             Plane 1 — chat, intent, skills, reasoning, harness, llm
   reasoning/         Tier 1 skill-scoped planner; prompts/ holds the chain templates
   harness/           Tool registry + execution adapter (the only path to side effects)
   llm/               Ollama / OpenRouter / OpenAI / Anthropic clients + tier router
+  eval/              Live-model benchmark harness (TGC/SGC, failure taxonomy, telemetry)
   reflection/        Read-only event sweep (Plane 2)
   improvement/       Patch-draft pipeline (Plane 3, draft-only)
   scheduler/         Cron-style job runner (UTC internally)
@@ -217,9 +240,10 @@ runtime/             Plane 1 — chat, intent, skills, reasoning, harness, llm
 coding_harness/      Plane 3 patch-application harness
 memory/              SQLite + sqlite-vec memory store
 scripts/             aegis-doctor, aegis-bootstrap, aegis-telegram-smoke, …
+eval/                Benchmark task definitions (tasks/) and results (results/, gitignored)
 docs/                ADRs and design plans
 deploy/              launchd plists for macOS supervised runs
-tests/               1350+ unit/integration/e2e tests
+tests/               1600+ unit/integration/e2e tests
 AEGIS_BLUEPRINT.md   Original design document
 ```
 
@@ -242,6 +266,7 @@ Canonical *operator* state lives outside the repo:
 - **`run_command` containment is an allowlist plus path-sandboxing, not a jail.** It refuses non-allowlisted binaries and validates absolute/`~` path arguments against the sandbox roots, but it is not a full sandbox: a bare relative token with no separator resolves against the process working directory. Extend `commands.allowed_binaries` deliberately — adding `find`, `rm`, or an interpreter re-opens execution vectors the defaults exclude.
 - **Local-model dependency.** With Ollama down, the harness dispatcher logs `harness_dispatcher.disabled` and the bot falls back to plain chat. Multi-step tool use requires a working local classifier.
 - **Solo project, solo issue tracker.** Issues live as markdown files under `.scratch/<feature>/` in this repo, not on GitHub Issues. Triage labels and conventions are documented in `docs/agents/`.
+- **Benchmark numbers are conditional, and some models have no stable score at all.** Results depend on `config.json` state, since the eval harness builds its dispatcher through the same path as production and therefore inherits `modelProfiles` — record the active profiles next to any number you quote. Two of the models measured here (`gemma4:e2b-mlx`, `llama3.2:3b`) have no per-task pass/fail state, only a pass *rate*: at n=45 they sit at 64.4% and 24.4%, with individual tasks splitting 5/9, 3/6, 1/9. Any single-run claim about them is one sample from a coin flip — use `--repeat 3` at minimum. Read `tgc` and `tgc_within_budget` together; a model can be capable and too slow to ship, and reporting only one of those mis-tells it in either direction.
 
 ## License
 

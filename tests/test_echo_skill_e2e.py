@@ -72,12 +72,24 @@ async def test_echo_round_trip_writes_full_event_chain(aegis_sandbox: Path) -> N
 @pytest.mark.asyncio
 async def test_unknown_intent_replies_with_help(aegis_sandbox: Path) -> None:
     pipeline = build_pipeline(config=_cfg_with_repo_catalog(aegis_sandbox))
-    # "good morning" fires no rule, so the model-backed classifier would call
-    # Ollama. We mock a malformed reply so it collapses to `unknown` and the
-    # pipeline falls through to the help message — deterministic either way.
+    # "good morning" fires no rule, so the model-backed classifier calls Ollama.
+    # Mock a *well-formed* reply carrying a genuine "unknown" so the pipeline
+    # falls through to the help message.
+    #
+    # This previously mocked malformed JSON as a shortcut to the same place.
+    # Since 27bc7ea that is no longer equivalent: a malformed reply is an
+    # outage (ClassifierUnavailableError), not a classification. Keeping the
+    # old mock here would have this test silently exercising the outage path
+    # under a name that claims to cover unknown-intent — the two are covered
+    # separately now.
     with respx.mock() as mock:
         mock.post("http://127.0.0.1:11434/api/chat").mock(
-            return_value=httpx.Response(200, json={"message": {"content": "not json"}})
+            return_value=httpx.Response(
+                200,
+                json={
+                    "message": {"content": '{"intent": "unknown", "confidence": 0.0}'}
+                },
+            )
         )
         reply = await pipeline.handle("good morning")
 
@@ -86,3 +98,28 @@ async def test_unknown_intent_replies_with_help(aegis_sandbox: Path) -> None:
     assert "user.message" in types
     assert "assistant.reply" in types
     assert "skill.selected" not in types
+
+
+@pytest.mark.asyncio
+async def test_classifier_outage_degrades_instead_of_crashing(aegis_sandbox: Path) -> None:
+    """A classifier outage must not propagate out of the CLI pipeline.
+
+    `27bc7ea` made ModelBackedClassifier raise ClassifierUnavailableError rather
+    than collapsing an outage into intent="unknown" — so an outage stops failing
+    open into the full-catalog planner. It wired the guard into the Telegram
+    dispatcher (`except Exception: return PASS`) but not into this surface, so
+    `Pipeline.handle()` had no handler and the exception reached the caller.
+    """
+    pipeline = build_pipeline(config=_cfg_with_repo_catalog(aegis_sandbox))
+    with respx.mock() as mock:
+        mock.post("http://127.0.0.1:11434/api/chat").mock(
+            return_value=httpx.Response(200, json={"message": {"content": "not json"}})
+        )
+        reply = await pipeline.handle("good morning")
+
+    assert reply  # did not raise
+    types = [e["type"] for e in _read_jsonl(pipeline.events.path)]
+    assert "assistant.reply" in types
+    # An outage is not a classification — nothing may claim an intent was found.
+    assert "skill.selected" not in types
+    assert "intent.classified" not in types
