@@ -14,6 +14,7 @@ from typing import Any
 from runtime.chat.memory.tier1 import Tier1Loader
 from runtime.chat.memory.tier3 import Tier3Store
 from runtime.chat.reply_verdict import annotate_unverified_claim
+from runtime.chat.telegram.native_turn import NativeChat, NativeTurnResult, run_native_turn
 from runtime.events import EventStream, EventType
 from runtime.harness.adapter import HarnessAdapter
 from runtime.harness.contract import ToolIntent, ToolResult
@@ -188,6 +189,8 @@ class HarnessDispatcher:
         tool_result_chars: int = DEFAULT_TOOL_RESULT_CHARS,
         turn_result_budget_chars: int = DEFAULT_TURN_RESULT_BUDGET_CHARS,
         guardrails: Guardrails | None = None,
+        harness_mode: str = "planner",
+        native_chat: NativeChat | None = None,
     ) -> None:
         self._classifier = classifier
         self._registry = registry
@@ -209,6 +212,9 @@ class HarnessDispatcher:
         self._tool_result_chars = tool_result_chars
         self._turn_result_budget_chars = turn_result_budget_chars
         self._guardrails = guardrails or Guardrails()
+        # No chat function means native mode cannot run, so fall back to the planner.
+        self._harness_mode = harness_mode if native_chat is not None else "planner"
+        self._native_chat = native_chat
         # Evidence ledger (Phase 11 Track B). `None` keeps every existing
         # call site/test working unmodified — recording is opt-in.
         self._events = events
@@ -453,7 +459,8 @@ class HarnessDispatcher:
             # a confident classification for a real intent that simply has
             # no registered skill (a catalog/config mismatch, not a miss)
             # must still PASS, not get swept into the fallback planner too.
-            if not self._multi_step or intent != "unknown":
+            native = self._harness_mode == "native"
+            if not (self._multi_step or native) or intent != "unknown":
                 return DispatchOutcome.PASS
             descriptor = _UNCLASSIFIED_DESCRIPTOR
             is_fallback = True
@@ -485,6 +492,15 @@ class HarnessDispatcher:
             "harness_dispatcher.recent_turns_start", extra={"chat_id": chat_id}
         )
         recent = self._recent_turns(chat_id)
+        if self._harness_mode == "native":
+            return await self._dispatch_native(
+                chat_id=chat_id,
+                user_text=user_text,
+                skill_id=descriptor.id,
+                turn_id=turn_id,
+                guard_min_call=1 if is_fallback else _GUARD_MIN_STEP,
+                send=_send,
+            )
         if self._multi_step:
             chain = await self._run_multi_step(
                 descriptor=descriptor,
@@ -495,33 +511,14 @@ class HarnessDispatcher:
             )
             if chain.guarded_intent is not None:
                 # Destructive guard tripped beyond step 1. Skip synthesis and
-                # ship a deterministic confirmation prompt — the operator must
-                # see the exact tool id and args, not an LLM paraphrase. Hold
-                # the intent so an explicit "yes" follow-up (within TTL) can
-                # run it without re-planning (Phase 11 Track D, D1).
-                #
-                # Arm the pending confirmation ONLY after `_send` succeeds. If
-                # the send raises (e.g. a Telegram API error), the operator
-                # never saw the prompt — storing the pending intent anyway
-                # would let a later UNRELATED message that happens to match
-                # an affirmative ("yes", "go ahead") silently execute a
-                # destructive tool the operator was never shown.
-                reply_text = _format_destructive_confirmation(chain.guarded_intent)
-                await _send(reply_text)
-                self._pending[chat_id] = _PendingConfirmation(
+                # ship a deterministic confirmation prompt (Phase 11 Track D, D1).
+                return await self._hold_for_confirmation(
+                    chat_id=chat_id,
                     intent=chain.guarded_intent,
                     skill_id=descriptor.id,
                     user_text=user_text,
-                    created_at=self._now(),
+                    send=_send,
                 )
-                self._append_event(
-                    EventType.HARNESS_CONFIRMATION_REQUESTED,
-                    {"tool": chain.guarded_intent.tool, "skill_id": descriptor.id},
-                )
-                self._tier3.append(str(chat_id), "user", user_text)
-                self._tier3.append(str(chat_id), "bot", reply_text)
-                logger.info("harness_dispatcher.dispatch_complete_guarded")
-                return DispatchOutcome.FIRED
             if chain.completion_summary is not None:
                 # Planner claimed task_complete — the gate already checked the
                 # summary against this turn's evidence (ledger or history) and
@@ -653,6 +650,115 @@ class HarnessDispatcher:
         self._tier3.append(str(chat_id), "bot", reply_text)
         logger.info("harness_dispatcher.confirmed_dispatch_complete")
         return DispatchOutcome.FIRED
+
+    async def _hold_for_confirmation(
+        self,
+        *,
+        chat_id: int,
+        intent: ToolIntent,
+        skill_id: str,
+        user_text: str,
+        send: Callable[[str], Awaitable[None]],
+    ) -> DispatchOutcome:
+        """Ship the deterministic confirmation prompt and hold the intent one turn.
+
+        Arm the pending confirmation ONLY after `send` succeeds: if the send raises,
+        the operator never saw the prompt, and a later unrelated "yes" must not run a
+        destructive tool they were never shown. (Phase 11 Track D, D1.)
+        """
+        reply_text = _format_destructive_confirmation(intent)
+        await send(reply_text)
+        self._pending[chat_id] = _PendingConfirmation(
+            intent=intent, skill_id=skill_id, user_text=user_text, created_at=self._now()
+        )
+        self._append_event(
+            EventType.HARNESS_CONFIRMATION_REQUESTED, {"tool": intent.tool, "skill_id": skill_id}
+        )
+        self._tier3.append(str(chat_id), "user", user_text)
+        self._tier3.append(str(chat_id), "bot", reply_text)
+        logger.info("harness_dispatcher.dispatch_complete_guarded")
+        return DispatchOutcome.FIRED
+
+    async def _dispatch_native(
+        self,
+        *,
+        chat_id: int,
+        user_text: str,
+        skill_id: str,
+        turn_id: str,
+        guard_min_call: int,
+        send: Callable[[str], Awaitable[None]],
+    ) -> DispatchOutcome:
+        """Native harness mode: the model tool-calls in its own format (spec section 4)."""
+        assert self._native_chat is not None  # guaranteed by __init__
+
+        def _ledger(intent: ToolIntent, result: ToolResult) -> None:
+            self._record_tool_call(
+                turn_id=turn_id, skill_id=skill_id, tool_intent=intent, result=result
+            )
+
+        try:
+            turn = await run_native_turn(
+                chat=self._native_chat,
+                harness=self._harness,
+                descriptors=list(self._registry.all()),
+                user_text=user_text,
+                skill_id=skill_id,
+                max_steps=self._max_steps,
+                autofill=self._guardrails.autofill,
+                tool_result_chars=self._tool_result_chars,
+                guard_min_call=guard_min_call,
+                on_executed=_ledger,
+            )
+        except Exception:
+            logger.exception("harness_dispatcher.native_turn_failed")
+            return DispatchOutcome.PASS
+        if turn.guarded_intent is not None:
+            return await self._hold_for_confirmation(
+                chat_id=chat_id,
+                intent=turn.guarded_intent,
+                skill_id=skill_id,
+                user_text=user_text,
+                send=send,
+            )
+        reply_text = await self._native_reply(user_text, turn, chat_id=chat_id, turn_id=turn_id)
+        if not reply_text.strip():
+            return DispatchOutcome.PASS
+        await send(reply_text + self._footer())
+        self._tier3.append(str(chat_id), "user", user_text)
+        self._tier3.append(str(chat_id), "bot", reply_text)
+        logger.info("harness_dispatcher.dispatch_complete_native")
+        return DispatchOutcome.FIRED
+
+    async def _native_reply(
+        self, user_text: str, turn: NativeTurnResult, *, chat_id: int, turn_id: str
+    ) -> str:
+        """Synthesis (optional) -> claim gate -> evidence, the planner's order.
+
+        The gate reads only the model's own words, never the appended evidence.
+        """
+        guard = self._guardrails
+        history = turn.history
+        if turn.hit_cap:
+            text = (
+                f"Stopped after {self._max_steps} steps without finishing."
+                if guard.evidence
+                else ""
+            )
+        else:
+            text = (turn.final_text or "").strip()
+        if guard.synthesis and history:
+            text = await self._synthesize_chain(user_text, history, chat_id=chat_id)
+        if text and guard.claim_gate:
+            text = self._gate_completion(text, history, turn_id)
+        if guard.evidence and history:
+            text = with_evidence(
+                text,
+                history,
+                per_result_chars=self._tool_result_chars,
+                turn_budget_chars=self._turn_result_budget_chars,
+            )
+        return text
 
     async def _run_multi_step(
         self,

@@ -976,6 +976,8 @@ def _make_loop_dispatcher(
     clock: Callable[[], datetime] | None = None,
     classifier: Any = None,
     guardrails: Any = None,
+    harness_mode: str = "planner",
+    native_chat: Any = None,
 ) -> HarnessDispatcher:
     if registry is None or harness is None:
         registry, harness = _two_skill_setup()
@@ -993,6 +995,8 @@ def _make_loop_dispatcher(
         events=events,
         clock=clock,
         guardrails=guardrails,
+        harness_mode=harness_mode,
+        native_chat=native_chat,
     )
 
 
@@ -3045,3 +3049,160 @@ async def test_claim_gate_off_ships_the_summary_unannotated() -> None:
     message = _FakeMessage()
     await dispatcher.dispatch(chat_id=1, user_text="find x", message=message)
     assert "⚠️" not in message.replies[0]
+
+
+# ---------------------------------------------------------------------------
+# Native harness mode (spec 2026-10-06-harness-ablation-design.md, section 4)
+# ---------------------------------------------------------------------------
+
+
+def _tool_call_msg(name: str, **args: Any) -> dict[str, Any]:
+    return {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [{"function": {"name": name, "arguments": args}}],
+    }
+
+
+class _NativeScript:
+    def __init__(self, *replies: dict[str, Any]) -> None:
+        self._replies = list(replies)
+        self.calls = 0
+
+    async def __call__(
+        self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        self.calls += 1
+        return self._replies.pop(0)
+
+
+def _native(script: Any, *, guardrails: Any = None, **kw: Any) -> HarnessDispatcher:
+    return _make_loop_dispatcher(
+        runner=_StubPlanRunner(plan_steps=[]),
+        harness_mode="native",
+        native_chat=script,
+        guardrails=guardrails,
+        **kw,
+    )
+
+
+async def test_native_mode_answers_from_the_model_and_never_plans() -> None:
+    script = _NativeScript(
+        _tool_call_msg("files_search", glob="*.md"),
+        {"role": "assistant", "content": "Found a.md and b.md."},
+    )
+    runner = _StubPlanRunner(plan_steps=[])
+    dispatcher = _make_loop_dispatcher(runner=runner, harness_mode="native", native_chat=script)
+    message = _FakeMessage()
+    outcome = await dispatcher.dispatch(chat_id=1, user_text="find md files", message=message)
+    assert outcome == DispatchOutcome.FIRED
+    assert runner.plan_next_calls == []
+    assert message.replies[0].startswith("Found a.md and b.md.\n\nResults:\n")
+
+
+async def test_native_mode_with_no_guardrails_sends_the_model_text_as_is() -> None:
+    """Parity with the bare arm: guardrails off means nothing is added."""
+    script = _NativeScript(
+        _tool_call_msg("files_search", glob="*.md"),
+        {"role": "assistant", "content": "Found a.md and b.md."},
+    )
+    dispatcher = _native(
+        script,
+        guardrails=Guardrails(autofill=False, claim_gate=False, evidence=False, plan_lock=False),
+    )
+    message = _FakeMessage()
+    await dispatcher.dispatch(chat_id=1, user_text="find md files", message=message)
+    assert message.replies == ["Found a.md and b.md.\n\n[ollama · stub-model]"]
+
+
+async def test_native_claim_gate_flags_a_claim_with_no_tool_behind_it() -> None:
+    script = _NativeScript({"role": "assistant", "content": "I deleted the file for you."})
+    dispatcher = _native(script)
+    message = _FakeMessage()
+    await dispatcher.dispatch(chat_id=1, user_text="find md files", message=message)
+    assert "unverified tool claim" in message.replies[0]
+
+
+async def test_native_empty_final_message_becomes_the_evidence() -> None:
+    script = _NativeScript(
+        _tool_call_msg("files_search", glob="*.md"), {"role": "assistant", "content": ""}
+    )
+    dispatcher = _native(script)
+    message = _FakeMessage()
+    await dispatcher.dispatch(chat_id=1, user_text="find md files", message=message)
+    assert message.replies[0].startswith("Results:\n1. files_search(")
+
+
+async def test_native_step_cap_says_so_and_shows_the_evidence() -> None:
+    script = _NativeScript(*[_tool_call_msg("files_search", glob="*.md") for _ in range(4)])
+    dispatcher = _native(script, max_steps=2)
+    message = _FakeMessage()
+    await dispatcher.dispatch(chat_id=1, user_text="find md files", message=message)
+    assert message.replies[0].startswith(
+        "Stopped after 2 steps without finishing.\n\nResults:\n"
+    )
+
+
+async def test_native_synthesis_makes_one_extra_call_and_replaces_the_text() -> None:
+    script = _NativeScript(
+        _tool_call_msg("files_search", glob="*.md"),
+        {"role": "assistant", "content": "model text"},
+    )
+    recorder = _RecordingSynthesizer(reply="synthesised text")
+    dispatcher = _native(
+        script, guardrails=Guardrails(synthesis=True, plan_lock=False), synthesizer=recorder
+    )
+    message = _FakeMessage()
+    await dispatcher.dispatch(chat_id=1, user_text="find md files", message=message)
+    assert recorder.calls == 1
+    assert message.replies[0].startswith("synthesised text\n\nResults:\n")
+
+
+async def test_native_destructive_call_after_the_first_asks_for_confirmation() -> None:
+    registry, _ = _two_skill_setup()
+    harness = _RecordingHarness(
+        tools={
+            "files_search": lambda a: {"matches": ["/tmp/a.md"]},
+            "files_read": lambda a: {"content": "x"},
+            "files_delete": lambda a: {"deleted": True},
+        }
+    )
+    script = _NativeScript(
+        _tool_call_msg("files_search", glob="*.md"),
+        _tool_call_msg("files_delete", path="/tmp/a.md"),
+    )
+    dispatcher = _native(script, registry=registry, harness=harness)
+    message = _FakeMessage()
+    await dispatcher.dispatch(chat_id=1, user_text="find and delete", message=message)
+    assert [c.tool for c in harness.calls] == ["files_search"]
+    assert 1 in dispatcher._pending
+    assert "files_delete" in message.replies[0]
+
+
+async def test_native_turn_failure_degrades_to_pass() -> None:
+    async def _down(messages: Any, tools: Any) -> dict[str, Any]:
+        raise RuntimeError("ollama down")
+
+    dispatcher = _native(_down)
+    outcome = await dispatcher.dispatch(
+        chat_id=1, user_text="find md files", message=_FakeMessage()
+    )
+    assert outcome == DispatchOutcome.PASS
+
+
+def test_native_mode_falls_back_to_the_planner_off_ollama() -> None:
+    from runtime.chat.telegram.bot import _native_mode
+    from runtime.config import AegisConfig, ModelConfig
+    from runtime.llm.router import ModelTarget, ModelTier
+
+    def _target(provider: str, model: str) -> ModelTarget:
+        return ModelTarget(
+            tier=next(iter(ModelTier)), model=model, provider=provider, base_url="http://x"
+        )
+
+    cfg = AegisConfig().model_copy(update={"models": ModelConfig(harness_mode="native")})
+    mode, chat = _native_mode(cfg, _target("openrouter", "x/y"), None)
+    assert (mode, chat) == ("planner", None)
+    mode, chat = _native_mode(cfg, _target("ollama", "g:4b"), object())
+    assert mode == "native"
+    assert callable(chat)

@@ -917,6 +917,7 @@ def build_harness_dispatcher(
     )
     runner = SkillRunner(tier1=tier1_reasoner)
 
+    harness_mode, native = _native_mode(cfg, target, ollama_client)
     return HarnessDispatcher(
         classifier=classifier,
         registry=skill_registry,
@@ -931,7 +932,38 @@ def build_harness_dispatcher(
         max_steps=cfg.harness.max_steps,
         events=events,
         tool_result_chars=cfg.tool_result_chars_for(target.model),
+        guardrails=cfg.guardrails_for(target.model),
+        harness_mode=harness_mode,
+        native_chat=native,
     )
+
+
+def _native_mode(cfg: AegisConfig, target: Any, ollama_client: Any) -> tuple[str, Any]:
+    """(harness_mode, native_chat) for the routed model. Native mode is Ollama-only."""
+    from runtime.harness.native_loop import NATIVE_MAX_TOKENS, native_chat  # noqa: PLC0415
+
+    mode = cfg.harness_mode_for(target.model)
+    if mode != "native":
+        return "planner", None
+    if target.provider != "ollama":
+        logger.warning(
+            "harness_dispatcher.native_mode_unsupported", extra={"provider": target.provider}
+        )
+        return "planner", None
+
+    async def _chat(
+        messages: list[dict[str, Any]], tools: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        return await native_chat(
+            ollama_client,
+            cfg,
+            model=target.model,
+            messages=messages,
+            tools=tools,
+            max_tokens=NATIVE_MAX_TOKENS,
+        )
+
+    return "native", _chat
 
 
 def _startup_message_body(cfg: AegisConfig, *, now: datetime | None = None) -> str:
