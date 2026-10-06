@@ -977,3 +977,69 @@ model weakness. Cannot yet say: the harness makes small models more reliable in 
 reliability scales with size; the harness reduces hallucination.
 
 **Decision (user, 2026-10-06):** record this review; start the ablation design next.
+
+## 19. Ablation build outcome (2026-10-06)
+
+Spec `docs/superpowers/specs/2026-10-06-harness-ablation-design.md`, plan
+`docs/superpowers/plans/2026-10-06-harness-ablation.md`, branch `feat/harness-ablation`.
+Built subagent-driven: a fresh implementer per task, a spec + quality review after each,
+one whole-range review at the end (opus). Unit suite and ruff green throughout.
+
+| Task | Commits | Review |
+|---|---|---|
+| 0 baseline (week's benchmark work) | e8f05ba | not independently reviewed (see below) |
+| 1 guardrails extraction | 05fa340 | clean |
+| 2 planner guardrail switches | 81cac7e | clean |
+| 3 native loop moved to production | 2efe6fe | clean |
+| 4 `run_native_turn` | 6601f89 | clean |
+| 5 config `harness_mode` / `guardrails` | 500a818, fecf692 | 1 fix round (RED disclosure + plan_lock tests) |
+| 6 native mode in dispatcher + bot wiring | 2579a07, cb2307a | 1 fix round (R5) |
+| 7 eval arms as config presets | 34836b6 | clean |
+
+Final review: ready to merge for the ablation; an unset config is today's planner path
+end to end, so the 2026-10-05 `full` easy results are reusable.
+
+**Rulings made during the build** (each with its cost if wrong):
+- R1 Tasks 2/6 red step: every helper-based test fails with TypeError before the
+  constructor change (plan text said two would pass). Cost: none.
+- R2 Task 4 has 8 tests, not 9. Cost: none.
+- R3 no `_format_args` alias kept (unused, ruff F401). Cost: one import line later.
+- R4 `claim_gate` off also skips the HARNESS_COMPLETION_GATED event and the failed-tool
+  note. Cost: a production profile with the gate off loses that audit event.
+- R5 the native->planner fallback (off Ollama) uses planner-default `Guardrails()`, not
+  the native profile's set. Cost: a native profile wanting custom planner guardrails
+  off Ollama gets defaults.
+- R6 the final review covered the plan range e8f05ba..HEAD, not the Task 0 baseline.
+  Cost: the baseline (6.7k lines) has had no independent review.
+- R7 parked: native mode answers plain-chat turns itself (bare prompt) instead of
+  returning PASS to the chat pipeline. Spec keeps it bare-like for parity.
+- R8 parked: native mode does not pass conversation context (`recent`).
+- R9 parked: a native-turn exception after tools ran returns PASS (spec 4.6), hiding
+  side effects from the operator.
+
+**Pre-production blockers for native mode** (fine for the ablation, must be fixed before
+any production profile sets `harness_mode=native`): R7, R8, R9, plus a production native
+system prompt/persona (spec future work).
+
+**Before merging the branch:** run `/code-review` and `/security-review` in a fresh
+session, at least over the Task 0 baseline commit e8f05ba (R6).
+
+**Deferred minor findings** (all "can wait" per the final review): `with_evidence`
+whitespace comment; `History` not in `__all__`; respond-path claim-gate switch untested;
+test helper type hints; move test lacks the `_BARE_MAX_TOKENS` rename assertion;
+ValidationError path in `run_native_turn` untested and consumes a call number;
+`guard_min_call=1` untested at turn level; guarded return leaves unanswered tool calls in
+`messages`; guardrail names defined twice in config; `type: ignore` in
+`_parse_harness_mode`; synthesis replaces the step-cap notice; native tests miss the
+`native` fallback branch, native ledger records and the off-Ollama warning;
+`harness_mode` is an unvalidated str in the dispatcher; duplicate `_target` test helper;
+`_ARM_PRESETS` placement and `_NATIVE_ARMS` duplication in cli.py; no test of `_run`
+ordering or `--arm` choices; one invalid harness field drops the whole model profile
+including `num_ctx` (a typo would bring back the context thrash; pre-existing
+`_coerce_model_profiles` behaviour); native step cap counts rounds while the planner
+counts calls; dispatcher-level fallback keeps given guardrails; `native_loop` imports
+config and Ollama client internals (layering); the native claim gate emits
+HARNESS_COMPLETION_GATED on every gated reply.
+
+**Next:** Task 8 (live smoke, parity check, night script) needs the Mac Mini idle and the
+user's go-ahead.
