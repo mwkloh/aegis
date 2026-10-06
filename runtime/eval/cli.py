@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from runtime.chat.memory.tier1 import Tier1Loader
-from runtime.config import get_config
+from runtime.config import AegisConfig, get_config
 from runtime.eval.bare import run_variant_bare
 from runtime.eval.locality import classify_locality
 from runtime.eval.prewarm import prewarm
@@ -29,6 +29,34 @@ from runtime.llm.timeouts import read_timeout_override
 from runtime.skills.registry import SkillRegistry
 
 _DEFAULT_EVAL_READ_TIMEOUT_S = 300.0
+
+# Every arm but `bare` is a preset of the production config, so whatever wins can ship
+# as a ModelProfile (spec: docs/superpowers/specs/2026-10-06-harness-ablation-design.md).
+_GUARDED = frozenset({"autofill", "claim_gate", "evidence"})
+_ARM_PRESETS: dict[str, tuple[str, frozenset[str]]] = {
+    "full": ("planner", _GUARDED | {"plan_lock"}),
+    "full-nolock": ("planner", _GUARDED),
+    "native": ("native", frozenset()),
+    "native-guard": ("native", _GUARDED),
+    "native-guard-synth": ("native", _GUARDED | {"synthesis"}),
+}
+ARMS: tuple[str, ...] = (*_ARM_PRESETS, "bare")
+_NATIVE_ARMS = frozenset({"native", "native-guard", "native-guard-synth", "bare"})
+
+
+def _apply_arm(cfg: AegisConfig, arm: str) -> AegisConfig:
+    """Pin the harness mode and guardrails for one arm, overriding any profile."""
+    preset = _ARM_PRESETS.get(arm)
+    if preset is None:  # `bare` runs its own eval-only loop
+        return cfg
+    mode, guardrails = preset
+    return cfg.model_copy(
+        update={
+            "models": cfg.models.model_copy(
+                update={"harness_mode": mode, "guardrails": guardrails}
+            )
+        }
+    )
 
 _DEFAULT_TASKS_DIR = Path(__file__).resolve().parent.parent.parent / "eval" / "tasks"
 _DEFAULT_OUT_DIR = Path(__file__).resolve().parent.parent.parent / "eval" / "results"
@@ -75,14 +103,18 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--arm",
-        choices=("full", "bare"),
+        choices=ARMS,
         default="full",
         help=(
-            "Which harness drives the model. `full` (default) is the AEGIS "
-            "planner with plan-lock, completion gate and claim annotation. "
-            "`bare` is a native-tool-calling loop without them -- same models, "
-            "tools, tasks and grader -- to measure what the guardrails add. "
-            "Ollama-served models only."
+            "Which harness drives the model; same models, tools, tasks and "
+            "grader, to measure what each guardrail adds. "
+            "full (default) = AEGIS planner; "
+            "full-nolock = planner without plan-lock; "
+            "native = native tool calls, no guardrails; "
+            "native-guard = plus autofill, claim gate and evidence; "
+            "native-guard-synth = plus a synthesis call; "
+            "bare = the eval-only control loop. "
+            "Native arms and bare: Ollama-served models only."
         ),
     )
     parser.add_argument(
@@ -110,16 +142,16 @@ def _variant_runner(arm: str) -> VariantRunner:
 
 def _arm_unsupported_reason(arm: str, provider: str) -> str | None:
     """Why this arm cannot run against this provider, or None if it can."""
-    if arm == "bare" and provider != "ollama":
+    if arm in _NATIVE_ARMS and provider != "ollama":
         return (
-            f"the bare arm drives Ollama's native tools API; {provider!r} is not "
+            f"the {arm} arm drives Ollama's native tools API; {provider!r} is not "
             "supported yet"
         )
     return None
 
 
 async def _run(args: argparse.Namespace) -> int:
-    cfg = get_config()
+    cfg = _apply_arm(get_config(), args.arm)
     tasks = load_tasks(args.tasks_dir)
     if not tasks:
         print(f"No tasks found under {args.tasks_dir}", file=sys.stderr)

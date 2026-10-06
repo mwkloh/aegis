@@ -181,14 +181,17 @@ class EvalReport(BaseModel):
             "before the field existed are `unknown`."
         ),
     )
-    arm: Literal["full", "bare"] = Field(
+    arm: Literal[
+        "full", "full-nolock", "native", "native-guard", "native-guard-synth", "bare"
+    ] = Field(
         default="full",
         description=(
             "Which harness produced these numbers. `full` is the AEGIS planner "
             "with its guardrails; `bare` is a native-tool-calling loop without "
             "them (`runtime.eval.bare`). The tasks and models are the same, so "
             "without this two files for one model cannot be told apart. Files "
-            "written before the field existed are all `full`."
+            "written before the field existed are all `full`. Non-bare arms are "
+            "presets of the runtime harness config (spec 2026-10-06)."
         ),
     )
 
@@ -306,7 +309,7 @@ def write_json(report: EvalReport, out_dir: Path) -> Path:
     stamp = report.started_at.strftime("%Y-%m-%dT%H-%M-%SZ")
     safe_model = report.model.replace("/", "-").replace(":", "-")
     safe_provider = report.provider.replace("/", "-").replace(":", "-")
-    arm_suffix = "-bare" if report.arm == "bare" else ""
+    arm_suffix = "" if report.arm == "full" else f"-{report.arm}"
     path = out_dir / f"{stamp}-{safe_provider}-{safe_model}{arm_suffix}.json"
     path.write_text(report.model_dump_json(indent=2), encoding="utf-8")
     return path
