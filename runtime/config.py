@@ -59,8 +59,9 @@ class ModelConfig(BaseModel):
     smart_think: bool | None = Field(
         default=None,
         description=(
-            "Ollama reasoning-channel override for the Tier-1 planner and "
-            "reply-synthesis calls. None leaves the model's own default "
+            "Ollama reasoning-channel override for the Tier-1 planner. "
+            "Reply synthesis always runs with thinking off and ignores this "
+            "(harness_dispatcher._SYNTHESIS_THINK). None leaves the model's own default "
             "alone. Measured 2026-08-25: disabling it took qwen3-vl:4b from "
             "40% to 80% TGC but dropped qwen3.5:4b-mlx's in-budget score "
             "from 73.3% to 6.7% -- there is no safe global setting, so this "

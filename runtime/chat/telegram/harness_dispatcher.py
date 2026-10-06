@@ -73,6 +73,11 @@ _SYNTHESIS_CHAIN_PROMPT_PATH = (
     / "prompts"
     / "tool_synthesis_chain.txt"
 )
+# Synthesis rewrites tool output already in hand, so it never needs the reasoning
+# channel. Leaving it to the model's default let qwen3.5 spend the whole
+# 2048-token budget thinking and return "" (ablation night 1, 2026-10-07).
+# Deliberately not the per-model planner `think`: qwen3.5:4b-mlx needs it on to plan.
+_SYNTHESIS_THINK = False
 _GUARD_MIN_STEP = 2  # destructive-tool guard applies from step 2 onward
 
 # Classification-fallback sentinel (spec: docs/superpowers/specs/2026-08-21-
@@ -1007,6 +1012,7 @@ class HarnessDispatcher:
             ],
             temperature=0.2,
             max_tokens=2048,
+            think=_SYNTHESIS_THINK,
         )
         logger.info(
             "harness_dispatcher.chain_synthesis.chat_start",
@@ -1081,6 +1087,7 @@ class HarnessDispatcher:
             ],
             temperature=0.2,
             max_tokens=2048,
+            think=_SYNTHESIS_THINK,
         )
         logger.info(
             "harness_dispatcher.synthesis.chat_start",

@@ -116,9 +116,11 @@ class _RecordingSynthesizer:
     def __init__(self, reply: str = "should never be used") -> None:
         self._reply = reply
         self.calls = 0
+        self.requests: list[Any] = []
 
     async def chat(self, request: Any) -> ChatResponse:
         self.calls += 1
+        self.requests.append(request)
         return ChatResponse(content=self._reply, model="stub", tokens_in=0, tokens_out=0)
 
 
@@ -1403,6 +1405,47 @@ async def test_multi_step_empty_chain_synthesis_falls_back_to_last_payload() -> 
     assert outcome == DispatchOutcome.FIRED
     assert len(message.replies) == 1
     assert "matches" in message.replies[0]
+
+
+async def test_single_step_synthesis_turns_thinking_off() -> None:
+    """Synthesis rewrites tool output already in hand. On a reasoning model
+    (qwen3.5) leaving thinking on spent the whole 2048-token budget thinking
+    and returned "" (ablation night 1, 2026-10-07), so the call must say
+    think=False rather than defer to the model's default."""
+    recorder = _RecordingSynthesizer(reply="Here are your files")
+    dispatcher = _make_dispatcher(
+        classifier=_StubClassifier("list_files", 0.9),
+        synthesizer=recorder,
+    )
+
+    await dispatcher.dispatch(chat_id=123, user_text="list my downloads", message=_FakeMessage())
+
+    assert recorder.calls == 1
+    assert recorder.requests[0].think is False
+
+
+async def test_chain_synthesis_turns_thinking_off() -> None:
+    """Same defect on the multi-step path: `_synthesize_chain` is the call the
+    native-guard-synth arm and planner chains both reach."""
+    runner = _StubPlanRunner(
+        plan_steps=[
+            PlanStep(kind="tool_call", tool="files_search", args={"glob": "*"}),
+            PlanStep(kind="respond"),
+        ],
+    )
+    registry, harness = _two_skill_setup()
+    recorder = _RecordingSynthesizer(reply="chain reply")
+    dispatcher = _make_loop_dispatcher(
+        runner=runner,
+        registry=registry,
+        harness=harness,
+        synthesizer=recorder,
+    )
+
+    await dispatcher.dispatch(chat_id=1, user_text="find md", message=_FakeMessage())
+
+    assert recorder.calls == 1
+    assert recorder.requests[0].think is False
 
 
 async def test_multi_step_chain_synthesis_runs_verdict_gate() -> None:
