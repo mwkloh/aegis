@@ -917,7 +917,7 @@ def build_harness_dispatcher(
     )
     runner = SkillRunner(tier1=tier1_reasoner)
 
-    harness_mode, native = _native_mode(cfg, target, ollama_client)
+    harness_mode, native, guardrails = _resolve_harness(cfg, target, ollama_client)
     return HarnessDispatcher(
         classifier=classifier,
         registry=skill_registry,
@@ -932,7 +932,7 @@ def build_harness_dispatcher(
         max_steps=cfg.harness.max_steps,
         events=events,
         tool_result_chars=cfg.tool_result_chars_for(target.model),
-        guardrails=cfg.guardrails_for(target.model),
+        guardrails=guardrails,
         harness_mode=harness_mode,
         native_chat=native,
     )
@@ -964,6 +964,25 @@ def _native_mode(cfg: AegisConfig, target: Any, ollama_client: Any) -> tuple[str
         )
 
     return "native", _chat
+
+
+def _resolve_harness(
+    cfg: AegisConfig, target: Any, ollama_client: Any
+) -> tuple[str, Any, Any]:
+    """(harness_mode, native_chat, guardrails) for the mode actually used.
+
+    When a native profile falls back to the planner (non-Ollama), the guardrails
+    revert to the planner default, so the fallback is today's planner.
+    """
+    from runtime.harness.guardrails import Guardrails  # noqa: PLC0415
+
+    mode, native = _native_mode(cfg, target, ollama_client)
+    guardrails = (
+        cfg.guardrails_for(target.model)
+        if mode == cfg.harness_mode_for(target.model)
+        else Guardrails()
+    )
+    return mode, native, guardrails
 
 
 def _startup_message_body(cfg: AegisConfig, *, now: datetime | None = None) -> str:

@@ -3206,3 +3206,42 @@ def test_native_mode_falls_back_to_the_planner_off_ollama() -> None:
     mode, chat = _native_mode(cfg, _target("ollama", "g:4b"), object())
     assert mode == "native"
     assert callable(chat)
+
+
+def _resolve_target(provider: str, model: str) -> Any:
+    from runtime.llm.router import ModelTarget, ModelTier
+
+    return ModelTarget(
+        tier=next(iter(ModelTier)), model=model, provider=provider, base_url="http://x"
+    )
+
+
+def test_resolve_harness_off_ollama_uses_the_planner_default_guardrails() -> None:
+    from runtime.chat.telegram.bot import _resolve_harness
+    from runtime.config import AegisConfig, ModelConfig
+
+    cfg = AegisConfig().model_copy(update={"models": ModelConfig(harness_mode="native")})
+    assert _resolve_harness(cfg, _resolve_target("openrouter", "x/y"), None) == (
+        "planner",
+        None,
+        Guardrails(),
+    )
+
+
+def test_resolve_harness_native_on_ollama_keeps_the_profile_guardrails() -> None:
+    from runtime.chat.telegram.bot import _resolve_harness
+    from runtime.config import AegisConfig, ModelConfig
+
+    cfg = AegisConfig().model_copy(update={"models": ModelConfig(harness_mode="native")})
+    mode, chat, guardrails = _resolve_harness(cfg, _resolve_target("ollama", "g:4b"), object())
+    assert mode == "native"
+    assert callable(chat)
+    assert guardrails == cfg.guardrails_for("g:4b") == Guardrails(plan_lock=False)
+
+
+def test_resolve_harness_unset_profile_is_todays_planner() -> None:
+    from runtime.chat.telegram.bot import _resolve_harness
+    from runtime.config import AegisConfig
+
+    result = _resolve_harness(AegisConfig(), _resolve_target("ollama", "g:4b"), object())
+    assert result == ("planner", None, Guardrails())

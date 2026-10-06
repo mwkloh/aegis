@@ -464,11 +464,9 @@ class HarnessDispatcher:
                 return DispatchOutcome.PASS
             descriptor = _UNCLASSIFIED_DESCRIPTOR
             is_fallback = True
-            # available_skills count is omitted here -- _run_multi_step's own
-            # multi_step_start log (fired next, same turn) already reports it
-            # via `available`, which it must materialize anyway to run the
-            # loop, so recomputing len(self._registry.all()) here would just
-            # be a second throwaway list built solely for this log field.
+            # available_skills count is omitted here: the planner path's own
+            # multi_step_start log reports it, and the native path does not
+            # need it, so no throwaway list is built solely for this log field.
             logger.info(
                 "harness_dispatcher.classification_fallback_start",
                 extra={"chat_id": chat_id, "intent": intent},
