@@ -1043,3 +1043,62 @@ HARNESS_COMPLETION_GATED on every gated reply.
 
 **Next:** Task 8 (live smoke, parity check, night script) needs the Mac Mini idle and the
 user's go-ahead.
+
+## 20. Ablation night 1 (2026-10-06 22:30 to 2026-10-07 07:28)
+
+Script `~/aegis-eval-run-scripts/run_ablation.sh` NIGHT=1, log `logs/night1.log`, results
+`eval/results/ablation/{smoke,parity,easy,hard}/`. The first arm (15:07, `nohup` from a
+Claude session) died silently when that session restarted; re-armed 15:19 from the
+desktop app's terminal pane.
+
+**Coverage.** Smoke PASS (all four new arms ran on gemma4:e4b-mlx). Easy: 15/15 configs.
+Hard: 12/15 (native-guard-synth skipped for gemma4:e4b-mlx, lfm2.5:8b, qwen3.5:9b).
+Honesty: 0/10, all skipped past the 07:20 start cutoff. The time went to two
+native-guard-synth configs on the qwen models (easy qwen3.5:4b-mlx 69 min wall, easy
+qwen3.5:9b 109 min), caused by the synthesis defect below.
+
+**Parity gate (bare vs native, gemma4:e4b-mlx, easy x3):** 35/39 = 89.7% both arms,
+0 classifier diversions, gap 0.0 -> PASS. The 2026-10-06 handoff quoted a 20.5-point gap
+from the 2026-10-04/05 result files; that reading does not reproduce on matched runs, so it
+was a measurement artifact of comparing older files, not a property of native mode.
+
+**Results** (TGC = task correctness %, inbud = correct within the 30 s budget, from
+`summarize_results.py`; flagged / fabric from `runtime.eval.hallucination`):
+
+| suite | model | bare TGC | native-guard TGC | synth TGC | synth inbud |
+|---|---|---|---|---|---|
+| easy | gemma4:e4b-mlx | 93.3 | 93.3 | 91.1 | 91.1 |
+| easy | lfm2.5:8b | 86.7 | 84.4 | 91.1 | 91.1 |
+| easy | llama3.2:3b | 53.3 | 53.3 | 51.1 | 51.1 |
+| easy | qwen3.5:4b-mlx | 86.7 | 86.7 | 84.4 | **0.0** |
+| easy | qwen3.5:9b | 93.3 | 93.3 | 93.3 | **0.0** |
+| hard | gemma4:e4b-mlx | 53.3 | 56.7 | skipped | |
+| hard | lfm2.5:8b | 66.7 | **56.7** | skipped | |
+| hard | llama3.2:3b | 6.7 | 6.7 | 6.7 | 6.7 |
+| hard | qwen3.5:4b-mlx | 90.0 | 90.0 | 90.0 | **0.0** |
+| hard | qwen3.5:9b | 90.0 | 86.7 | skipped | |
+
+Readings:
+1. **native-guard ~= bare on correctness** (within ~3 points in 8 of 10 cells) at 30-50%
+   more model calls and slower wall time. Exception: lfm2.5:8b hard -10 points
+   (compare_two_folders 4/6 -> 1/6).
+2. **native-guard raises hallucination flags on hard where bare does not:** fabric
+   gemma4 0 -> 8 (flagged 3.3% -> 26.7%), llama3.2 0 -> 9 (6.7% -> 30.0%), lfm2.5 0 -> 3
+   (0% -> 10%). Not yet hand-read; per spec section 7 the veto needs hand-reading before
+   it counts.
+3. **native-guard-synth on qwen is invalid (harness defect, not an arm property).** Exactly
+   one truncated call per affected variant (38 easy-4b, 26 easy-9b, 17 hard-4b), median
+   91-149 s. `_synthesize_chain` (`harness_dispatcher.py`) sends `max_tokens=2048` with
+   no thinking control; a reasoning model spends the budget thinking (2048 tok at 18 tok/s
+   is ~114 s), returns "", and the code falls back to the clipped last tool payload. TGC
+   survives only because that fallback is graded; those variants measure native-guard,
+   not synthesis. Hypothesis fits the numbers; reply text not yet inspected.
+4. Synthesis genuinely helps lfm2.5:8b on easy (TGC 86.7 -> 91.1, SGC 50 -> 66.7);
+   neutral-to-slightly-negative elsewhere.
+5. llama3.2:3b is ~7% on hard under every arm; no harness rescues it.
+6. gemma4:e4b-mlx follow_the_pointer is 0/6 under both bare and native-guard.
+
+**Decision (user, 2026-10-07):** fix the synthesis call first (pass per-model thinking
+control, record when the fallback fires), then re-plan night 2 to cover: honesty x10,
+the three skipped hard synth configs, synth re-runs on both qwen models, then the planner
+arms (`full` hard, `full-nolock` easy + hard) as time allows.
