@@ -17,7 +17,7 @@ from runtime.chat.reply_verdict import annotate_unverified_claim
 from runtime.events import EventStream, EventType
 from runtime.harness.adapter import HarnessAdapter
 from runtime.harness.contract import ToolIntent, ToolResult
-from runtime.harness.guardrails import DESTRUCTIVE_TOOLS, with_evidence
+from runtime.harness.guardrails import DESTRUCTIVE_TOOLS, Guardrails, with_evidence
 from runtime.harness.guardrails import autofill_path as _autofill_path_from_prior_search
 from runtime.harness.guardrails import history_verified_tools as _history_verified_tools
 from runtime.harness.guardrails import render_chain as _render_chain
@@ -187,6 +187,7 @@ class HarnessDispatcher:
         clock: Callable[[], datetime] | None = None,
         tool_result_chars: int = DEFAULT_TOOL_RESULT_CHARS,
         turn_result_budget_chars: int = DEFAULT_TURN_RESULT_BUDGET_CHARS,
+        guardrails: Guardrails | None = None,
     ) -> None:
         self._classifier = classifier
         self._registry = registry
@@ -207,6 +208,7 @@ class HarnessDispatcher:
         # per-model value the planner uses (see runtime.harness.limits).
         self._tool_result_chars = tool_result_chars
         self._turn_result_budget_chars = turn_result_budget_chars
+        self._guardrails = guardrails or Guardrails()
         # Evidence ledger (Phase 11 Track B). `None` keeps every existing
         # call site/test working unmodified — recording is opt-in.
         self._events = events
@@ -526,7 +528,11 @@ class HarnessDispatcher:
                 # annotated it if needed. Reply with it plus the tool output; do NOT
                 # run chain synthesis, which would be a second model call that
                 # could re-hallucinate over the same (or gated) evidence.
-                reply_text = self._with_evidence(chain.completion_summary, chain.history)
+                reply_text = (
+                    self._with_evidence(chain.completion_summary, chain.history)
+                    if self._guardrails.evidence
+                    else chain.completion_summary
+                )
                 logger.info("harness_dispatcher.completion_gate_reply")
             else:
                 history = chain.history
@@ -542,16 +548,17 @@ class HarnessDispatcher:
                     "harness_dispatcher.chain_synthesize_done",
                     extra={"reply_chars": len(reply_text), "chain_steps": len(history)},
                 )
-                verdict = annotate_unverified_claim(
-                    reply_text,
-                    verified_tools=_history_verified_tools(history),
-                )
-                if verdict.was_flagged:
-                    logger.info(
-                        "harness_dispatcher.chain_unverified_tool_claim",
-                        extra={"phrases": list(verdict.flagged_phrases)},
+                if self._guardrails.claim_gate:
+                    verdict = annotate_unverified_claim(
+                        reply_text,
+                        verified_tools=_history_verified_tools(history),
                     )
-                reply_text = verdict.annotated_reply
+                    if verdict.was_flagged:
+                        logger.info(
+                            "harness_dispatcher.chain_unverified_tool_claim",
+                            extra={"phrases": list(verdict.flagged_phrases)},
+                        )
+                    reply_text = verdict.annotated_reply
         else:
             logger.info(
                 "harness_dispatcher.runner_build_start",
@@ -707,7 +714,7 @@ class HarnessDispatcher:
             # happen below, only on a verified execution (see the block
             # right after `history.append(...)`); the destructive-guard
             # check sits between the two, at `plan.tool in DESTRUCTIVE_TOOLS`.
-            if plan_ids and cursor < len(plan_ids):
+            if self._guardrails.plan_lock and plan_ids and cursor < len(plan_ids):
                 step_available = [d for d in available if d.tool == plan_ids[cursor]]
                 if not step_available:
                     # Defensive guard: unreachable today (plan_ids[cursor] is
@@ -748,7 +755,11 @@ class HarnessDispatcher:
                     # Nothing was done this turn — same as respond-with-no-
                     # history: the caller falls through to PASS.
                     break
-                gated = self._gate_completion(summary, history, turn_id)
+                gated = (
+                    self._gate_completion(summary, history, turn_id)
+                    if self._guardrails.claim_gate
+                    else summary
+                )
                 return _ChainResult(history=history, completion_summary=gated)
 
             if plan.kind != "tool_call" or plan.tool is None:
@@ -760,7 +771,8 @@ class HarnessDispatcher:
                 skill_id=descriptor.id,
                 rationale=f"multi-step planner: step {step_no}",
             )
-            tool_intent = _autofill_path_from_prior_search(tool_intent, history)
+            if self._guardrails.autofill:
+                tool_intent = _autofill_path_from_prior_search(tool_intent, history)
 
             if plan.tool in DESTRUCTIVE_TOOLS and step_no >= guard_min_step:
                 logger.info(

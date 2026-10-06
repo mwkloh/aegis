@@ -17,6 +17,7 @@ from runtime.events import EventStream
 from runtime.files.client import FilesClient
 from runtime.harness.adapter import HarnessAdapter
 from runtime.harness.contract import ToolIntent, ToolResult
+from runtime.harness.guardrails import Guardrails
 from runtime.harness.tools.files_tool import make_files_tools
 from runtime.intent.classifier import IntentClassification
 from runtime.llm.clients.base import ChatResponse
@@ -974,6 +975,7 @@ def _make_loop_dispatcher(
     events: EventStream | None = None,
     clock: Callable[[], datetime] | None = None,
     classifier: Any = None,
+    guardrails: Any = None,
 ) -> HarnessDispatcher:
     if registry is None or harness is None:
         registry, harness = _two_skill_setup()
@@ -990,6 +992,7 @@ def _make_loop_dispatcher(
         max_steps=max_steps,
         events=events,
         clock=clock,
+        guardrails=guardrails,
     )
 
 
@@ -2935,3 +2938,110 @@ def test_dispatcher_takes_a_per_model_result_limit() -> None:
     params = inspect.signature(HarnessDispatcher.__init__).parameters
     assert params["tool_result_chars"].default == DEFAULT_TOOL_RESULT_CHARS
     assert params["turn_result_budget_chars"].default == DEFAULT_TURN_RESULT_BUDGET_CHARS
+
+
+# ---------------------------------------------------------------------------
+# Guardrail switches, planner mode (spec 2026-10-06-harness-ablation-design.md)
+# ---------------------------------------------------------------------------
+
+
+def _search_then_read_runner(read_path: str = "/tmp/a.md") -> _StubPlanRunner:
+    return _StubPlanRunner(
+        plan_steps=[
+            PlanStep(
+                kind="tool_call",
+                tool="files_search",
+                args={"glob": "*.md"},
+                remaining=["files_search", "files_read"],
+            ),
+            PlanStep(kind="tool_call", tool="files_read", args={"path": read_path}),
+            PlanStep(kind="task_complete", summary="Found and read it."),
+        ],
+    )
+
+
+async def test_plan_lock_narrows_step_two_to_the_planned_tool() -> None:
+    runner = _search_then_read_runner()
+    dispatcher = _make_loop_dispatcher(runner=runner)
+    await dispatcher.dispatch(chat_id=1, user_text="find and read", message=_FakeMessage())
+    second = runner.plan_next_calls[1]
+    assert {d.tool for d in second["available_skills"]} == {"files_read"}
+
+
+async def test_plan_lock_off_offers_the_full_catalogue_at_step_two() -> None:
+    runner = _search_then_read_runner()
+    dispatcher = _make_loop_dispatcher(runner=runner, guardrails=Guardrails(plan_lock=False))
+    await dispatcher.dispatch(chat_id=1, user_text="find and read", message=_FakeMessage())
+    second = runner.plan_next_calls[1]
+    assert {d.tool for d in second["available_skills"]} == {"files_search", "files_read"}
+
+
+def _search_result_harness() -> _RecordingHarness:
+    return _RecordingHarness(
+        tools={
+            "files_search": lambda args: {"result": "/tmp/real.md"},
+            "files_read": lambda args: {"content": "hello"},
+        }
+    )
+
+
+async def test_autofill_off_keeps_the_models_guessed_path() -> None:
+    registry, _ = _two_skill_setup()
+    harness = _search_result_harness()
+    dispatcher = _make_loop_dispatcher(
+        runner=_search_then_read_runner(read_path="/tmp/guess.md"),
+        registry=registry,
+        harness=harness,
+        guardrails=Guardrails(autofill=False),
+    )
+    await dispatcher.dispatch(chat_id=1, user_text="find and read", message=_FakeMessage())
+    assert harness.calls[1].args["path"] == "/tmp/guess.md"
+
+
+async def test_autofill_on_corrects_the_guessed_path() -> None:
+    registry, _ = _two_skill_setup()
+    harness = _search_result_harness()
+    dispatcher = _make_loop_dispatcher(
+        runner=_search_then_read_runner(read_path="/tmp/guess.md"),
+        registry=registry,
+        harness=harness,
+    )
+    await dispatcher.dispatch(chat_id=1, user_text="find and read", message=_FakeMessage())
+    assert harness.calls[1].args["path"] == "/tmp/real.md"
+
+
+async def test_evidence_off_replies_with_the_summary_alone() -> None:
+    runner = _StubPlanRunner(
+        plan_steps=[
+            PlanStep(kind="tool_call", tool="files_search", args={"glob": "*.md"}),
+            PlanStep(kind="task_complete", summary="Found the markdown files."),
+        ],
+    )
+    dispatcher = _make_loop_dispatcher(runner=runner, guardrails=Guardrails(evidence=False))
+    message = _FakeMessage()
+    await dispatcher.dispatch(chat_id=1, user_text="find md files", message=message)
+    assert message.replies == ["Found the markdown files.\n\n[ollama · stub-model]"]
+
+
+async def test_claim_gate_off_ships_the_summary_unannotated() -> None:
+    registry, _ = _two_skill_setup()
+
+    def _boom(args: dict) -> dict:
+        raise PermissionError("denied")
+
+    harness = _RecordingHarness(tools={"files_search": _boom, "files_read": lambda a: {}})
+    runner = _StubPlanRunner(
+        plan_steps=[
+            PlanStep(kind="tool_call", tool="files_search", args={"glob": "*"}),
+            PlanStep(kind="task_complete", summary="Searched for the files."),
+        ],
+    )
+    dispatcher = _make_loop_dispatcher(
+        runner=runner,
+        registry=registry,
+        harness=harness,
+        guardrails=Guardrails(claim_gate=False),
+    )
+    message = _FakeMessage()
+    await dispatcher.dispatch(chat_id=1, user_text="find x", message=message)
+    assert "⚠️" not in message.replies[0]
