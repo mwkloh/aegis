@@ -11,14 +11,23 @@ import logging
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from dotenv import load_dotenv
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from runtime.board.config import BoardConfig
 
+if TYPE_CHECKING:
+    from runtime.harness.guardrails import Guardrails
+
 logger = logging.getLogger(__name__)
+
+HarnessMode = Literal["planner", "native"]
+GuardrailName = Literal["autofill", "claim_gate", "evidence", "synthesis", "plan_lock"]
+_GUARDRAIL_NAMES: frozenset[str] = frozenset(
+    {"autofill", "claim_gate", "evidence", "synthesis", "plan_lock"}
+)
 
 
 def _aegis_root() -> Path:
@@ -77,6 +86,21 @@ class ModelConfig(BaseModel):
             "benchmark sweep. None defers to the profile, then to the shared default."
         ),
     )
+    harness_mode: HarnessMode | None = Field(
+        default=None,
+        description=(
+            "Override for the harness mode, beating any profile (`MODEL_HARNESS_MODE`) "
+            "-- the eval arms' switch. None defers to the profile, then to `planner`."
+        ),
+    )
+    guardrails: frozenset[GuardrailName] | None = Field(
+        default=None,
+        description=(
+            "Override for which deterministic guardrails run, beating any profile "
+            "(`MODEL_GUARDRAILS`, comma list; `none` = no guardrails). None defers to "
+            "the profile, then to the mode's default."
+        ),
+    )
     smart_provider: Literal["ollama", "openrouter"] = Field(
         default="ollama",
         description="Explicit SMART-tier provider pin — no silent fallback between them.",
@@ -102,7 +126,8 @@ class ModelProfile(BaseModel):
 
     Only fields with a measured per-model effect belong here: `think` and
     `num_ctx`. Adding knobs on reasoning alone is what this whole line of work
-    exists to stop.
+    exists to stop. `harness_mode` / `guardrails`: chosen per model by the 2026-10
+    ablation (spec 2026-10-06-harness-ablation-design.md).
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -142,6 +167,25 @@ class ModelProfile(BaseModel):
             "ceiling is ChatRequest's own limit."
         ),
     )
+    harness_mode: HarnessMode | None = Field(
+        default=None,
+        description=(
+            "`planner` (AEGIS JSON planner) or `native` (Ollama tool calls). None = planner."
+        ),
+    )
+    guardrails: frozenset[GuardrailName] | None = Field(
+        default=None,
+        description=(
+            "Deterministic guardrails to run. None = the mode's default (planner: all "
+            "but synthesis; native: autofill, claim_gate, evidence)."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _plan_lock_needs_the_planner(self) -> ModelProfile:
+        if self.harness_mode == "native" and self.guardrails and "plan_lock" in self.guardrails:
+            raise ValueError("plan_lock needs the planner's `remaining` list; not in native mode")
+        return self
 
 
 def _coerce_model_profiles(raw: Any) -> dict[str, ModelProfile]:
@@ -416,6 +460,39 @@ class AegisConfig(BaseModel):
             value = profile.planner_max_tokens if profile is not None else None
         return min(value if value is not None else DEFAULT_PLANNER_MAX_TOKENS, 8192)
 
+    def harness_mode_for(self, model: str) -> HarnessMode:
+        """`MODEL_HARNESS_MODE` beats a profile; a profile beats `planner`."""
+        if self.models.harness_mode is not None:
+            return self.models.harness_mode
+        profile = self.model_profiles.get(model)
+        if profile is not None and profile.harness_mode is not None:
+            return profile.harness_mode
+        return "planner"
+
+    def guardrails_for(self, model: str) -> Guardrails:
+        """Which guardrails run for one model, resolved like `harness_mode_for`.
+
+        Unset means the mode's default: today's planner behaviour, or the
+        `native+guard` preset in native mode. `plan_lock` never applies in native
+        mode (an env override cannot raise at run time, so it is dropped here).
+        """
+        from runtime.harness.guardrails import Guardrails  # noqa: PLC0415
+
+        mode = self.harness_mode_for(model)
+        names = self.models.guardrails
+        if names is None:
+            profile = self.model_profiles.get(model)
+            names = profile.guardrails if profile is not None else None
+        if names is None:
+            return Guardrails() if mode == "planner" else Guardrails(plan_lock=False)
+        return Guardrails(
+            autofill="autofill" in names,
+            claim_gate="claim_gate" in names,
+            evidence="evidence" in names,
+            synthesis="synthesis" in names,
+            plan_lock="plan_lock" in names and mode == "planner",
+        )
+
 
 def _load_env(env_path: Path) -> None:
     if env_path.is_file():
@@ -449,6 +526,30 @@ def _parse_positive_int(raw: str | None) -> int | None:
             logger.warning("config.positive_int.unrecognized_value", extra={"raw": raw})
         return None
     return int(text)
+
+
+def _parse_harness_mode(raw: str | None) -> HarnessMode | None:
+    """Unset or unrecognised -> None (defer to the profile), never fatal."""
+    if raw is None or not raw.strip():
+        return None
+    value = raw.strip().lower()
+    if value in ("planner", "native"):
+        return value  # type: ignore[return-value]
+    logger.warning("config.harness_mode.unrecognized_value", extra={"raw": raw})
+    return None
+
+
+def _parse_guardrails(raw: str | None) -> frozenset[str] | None:
+    """Comma list of guardrail names; `none` = empty set; any unknown name -> None."""
+    if raw is None or not raw.strip():
+        return None
+    if raw.strip().lower() == "none":
+        return frozenset()
+    names = frozenset(p.strip().lower() for p in raw.split(",") if p.strip())
+    if not names <= _GUARDRAIL_NAMES:
+        logger.warning("config.guardrails.unrecognized_value", extra={"raw": raw})
+        return None
+    return names
 
 
 def _parse_tristate_bool(raw: str | None) -> bool | None:
@@ -508,6 +609,8 @@ def _coerce(env: dict[str, str], cfg: dict[str, Any]) -> dict[str, Any]:
         smart_think=_parse_tristate_bool(env.get("MODEL_SMART_THINK")),
         tool_result_chars=_parse_positive_int(env.get("MODEL_TOOL_RESULT_CHARS")),
         planner_max_tokens=_parse_positive_int(env.get("MODEL_PLANNER_MAX_TOKENS")),
+        harness_mode=_parse_harness_mode(env.get("MODEL_HARNESS_MODE")),
+        guardrails=_parse_guardrails(env.get("MODEL_GUARDRAILS")),
     )
     providers = ProviderConfig(
         ollama_base_url=env.get(

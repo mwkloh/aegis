@@ -18,6 +18,7 @@ from runtime.config import (
     AegisConfig,
     ModelConfig,
     ModelProfile,
+    _coerce,
     _coerce_model_profiles,
 )
 
@@ -296,3 +297,74 @@ def test_construction_sites_resolve_the_result_limit_per_model() -> None:
 
     assert bot.count("tool_result_chars_for(") >= 2  # Tier1Reasoner and HarnessDispatcher
     assert "tool_result_chars_for(" in cli
+
+
+# --- harness mode + guardrails (spec 2026-10-06-harness-ablation-design.md) ---
+
+
+def test_unset_harness_profile_is_todays_planner() -> None:
+    from runtime.harness.guardrails import Guardrails
+
+    cfg = _config(env_think=None, profiles={})
+    assert cfg.harness_mode_for("x:1b") == "planner"
+    assert cfg.guardrails_for("x:1b") == Guardrails()
+
+
+def test_native_profile_defaults_to_native_plus_guard() -> None:
+    from runtime.harness.guardrails import Guardrails
+
+    cfg = _config(env_think=None, profiles={"g:4b": ModelProfile(harness_mode="native")})
+    assert cfg.harness_mode_for("g:4b") == "native"
+    assert cfg.guardrails_for("g:4b") == Guardrails(plan_lock=False)
+
+
+def test_an_explicit_guardrail_list_is_honoured() -> None:
+    from runtime.harness.guardrails import Guardrails
+
+    cfg = _config(
+        env_think=None,
+        profiles={"q:9b": ModelProfile(harness_mode="native", guardrails=frozenset({"evidence"}))},
+    )
+    assert cfg.guardrails_for("q:9b") == Guardrails(
+        autofill=False, claim_gate=False, evidence=True, synthesis=False, plan_lock=False
+    )
+
+
+def test_the_env_override_beats_a_profile() -> None:
+    from runtime.harness.guardrails import Guardrails
+
+    base = _config(env_think=None, profiles={"g:4b": ModelProfile(harness_mode="native")})
+    cfg = base.model_copy(
+        update={"models": ModelConfig(harness_mode="planner", guardrails=frozenset())}
+    )
+    assert cfg.harness_mode_for("g:4b") == "planner"
+    assert cfg.guardrails_for("g:4b") == Guardrails(
+        autofill=False, claim_gate=False, evidence=False, synthesis=False, plan_lock=False
+    )
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        {"harness_mode": "native", "guardrails": ["plan_lock"]},  # plan-lock needs the planner
+        {"harness_mode": "turbo"},
+        {"guardrails": ["telepathy"]},
+    ],
+)
+def test_invalid_harness_profiles_are_rejected_at_load(raw: dict) -> None:
+    assert _coerce_model_profiles({"a:1b": raw}) == {}
+
+
+def test_env_parsing_for_the_harness_overrides() -> None:
+    models = _coerce(
+        {"MODEL_HARNESS_MODE": "native", "MODEL_GUARDRAILS": "autofill, evidence"}, {}
+    )["models"]
+    assert models.harness_mode == "native"
+    assert models.guardrails == frozenset({"autofill", "evidence"})
+    none = _coerce({"MODEL_GUARDRAILS": "none"}, {})["models"]
+    assert none.guardrails == frozenset()
+    bad = _coerce(
+        {"MODEL_HARNESS_MODE": "turbo", "MODEL_GUARDRAILS": "autofill,bogus"}, {}
+    )["models"]
+    assert bad.harness_mode is None
+    assert bad.guardrails is None
