@@ -17,12 +17,13 @@ from runtime.chat.reply_verdict import annotate_unverified_claim
 from runtime.events import EventStream, EventType
 from runtime.harness.adapter import HarnessAdapter
 from runtime.harness.contract import ToolIntent, ToolResult
+from runtime.harness.guardrails import DESTRUCTIVE_TOOLS, with_evidence
+from runtime.harness.guardrails import autofill_path as _autofill_path_from_prior_search
+from runtime.harness.guardrails import history_verified_tools as _history_verified_tools
+from runtime.harness.guardrails import render_chain as _render_chain
 from runtime.harness.limits import (
     DEFAULT_TOOL_RESULT_CHARS,
     DEFAULT_TURN_RESULT_BUDGET_CHARS,
-    allocate_result_limits,
-    clip_text,
-    result_text,
 )
 from runtime.llm.clients.base import ChatMessage, ChatRequest, ModelClient
 from runtime.reasoning.skill_runner import SkillRunner
@@ -38,31 +39,6 @@ logger = logging.getLogger(__name__)
 
 HARNESS_CONFIDENCE_THRESHOLD = 0.7
 _MAX_REPLY_CHARS = 3500
-
-# Tools that mutate filesystem state. The multi-step loop intercepts any
-# planner step proposing one of these BEYOND the first tool call and routes
-# the operator through a deterministic confirmation path (no LLM rephrasing).
-# A destructive intent at step 1 is allowed — it's the operator's explicit
-# opening request. Defence-in-depth: these names are not in DEFAULT_TOOLS
-# today, but a hallucinating planner could still propose them.
-# See docs/PLAN_MULTI_STEP_AGENT_LOOP.md §5 decision 5.
-DESTRUCTIVE_TOOLS: frozenset[str] = frozenset({
-    "files_delete",
-    "files_move",
-    "files_write",
-})
-
-# Deterministic path auto-fill (Open threads #2, 2026-08-21 session
-# handoff): models reliably retype a plausible-but-wrong path for a
-# `files_read` step immediately following `files_search`, even though the
-# search result already names the correct one (confirmed via code trace,
-# not a truncation bug). Rather than asking the model to get the retype
-# right, `_autofill_path_from_prior_search` below trusts the prior search's
-# own first match whenever the model's guess isn't one of the actual
-# matches — never overrides a guess that's already correct.
-_PATH_SOURCE_TOOL = "files_search"
-_PATH_CONSUMER_TOOLS: frozenset[str] = frozenset({"files_read"})
-
 
 @dataclass(frozen=True)
 class _PendingConfirmation:
@@ -168,43 +144,6 @@ def _clarify_question(descriptor: SkillDescriptor) -> str:
     return f"Could you provide more details for: {descriptor.description}"
 
 
-def _render_chain(
-    history: list[tuple[ToolIntent, ToolResult]],
-    *,
-    per_result_chars: int = DEFAULT_TOOL_RESULT_CHARS,
-    turn_budget_chars: int = DEFAULT_TURN_RESULT_BUDGET_CHARS,
-) -> str:
-    """Render the (call, result) chain into the chain-synthesis prompt slot.
-
-    Shares the planner's rules (runtime.harness.limits): results are decoded text,
-    each limited per model, the newest spending a shared per-turn budget first. It
-    used to carry its own duplicate 1,024-character constant over the JSON-encoded
-    payload, so the planner and the synthesiser could disagree about what a result
-    said.
-    """
-    if not history:
-        return "(no tools ran on this turn)"
-    texts = [result_text(result) for _call, result in history]
-    limits = allocate_result_limits(
-        [len(t) for t in texts], per_result=per_result_chars, total=turn_budget_chars
-    )
-    lines: list[str] = []
-    for idx, ((call, _result), text, limit) in enumerate(
-        zip(history, texts, limits, strict=True), start=1
-    ):
-        args_blob = _format_args(call.args)
-        lines.append(f"{idx}. {call.tool}({args_blob}) → {clip_text(text, limit)}")
-    return "\n".join(lines)
-
-
-def _format_args(args: dict[str, Any]) -> str:
-    """Compact args repr — sorted keys for stable prompts."""
-    if not args:
-        return ""
-    parts = [f"{k}={args[k]!r}" for k in sorted(args)]
-    return ", ".join(parts)
-
-
 def _last_payload_text(history: list[tuple[ToolIntent, ToolResult]]) -> str:
     """Synthesis-failure fallback text — most-recent state the operator wants."""
     if not history:
@@ -215,59 +154,6 @@ def _last_payload_text(history: list[tuple[ToolIntent, ToolResult]]) -> str:
     if last.payload is not None:
         return str(last.payload)
     return "(empty)"
-
-
-def _history_verified_tools(history: list[tuple[ToolIntent, ToolResult]]) -> set[str]:
-    """Tools that actually succeeded on this turn, from in-memory history.
-
-    Shared by `_gate_completion` (both its no-ledger and ledger-read-failed
-    branches) and `dispatch()`'s respond-path verdict gate — a failed tool
-    must never count as "verified" regardless of which of those call sites
-    is asking (Phase 11 whole-branch review, C3/I3).
-
-    Uses `verdict_for_result` rather than a bare `res.status == "ok"` check
-    (Phase 11 review follow-up) — some tools report a soft failure inside
-    an "ok" status (e.g. `run_command`'s `payload["verdict"] ==
-    "exit_nonzero"` for a non-zero exit). A raw status check would still
-    count that tool as verified here even though C4 already teaches the
-    ledger path not to.
-    """
-    return {
-        call.tool for call, res in history if verdict_for_result(res) == "verified"
-    }
-
-
-def _autofill_path_from_prior_search(
-    tool_intent: ToolIntent, history: list[tuple[ToolIntent, ToolResult]]
-) -> ToolIntent:
-    """Correct `path` for a path-consuming tool immediately following a
-    successful `files_search` step, when the model's own guess doesn't
-    match any of that search's actual results. See `_PATH_CONSUMER_TOOLS`.
-
-    Never overrides a guess that already matches a real result — this only
-    ever turns a guaranteed-wrong path into the search's own top match, it
-    never second-guesses a model that got it right.
-    """
-    if tool_intent.tool not in _PATH_CONSUMER_TOOLS or not history:
-        return tool_intent
-    prior_intent, prior_result = history[-1]
-    if prior_intent.tool != _PATH_SOURCE_TOOL or prior_result.status != "ok":
-        return tool_intent
-    raw = str(prior_result.payload.get("result", ""))
-    matches = [line for line in raw.splitlines() if line and line != "No matches."]
-    if not matches or tool_intent.args.get("path") in matches:
-        return tool_intent
-    logger.info(
-        "harness_dispatcher.path_autofilled",
-        extra={
-            "tool": tool_intent.tool,
-            "guessed_path": tool_intent.args.get("path"),
-            "corrected_path": matches[0],
-        },
-    )
-    return tool_intent.model_copy(
-        update={"args": {**tool_intent.args, "path": matches[0]}}
-    )
 
 
 def _clip(text: str) -> str:
@@ -348,14 +234,12 @@ class HarnessDispatcher:
         model call, so it cannot re-hallucinate (the reason synthesis is skipped on
         `task_complete`), and it uses the planner's own per-model limits.
         """
-        if not history:
-            return summary
-        evidence = _render_chain(
+        return with_evidence(
+            summary,
             history,
             per_result_chars=self._tool_result_chars,
             turn_budget_chars=self._turn_result_budget_chars,
         )
-        return f"{summary}\n\nResults:\n{evidence}"
 
     def _append_event(self, event_type: EventType, payload: dict[str, Any]) -> None:
         """Log one structural event, if an EventStream is wired.
