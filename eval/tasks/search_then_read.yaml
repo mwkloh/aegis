@@ -9,6 +9,7 @@ fixture:
 variants:
   - "find files about CT-001 in {sandbox}/notes and read the first one"
   - "search {sandbox}/notes for CT-001 and open the top match"
+answer_contains: ["Some notes about CT-001"]
 expected_calls:
   - tool: files_search
     args_match: {directory: "{sandbox}/notes", pattern: "CT-001"}

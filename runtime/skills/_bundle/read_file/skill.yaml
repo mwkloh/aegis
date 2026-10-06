@@ -1,6 +1,9 @@
 id: read_file
 version: 0.1.0
-description: Read the text content of a local file.
+description: >-
+  Read the text content of a local file. A long file comes back one page at a time
+  (about 3,000 characters) with a notice giving the total size; pass offset to read
+  on from where that notice says.
 intents:
   - read_file
 tool: files_read
@@ -14,6 +17,13 @@ args_schema:
       description: >-
         Absolute path to the file (e.g. /Users/michaelloh/Desktop/foo.png).
         '~' is allowed. Relative paths and bare filenames are rejected.
+    offset:
+      type: integer
+      minimum: 0
+      description: >-
+        Character position to start reading from. Omit it to start at the
+        beginning; when a result says "call files_read again with offset=N to
+        continue", pass that N.
   required:
     - path
 requires_tier1: true

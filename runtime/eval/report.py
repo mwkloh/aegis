@@ -5,11 +5,15 @@ from collections import Counter
 from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from runtime.llm.telemetry import PRODUCTION_READ_TIMEOUT_S, CallTelemetry
+
+# Mirrors `grading.FailureKind.HARNESS_UNAVAILABLE`; held as a literal because
+# `grading` already imports this module.
+_HARNESS_UNAVAILABLE = "harness_unavailable"
 
 
 class ObservedCall(BaseModel):
@@ -51,6 +55,22 @@ class VariantTelemetry(BaseModel):
     timed_out_calls: int = Field(ge=0)
     max_thinking_token_share: float = Field(ge=0.0, le=1.0)
     truncated_calls: int = Field(default=0, ge=0)
+    # On-device performance. Zero means "not recorded" (older files, or a call
+    # that reported nothing), never "free".
+    prompt_eval_ms_total: int = Field(default=0, ge=0)
+    tokens_in_total: int = Field(default=0, ge=0)
+    tokens_out_total: int = Field(default=0, ge=0)
+
+    @property
+    def tokens_per_second(self) -> float | None:
+        """Generation speed: output tokens over provider-reported eval time.
+
+        None when nothing was timed (a timeout, a hosted call, or an old file) --
+        absent, not zero, so a missing measurement cannot read as a slow model.
+        """
+        if self.eval_ms_total <= 0 or self.tokens_out_total <= 0:
+            return None
+        return self.tokens_out_total / (self.eval_ms_total / 1000)
 
     @property
     def any_timed_out(self) -> bool:
@@ -69,6 +89,9 @@ class VariantTelemetry(BaseModel):
             timed_out_calls=sum(1 for c in calls if c.timed_out),
             max_thinking_token_share=max(c.thinking_token_share for c in calls),
             truncated_calls=sum(1 for c in calls if c.truncated_by_budget),
+            prompt_eval_ms_total=sum(c.prompt_eval_ms for c in calls),
+            tokens_in_total=sum(c.tokens_in for c in calls),
+            tokens_out_total=sum(c.tokens_out for c in calls),
         )
 
 
@@ -90,6 +113,15 @@ class VariantResult(BaseModel):
             "of a `grading` import -- `grading` already imports this module for "
             "VariantTelemetry, and the cycle would be the only thing the typed "
             "field bought."
+        ),
+    )
+    reply: str | None = Field(
+        default=None,
+        description=(
+            "What the model said back to the user, newline-joined. Pass/fail "
+            "grades tool calls, never the words, so a claim the model made "
+            "without doing the work is only visible here. None means it said "
+            "nothing -- or the file predates this field."
         ),
     )
 
@@ -138,6 +170,27 @@ class EvalReport(BaseModel):
     model: str
     started_at: datetime
     tasks: tuple[TaskResult, ...]
+    locality: Literal["local", "cloud", "hosted", "unknown"] = Field(
+        default="unknown",
+        description=(
+            "Where the model ran. `local` = pulled onto this machine's Ollama; "
+            "`cloud` = an Ollama cloud model proxied through the local daemon "
+            "(`provider` still says ollama); `hosted` = a third-party API such as "
+            "OpenRouter. The benchmark asks how small models run on-device, so a "
+            "cloud or hosted result must never be read as one. Files written "
+            "before the field existed are `unknown`."
+        ),
+    )
+    arm: Literal["full", "bare"] = Field(
+        default="full",
+        description=(
+            "Which harness produced these numbers. `full` is the AEGIS planner "
+            "with its guardrails; `bare` is a native-tool-calling loop without "
+            "them (`runtime.eval.bare`). The tasks and models are the same, so "
+            "without this two files for one model cannot be told apart. Files "
+            "written before the field existed are all `full`."
+        ),
+    )
 
     @property
     def tgc(self) -> float:
@@ -183,8 +236,10 @@ class EvalReport(BaseModel):
 
 def render_console(report: EvalReport) -> str:
     total_runs = sum(len(t.variants) for t in report.tasks)
+    arm_note = " [bare arm]" if report.arm == "bare" else ""
+    where_note = "" if report.locality == "unknown" else f" [{report.locality}]"
     lines = [
-        f"Pinned: {report.provider} / {report.model}  |  "
+        f"Pinned: {report.provider} / {report.model}{arm_note}{where_note}  |  "
         f"{len(report.tasks)} tasks, {total_runs} runs",
         "",
         f"TGC (per-run):          {report.tgc:.1%}",
@@ -219,6 +274,19 @@ def render_console(report: EvalReport) -> str:
             f"  {kind:<22} {count}" for kind, count in sorted(kinds.most_common())
         )
 
+    unreached = sum(
+        1
+        for t in report.tasks
+        for v in t.variants
+        if v.failure_kind == _HARNESS_UNAVAILABLE
+    )
+    if unreached:
+        lines.append(
+            f"\n{unreached} variant(s) never reached the model -- the harness "
+            "could not build its dispatcher. These measure the harness, "
+            "not model capability; rerun them."
+        )
+
     timed_out = sum(
         1
         for t in report.tasks
@@ -238,7 +306,8 @@ def write_json(report: EvalReport, out_dir: Path) -> Path:
     stamp = report.started_at.strftime("%Y-%m-%dT%H-%M-%SZ")
     safe_model = report.model.replace("/", "-").replace(":", "-")
     safe_provider = report.provider.replace("/", "-").replace(":", "-")
-    path = out_dir / f"{stamp}-{safe_provider}-{safe_model}.json"
+    arm_suffix = "-bare" if report.arm == "bare" else ""
+    path = out_dir / f"{stamp}-{safe_provider}-{safe_model}{arm_suffix}.json"
     path.write_text(report.model_dump_json(indent=2), encoding="utf-8")
     return path
 

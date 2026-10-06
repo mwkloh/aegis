@@ -16,9 +16,11 @@ from pathlib import Path
 
 from runtime.chat.memory.tier1 import Tier1Loader
 from runtime.config import get_config
+from runtime.eval.bare import run_variant_bare
+from runtime.eval.locality import classify_locality
 from runtime.eval.prewarm import prewarm
 from runtime.eval.report import EvalReport, TaskResult, render_console, write_json
-from runtime.eval.runner import run_task
+from runtime.eval.runner import VariantRunner, run_task, run_variant
 from runtime.eval.tasks import load_tasks
 from runtime.llm.clients import OllamaClient, OpenRouterClient
 from runtime.llm.router import ModelRouter, ModelTier
@@ -71,7 +73,49 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "would otherwise land inside whichever variant runs first."
         ),
     )
+    parser.add_argument(
+        "--arm",
+        choices=("full", "bare"),
+        default="full",
+        help=(
+            "Which harness drives the model. `full` (default) is the AEGIS "
+            "planner with plan-lock, completion gate and claim annotation. "
+            "`bare` is a native-tool-calling loop without them -- same models, "
+            "tools, tasks and grader -- to measure what the guardrails add. "
+            "Ollama-served models only."
+        ),
+    )
+    parser.add_argument(
+        "--require-local",
+        action="store_true",
+        help=(
+            "Refuse to run unless the model is pulled onto this machine's "
+            "Ollama. The benchmark asks how well small models run on-device, so "
+            "an SLM config must not quietly resolve to a cloud or hosted model."
+        ),
+    )
     return parser.parse_args(argv)
+
+
+def _locality_refusal(locality: str, *, require_local: bool) -> str | None:
+    """Why a run must not proceed, or None. Only `--require-local` ever refuses."""
+    if require_local and locality != "local":
+        return f"--require-local: this model is {locality}, not on this device"
+    return None
+
+
+def _variant_runner(arm: str) -> VariantRunner:
+    return run_variant_bare if arm == "bare" else run_variant
+
+
+def _arm_unsupported_reason(arm: str, provider: str) -> str | None:
+    """Why this arm cannot run against this provider, or None if it can."""
+    if arm == "bare" and provider != "ollama":
+        return (
+            f"the bare arm drives Ollama's native tools API; {provider!r} is not "
+            "supported yet"
+        )
+    return None
 
 
 async def _run(args: argparse.Namespace) -> int:
@@ -82,9 +126,24 @@ async def _run(args: argparse.Namespace) -> int:
         return 1
 
     target = ModelRouter(cfg).route(ModelTier.SMART)
+    unsupported = _arm_unsupported_reason(args.arm, target.provider)
+    if unsupported is not None:
+        print(f"Cannot run: {unsupported}.", file=sys.stderr)
+        return 2
+    local_models: set[str] = set()
+    if target.provider == "ollama":
+        try:
+            local_models = set(await OllamaClient(cfg).list_models())
+        except Exception:  # daemon down: nothing is provably local, so refuse under --require-local
+            local_models = set()
+    locality = classify_locality(target.provider, target.model, local_models)
+    refusal = _locality_refusal(locality, require_local=args.require_local)
+    if refusal is not None:
+        print(f"Cannot run: {refusal}.", file=sys.stderr)
+        return 2
     total_runs = sum(len(t.variants) for t in tasks)
     print(
-        f"Pinned: {target.provider} / {target.model}  |  "
+        f"Pinned: {target.provider} / {target.model} ({args.arm} arm, {locality})  |  "
         f"{len(tasks)} tasks x{args.repeat}, "
         f"{total_runs * args.repeat} live model calls (at least)"
     )
@@ -119,7 +178,14 @@ async def _run(args: argparse.Namespace) -> int:
     with read_timeout_override(args.read_timeout):
         for task in tasks:
             print(f"Running {task.id}...")
-            result = await run_task(cfg, registry, tier1_loader, task, repeat=args.repeat)
+            result = await run_task(
+                cfg,
+                registry,
+                tier1_loader,
+                task,
+                repeat=args.repeat,
+                run_fn=_variant_runner(args.arm),
+            )
             task_results.append(result)
 
     report = EvalReport(
@@ -127,6 +193,8 @@ async def _run(args: argparse.Namespace) -> int:
         model=target.model,
         started_at=started_at,
         tasks=tuple(task_results),
+        arm=args.arm,
+        locality=locality,
     )
     print()
     print(render_console(report))

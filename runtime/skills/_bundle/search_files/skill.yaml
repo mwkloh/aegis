@@ -19,6 +19,11 @@ args_schema:
       type: string
       minLength: 1
       maxLength: 256
+      description: >-
+        Glob matched against file NAMES, not file contents. Use wildcards, e.g.
+        '*CT-001*' for any file whose name contains CT-001, or '*.md' for every
+        Markdown file. A bare word with no wildcard matches only a file named
+        exactly that.
     kind:
       type: string
       enum:

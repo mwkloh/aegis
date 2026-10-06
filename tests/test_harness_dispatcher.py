@@ -558,6 +558,23 @@ async def test_synthesis_failure_falls_back_to_raw() -> None:
     assert len(message.replies[0]) <= 3500
 
 
+async def test_empty_synthesis_reply_falls_back_to_raw() -> None:
+    """A thinking model that spends its whole token budget returns "" with no
+    error. The user must still get the tool output, not just the model footer."""
+    message = _FakeMessage()
+    dispatcher = _make_dispatcher(
+        classifier=_StubClassifier("list_files", 0.9),
+        synthesizer=_StubSynthesizer(reply=""),
+    )
+    outcome = await dispatcher.dispatch(
+        chat_id=123, user_text="list my downloads", message=message
+    )
+    assert outcome == DispatchOutcome.FIRED
+    assert len(message.replies) == 1
+    body = message.replies[0].split("\n\n[")[0]
+    assert body.strip()
+
+
 # ---------------------------------------------------------------------------
 # Reply-callback routing (typing-indicator UX hook)
 # ---------------------------------------------------------------------------
@@ -1353,6 +1370,34 @@ async def test_multi_step_synthesis_failure_falls_back_to_last_payload() -> None
     assert len(message.replies[0]) <= 3500
 
 
+async def test_multi_step_empty_chain_synthesis_falls_back_to_last_payload() -> None:
+    """Same failure as an exception, without the exception: the synthesizer
+    returns "" (token budget spent on reasoning). The reply must carry the last
+    tool payload rather than a bare model footer."""
+    runner = _StubPlanRunner(
+        plan_steps=[
+            PlanStep(kind="tool_call", tool="files_search", args={"glob": "*"}),
+            PlanStep(kind="respond"),
+        ],
+    )
+    registry, harness = _two_skill_setup()
+    dispatcher = _make_loop_dispatcher(
+        runner=runner,
+        registry=registry,
+        harness=harness,
+        synthesizer=_StubSynthesizer(reply=""),
+    )
+    message = _FakeMessage()
+
+    outcome = await dispatcher.dispatch(
+        chat_id=1, user_text="find md", message=message
+    )
+
+    assert outcome == DispatchOutcome.FIRED
+    assert len(message.replies) == 1
+    assert "matches" in message.replies[0]
+
+
 async def test_multi_step_chain_synthesis_runs_verdict_gate() -> None:
     """Synthesizer claims an unran action — the verdict gate must annotate."""
     from runtime.chat.reply_verdict import UNVERIFIED_BANNER
@@ -1934,9 +1979,64 @@ async def test_multi_step_task_complete_gates_and_skips_chain_synthesis() -> Non
     assert len(runner.plan_next_calls) == 2
     # Chain synthesis (the stub synthesizer) was never invoked.
     assert recorder.calls == 0
-    # Reply is the gated summary verbatim — no unverified claim, no failed
-    # tools, so no annotation is added.
-    assert message.replies == ["Found the markdown files.\n\n[ollama · stub-model]"]
+    # The reply is the gated summary followed by the tool output as evidence: the
+    # planner's one sentence alone left the user without the file names (measured:
+    # e4b named the file in 4 of 9 replies although 6 of 9 searches found it). No
+    # unverified claim and no failed tools, so no annotation is added.
+    reply = message.replies[0]
+    assert reply.startswith("Found the markdown files.\n\n")
+    assert "/tmp/a.md" in reply
+    assert "/tmp/b.md" in reply
+    assert "⚠️" not in reply
+
+
+async def test_task_complete_reply_shows_every_step_of_the_chain() -> None:
+    """Search then read: the first step's result must survive next to the second's,
+    or a question about both ("which files, and what do they say") loses half."""
+    runner = _StubPlanRunner(
+        plan_steps=[
+            PlanStep(kind="tool_call", tool="files_search", args={"glob": "*.md"}),
+            PlanStep(kind="tool_call", tool="files_read", args={"path": "/tmp/a.md"}),
+            PlanStep(kind="task_complete", summary="Found and read it."),
+        ],
+    )
+    registry, harness = _two_skill_setup()
+    dispatcher = _make_loop_dispatcher(runner=runner, registry=registry, harness=harness)
+    message = _FakeMessage()
+
+    outcome = await dispatcher.dispatch(chat_id=1, user_text="find and read", message=message)
+
+    assert outcome == DispatchOutcome.FIRED
+    reply = message.replies[0]
+    assert "files_search(" in reply
+    assert "/tmp/b.md" in reply  # only the search result carries this
+    assert "files_read(" in reply
+    assert "hello" in reply  # only the read result carries this
+
+
+async def test_task_complete_evidence_is_clipped_to_the_result_limit() -> None:
+    """A huge tool result must not turn the reply into a wall of text."""
+    runner = _StubPlanRunner(
+        plan_steps=[
+            PlanStep(kind="tool_call", tool="files_search", args={"glob": "*"}),
+            PlanStep(kind="task_complete", summary="Searched."),
+        ],
+    )
+    registry, _ = _two_skill_setup()
+    harness = _RecordingHarness(
+        tools={
+            "files_search": lambda args: {"matches": ["x" * 20000]},
+            "files_read": lambda args: {"content": "hello"},
+        }
+    )
+    dispatcher = _make_loop_dispatcher(runner=runner, registry=registry, harness=harness)
+    message = _FakeMessage()
+
+    await dispatcher.dispatch(chat_id=1, user_text="search", message=message)
+
+    reply = message.replies[0]
+    assert "truncated" in reply
+    assert len(reply) < 5000
 
 
 async def test_task_complete_empty_history_returns_pass() -> None:
@@ -2174,8 +2274,11 @@ async def test_task_complete_ledger_read_failure_falls_back_to_history() -> None
     assert len(message.replies) == 1
     # files_search ran and succeeded — the history fallback finds it
     # verified, so the plain summary ships with no unverified-claim banner
-    # and no exception ever escaped the ledger read.
-    assert message.replies[0] == "Searched for the files.\n\n[ollama · stub-model]"
+    # and no exception ever escaped the ledger read. The tool output follows the
+    # summary as evidence.
+    reply = message.replies[0]
+    assert reply.startswith("Searched for the files.\n\nResults:\n")
+    assert "⚠️" not in reply
 
 
 async def test_task_complete_identical_args_retry_still_warns_oq7(tmp_path: Path) -> None:
@@ -2301,7 +2404,10 @@ async def test_task_complete_recovered_tool_not_branded_failure(
     assert outcome == DispatchOutcome.FIRED
     assert len(message.replies) == 1
     reply = message.replies[0]
-    assert reply == "Found the markdown files.\n\n[ollama · stub-model]"
+    # The evidence block may show the earlier failed attempt; what must not appear is
+    # the failure warning the gate adds for a tool whose LAST outcome failed.
+    assert reply.startswith("Found the markdown files.\n\nResults:\n")
+    assert "did not complete successfully" not in reply
     assert "⚠️" not in reply
 
     raw_events = [
@@ -2765,3 +2871,67 @@ async def test_no_pending_confirmation_does_not_affect_normal_dispatch() -> None
 
     assert outcome == DispatchOutcome.FIRED
     assert dispatcher._pending == {}
+
+
+# --- chain-synthesis tool-result limits -----------------------------------------
+# `_render_chain` carried its own duplicate 1,024-char constant, clipping the
+# JSON-encoded payload. It now shares the planner's rules (runtime.harness.limits).
+
+
+def _chain(*texts: str) -> list[tuple[ToolIntent, ToolResult]]:
+    return [
+        (
+            ToolIntent(tool="files_read", args={"path": f"/x/{i}.log"}, skill_id="read_file"),
+            ToolResult(status="ok", payload={"result": text}),
+        )
+        for i, text in enumerate(texts)
+    ]
+
+
+def test_render_chain_shows_a_decoded_result_up_to_the_per_model_limit() -> None:
+    from runtime.chat.telegram.harness_dispatcher import _render_chain
+
+    out = _render_chain(
+        _chain("line one\nline two", "A" * 3000), per_result_chars=3500, turn_budget_chars=8000
+    )
+
+    assert "line one\nline two" in out
+    assert '{"result"' not in out
+    assert "A" * 3000 in out
+    assert "truncated" not in out
+
+
+def test_render_chain_clips_past_the_limit_and_says_how_much_there_was() -> None:
+    from runtime.chat.telegram.harness_dispatcher import _render_chain
+
+    out = _render_chain(_chain("B" * 5000), per_result_chars=1000, turn_budget_chars=8000)
+
+    assert "showing 1,000 of 5,000 chars" in out
+    assert "B" * 1001 not in out
+
+
+def test_render_chain_shares_a_turn_budget_newest_first() -> None:
+    from runtime.chat.telegram.harness_dispatcher import _render_chain
+
+    out = _render_chain(
+        _chain("C" * 5000, "D" * 5000, "E" * 5000), per_result_chars=3500, turn_budget_chars=8000
+    )
+
+    assert out.count("showing 3,500 of 5,000 chars") == 2
+    assert out.count("showing 1,000 of 5,000 chars") == 1
+
+
+def test_render_chain_still_reports_an_empty_chain() -> None:
+    from runtime.chat.telegram.harness_dispatcher import _render_chain
+
+    assert _render_chain([]) == "(no tools ran on this turn)"
+
+
+def test_dispatcher_takes_a_per_model_result_limit() -> None:
+    import inspect
+
+    from runtime.harness.limits import DEFAULT_TOOL_RESULT_CHARS, DEFAULT_TURN_RESULT_BUDGET_CHARS
+
+    params = inspect.signature(HarnessDispatcher.__init__).parameters
+    assert params["tool_result_chars"].default == DEFAULT_TOOL_RESULT_CHARS
+    assert params["turn_result_budget_chars"].default == DEFAULT_TURN_RESULT_BUDGET_CHARS

@@ -1,0 +1,22 @@
+id: three_hop_chain
+description: "Multi-hop: follow 'next:' pointers across three files. Each path is only known from the previous file's contents, so it cannot be guessed."
+fixture:
+  files:
+    - path: "a.txt"
+      content: "start here. next: b.txt"
+    - path: "b.txt"
+      content: "keep going. next: sub/c.txt"
+    - path: "sub/c.txt"
+      content: "the end. the access code is 7421"
+variants:
+  - "start at {sandbox}/a.txt and follow the 'next:' pointers until the end, then tell me the access code"
+  - "{sandbox}/a.txt points to another file, which points to another. follow the chain and report the access code"
+  - "read {sandbox}/a.txt, go wherever it says to go next, keep following until you hit the last file, and give me the code"
+answer_contains: ["7421"]
+expected_calls:
+  - tool: files_read
+    args_match: {path: "a.txt"}
+  - tool: files_read
+    args_match: {path: "b.txt"}
+  - tool: files_read
+    args_match: {path: "sub/c.txt"}

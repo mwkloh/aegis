@@ -83,11 +83,114 @@ def test_files_read_returns_content(tools: dict, stub: _StubClient) -> None:
     assert result["result"] == "hello"
 
 
-def test_files_read_truncates_long_content(tools: dict, stub: _StubClient) -> None:
+# --- files_read pages a long file instead of silently cutting it -----------------
+# The old behaviour cut at 3,500 characters with a bare "… (truncated)", so a model
+# could not tell a file slightly too long from one 80 KB long, and had no way to see
+# the rest. A bigger cap alone cannot fix that: no cap makes an 81 KB file fit. Paging
+# lets the model fetch the next chunk on demand, paying for it only then.
+# See docs/superpowers/plans/2026-10-04-mac-mini-rerun-and-bare-arm.md section 14.
+
+
+def test_files_read_pages_a_long_file_and_says_how_to_continue(
+    tools: dict, stub: _StubClient
+) -> None:
     stub.content = "x" * 5000
-    result = tools["files_read"]({"path": "/x/doc.txt"})
-    assert "truncated" in result["result"]
-    assert len(result["result"]) <= 3514  # 3500 chars + len("… (truncated)")
+    out = tools["files_read"]({"path": "/x/doc.txt"})["result"]
+
+    assert out.startswith("x" * 3000)
+    assert "x" * 3001 not in out
+    assert "showing chars 1-3,000 of 5,000" in out
+    assert "offset=3000" in out
+
+
+def test_files_read_offset_continues_where_the_notice_said(tools: dict, stub: _StubClient) -> None:
+    stub.content = "".join(str(i % 10) for i in range(5000))
+    out = tools["files_read"]({"path": "/x/doc.txt", "offset": 3000})["result"]
+
+    assert out.startswith(stub.content[3000:5000])
+    assert "showing chars 3,001-5,000 of 5,000" in out
+    assert "end of file" in out
+    assert "offset=" not in out
+
+
+def test_paging_reassembles_the_whole_file(tools: dict, stub: _StubClient) -> None:
+    stub.content = "".join(chr(97 + i % 26) for i in range(8123))
+    pieces: list[str] = []
+    offset = 0
+    for _ in range(20):
+        out = tools["files_read"]({"path": "/x/doc.txt", "offset": offset})["result"]
+        body, _, notice = out.partition("\n…[")
+        pieces.append(body)
+        if "offset=" not in notice:
+            break
+        offset = int(notice.split("offset=")[1].split(" ")[0].rstrip("]"))
+
+    assert "".join(pieces) == stub.content
+
+
+def test_a_file_exactly_one_page_long_has_no_notice(tools: dict, stub: _StubClient) -> None:
+    stub.content = "y" * 3000
+    out = tools["files_read"]({"path": "/x/doc.txt"})["result"]
+
+    assert out == "y" * 3000
+
+
+def test_files_read_offset_past_the_end_says_so(tools: dict, stub: _StubClient) -> None:
+    stub.content = "z" * 5000
+    out = tools["files_read"]({"path": "/x/doc.txt", "offset": 9000})["result"]
+
+    assert "past the end" in out
+    assert "5,000" in out
+
+
+@pytest.mark.parametrize("bad", [-1, "abc", 2.5, True])
+def test_files_read_rejects_a_bad_offset(tools: dict, stub: _StubClient, bad: object) -> None:
+    with pytest.raises(ValueError, match="offset"):
+        tools["files_read"]({"path": "/x/doc.txt", "offset": bad})
+
+
+def test_a_null_offset_means_from_the_start(tools: dict, stub: _StubClient) -> None:
+    """Optional arguments are often emitted as null; that is not an error."""
+    stub.content = "q" * 100
+    assert tools["files_read"]({"path": "/x/doc.txt", "offset": None})["result"] == "q" * 100
+
+
+def test_files_read_accepts_a_numeric_string_offset(tools: dict, stub: _StubClient) -> None:
+    """Models sometimes emit integers as strings."""
+    stub.content = "a" * 4000
+    out = tools["files_read"]({"path": "/x/doc.txt", "offset": "3000"})["result"]
+
+    assert out.startswith("a" * 1000)
+
+
+def test_the_bundled_read_file_skill_advertises_offset() -> None:
+    """A model only pages if the argument schema it is shown includes `offset`; a skill
+    that lacks it silently disables the feature however well the tool works."""
+    from pathlib import Path
+
+    from runtime.skills.registry import SkillRegistry
+
+    bundle = Path(__file__).resolve().parent.parent / "runtime" / "skills" / "_bundle"
+    (read_file,) = [d for d in SkillRegistry.from_directory(bundle).all() if d.tool == "files_read"]
+
+    offset = read_file.args_schema["properties"]["offset"]
+    assert offset["type"] == "integer"
+    assert offset["minimum"] == 0
+    assert "offset" not in read_file.args_schema["required"]
+    assert "offset" in read_file.description
+
+
+def test_a_page_and_its_notice_fit_inside_the_default_prompt_limit(
+    tools: dict, stub: _StubClient
+) -> None:
+    """If the planner clipped the page, it would cut off the very notice that tells
+    the model how to continue."""
+    from runtime.harness.limits import DEFAULT_TOOL_RESULT_CHARS
+
+    stub.content = "x" * 200_000
+    out = tools["files_read"]({"path": "/x/doc.txt", "offset": 123_456})["result"]
+
+    assert len(out) <= DEFAULT_TOOL_RESULT_CHARS
 
 
 def test_files_stat_returns_key_value(tools: dict) -> None:

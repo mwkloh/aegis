@@ -55,7 +55,7 @@ def _matched_prefix(
             cursor += 1
             if (
                 tool == expected.tool
-                and status != "error"
+                and (status != "error" or expected.allow_error)
                 and _args_match(expected.args_match, args)
             ):
                 found = True
@@ -108,6 +108,11 @@ class FailureKind(StrEnum):
     WRONG_TOOL = "wrong_tool"
     REPEATED_STEP = "repeated_step"
     INCOMPLETE_CHAIN = "incomplete_chain"
+    # Set by the runner, never by `classify_failure`: the model was not asked,
+    # so there is no evidence to classify. `report.render_console` matches this
+    # string literally -- `report` cannot import this module (see
+    # `VariantResult.failure_kind`).
+    HARNESS_UNAVAILABLE = "harness_unavailable"
 
 
 _REPETITION_THRESHOLD: Final[int] = 3

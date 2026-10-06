@@ -912,6 +912,8 @@ def build_harness_dispatcher(
         client=reasoning_client,
         model=target.model,
         think=cfg.think_for(target.model),
+        tool_result_chars=cfg.tool_result_chars_for(target.model),
+        max_tokens=cfg.planner_max_tokens_for(target.model),
     )
     runner = SkillRunner(tier1=tier1_reasoner)
 
@@ -928,6 +930,7 @@ def build_harness_dispatcher(
         multi_step=cfg.harness.multi_step,
         max_steps=cfg.harness.max_steps,
         events=events,
+        tool_result_chars=cfg.tool_result_chars_for(target.model),
     )
 
 

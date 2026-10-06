@@ -1,0 +1,20 @@
+id: list_then_read_nested
+description: "Discover then read: list a projects folder, then read the README inside the right subfolder. A model that guesses the path skips the list."
+fixture:
+  files:
+    - path: "projects/alpha/README.md"
+      content: "Alpha: the payments service."
+    - path: "projects/beta/README.md"
+      content: "Beta: the search service."
+    - path: "projects/gamma/README.md"
+      content: "Gamma: the email service."
+variants:
+  - "list the projects in {sandbox}/projects, then read the README.md inside the beta one"
+  - "first list {sandbox}/projects, then open beta/README.md and tell me what the beta project is"
+  - "show me what projects exist under {sandbox}/projects and then read the README for beta"
+answer_contains: ["search service"]
+expected_calls:
+  - tool: files_list
+    args_match: {path: "projects"}
+  - tool: files_read
+    args_match: {path: "beta/README.md"}

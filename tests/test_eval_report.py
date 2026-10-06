@@ -425,3 +425,116 @@ def test_flaky_task_is_flagged_but_a_consistent_one_is_not() -> None:
     )
     assert flaky.is_flaky is True
     assert consistent.is_flaky is False
+
+
+def test_render_console_warns_when_variants_never_reached_the_model() -> None:
+    """A harness failure drags TGC down without saying anything about the model."""
+    broken = VariantResult(
+        task_id="t",
+        variant_text="x",
+        passed=False,
+        duration_s=1.0,
+        failure_kind="harness_unavailable",
+    )
+    out = render_console(_report_of(_variant(True, 1_000), broken))
+
+    assert "1 variant(s) never reached the model" in out
+    assert "not model capability" in out
+
+
+def test_render_console_stays_quiet_when_every_variant_reached_the_model() -> None:
+    out = render_console(_report_of(_variant(True, 1_000), _variant(False, 1_000)))
+
+    assert "never reached the model" not in out
+
+
+# --- Which harness produced the numbers ----------------------------------
+# The full and bare arms use the same tasks and models, so without a label two
+# result files for the same model are indistinguishable.
+
+
+def _arm_report(arm: str | None) -> EvalReport:
+    extra = {} if arm is None else {"arm": arm}
+    return EvalReport(
+        provider="ollama",
+        model="lfm2.5:8b",
+        started_at=datetime(2026, 10, 4, tzinfo=UTC),
+        tasks=(TaskResult(task_id="t", description="d", variants=(_variant(True, 1_000),)),),
+        **extra,
+    )
+
+
+def test_report_arm_defaults_to_full_so_existing_files_still_parse() -> None:
+    assert _arm_report(None).arm == "full"
+
+
+def test_report_arm_round_trips_through_json(tmp_path: Path) -> None:
+    path = write_json(_arm_report("bare"), tmp_path)
+
+    assert EvalReport.model_validate_json(path.read_text(encoding="utf-8")).arm == "bare"
+
+
+def test_bare_results_are_written_to_a_distinct_filename(tmp_path: Path) -> None:
+    full = write_json(_arm_report("full"), tmp_path)
+    bare = write_json(_arm_report("bare"), tmp_path)
+
+    assert bare != full
+    assert bare.name.endswith("-bare.json")
+    assert not full.name.endswith("-bare.json")
+
+
+# --- On-device performance: tokens and speed -----------------------------
+# The benchmark also asks how well small models run on a local device. Time was
+# recorded but tokens were not, so generation speed could not be derived.
+
+
+def _timed_call(**kw: int) -> CallTelemetry:
+    return CallTelemetry(provider="ollama", model="m", wall_ms=10, **kw)
+
+
+def test_variant_telemetry_totals_tokens_and_prompt_time() -> None:
+    t = VariantTelemetry.from_calls(
+        [
+            _timed_call(tokens_in=40, tokens_out=100, eval_ms=1000, prompt_eval_ms=200),
+            _timed_call(tokens_in=60, tokens_out=50, eval_ms=500, prompt_eval_ms=100),
+        ]
+    )
+
+    assert t is not None
+    assert (t.tokens_in_total, t.tokens_out_total, t.prompt_eval_ms_total) == (100, 150, 300)
+
+
+def test_tokens_per_second_is_generation_speed_over_eval_time() -> None:
+    t = VariantTelemetry.from_calls(
+        [_timed_call(tokens_out=100, eval_ms=1000), _timed_call(tokens_out=50, eval_ms=500)]
+    )
+
+    assert t is not None
+    assert t.tokens_per_second == pytest.approx(100.0)
+
+
+def test_tokens_per_second_is_none_when_nothing_was_timed() -> None:
+    """Absent, not zero: a hosted call or a timeout reports no eval time."""
+    t = VariantTelemetry.from_calls([_timed_call(tokens_out=100, eval_ms=0)])
+
+    assert t is not None
+    assert t.tokens_per_second is None
+
+
+def test_telemetry_written_before_tokens_were_recorded_still_parses() -> None:
+    old = VariantTelemetry(
+        model_calls=1,
+        load_ms_total=0,
+        eval_ms_total=0,
+        max_call_wall_ms=0,
+        timed_out_calls=0,
+        max_thinking_token_share=0.0,
+    )
+
+    assert old.tokens_out_total == 0
+    assert old.tokens_per_second is None
+
+
+def test_render_console_names_the_bare_arm_but_not_the_default() -> None:
+    assert "bare arm" in render_console(_arm_report("bare"))
+    assert "bare arm" not in render_console(_arm_report("full"))

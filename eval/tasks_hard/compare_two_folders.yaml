@@ -1,0 +1,20 @@
+id: compare_two_folders
+description: "Fan-out: list a folder to discover two subfolders, then read the same-named file in each."
+fixture:
+  files:
+    - path: "v1/config.ini"
+      content: "mode=safe\nretries=3"
+    - path: "v2/config.ini"
+      content: "mode=fast\nretries=5"
+variants:
+  - "list {sandbox}, then read config.ini from the v1 folder and the v2 folder and tell me what differs"
+  - "look at what is in {sandbox}, then read v1/config.ini followed by v2/config.ini and compare them"
+  - "list {sandbox} first. after that read config.ini in v1 and then config.ini in v2, and say which setting changed"
+answer_contains: ["safe", "fast"]
+expected_calls:
+  - tool: files_list
+    args_match: {path: "{sandbox}"}
+  - tool: files_read
+    args_match: {path: "v1/config.ini"}
+  - tool: files_read
+    args_match: {path: "v2/config.ini"}

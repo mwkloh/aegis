@@ -75,16 +75,23 @@ class OllamaClient:
 
     def __init__(self, config: AegisConfig) -> None:
         self._base_url = _validate_local(config.providers.ollama_base_url)
+        self._config = config
 
     async def chat(self, request: ChatRequest) -> ChatResponse:
+        options: dict[str, object] = {
+            "temperature": request.temperature,
+            "num_predict": request.max_tokens,
+        }
+        # Ollama sizes the KV cache from the window, so a model whose default is
+        # 262k tokens can need far more memory than the machine has.
+        num_ctx = self._config.num_ctx_for(request.model)
+        if num_ctx is not None:
+            options["num_ctx"] = num_ctx
         payload: dict[str, object] = {
             "model": request.model,
             "messages": [m.model_dump() for m in request.messages],
             "stream": False,
-            "options": {
-                "temperature": request.temperature,
-                "num_predict": request.max_tokens,
-            },
+            "options": options,
         }
         if request.response_schema is not None:
             payload["format"] = request.response_schema

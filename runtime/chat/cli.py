@@ -173,6 +173,8 @@ def build_pipeline(config: AegisConfig | None = None) -> Pipeline:
             client=openrouter,
             model=cfg.models.smart,
             think=cfg.think_for(cfg.models.smart),
+            tool_result_chars=cfg.tool_result_chars_for(cfg.models.smart),
+            max_tokens=cfg.planner_max_tokens_for(cfg.models.smart),
         )
     except OpenRouterConfigError:
         tier1 = None

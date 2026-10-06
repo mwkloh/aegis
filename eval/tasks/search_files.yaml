@@ -10,6 +10,7 @@ variants:
   - "search {sandbox}/notes for CT-001"
   - "find files about CT-001 in {sandbox}/notes"
   - "look for CT-001 in {sandbox}/notes"
+answer_contains: ["CT-001-notes.md"]
 expected_calls:
   - tool: files_search
     args_match: {directory: "{sandbox}/notes", pattern: "CT-001"}

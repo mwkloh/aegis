@@ -1,0 +1,18 @@
+id: needle_mid
+description: "Result-cap probe: the ERROR line sits past the planner prompt's 1,024-character clip but inside files_read's 3,500-character window. A harness that shows the model more of the result can answer; one that clips harder cannot."
+fixture:
+  files:
+    - path: "app.log"
+      filler:
+        line: "2026-10-01 INFO worker-{i:04d} heartbeat ok latency=12ms"
+        count: 1500
+        needle: "2026-10-01 ERROR payment-gateway timeout code=E4417"
+        needle_at: 40
+variants:
+  - "read {sandbox}/app.log and tell me the error code from the ERROR line"
+  - "what error code is logged in {sandbox}/app.log?"
+  - "check {sandbox}/app.log for the error and give me its code"
+answer_contains: ["E4417"]
+expected_calls:
+  - tool: files_read
+    args_match: {path: "app.log"}

@@ -1,0 +1,22 @@
+id: search_stat_read
+description: "Three-step chain with a distractor: find a file by name, check its size, then read it. The 2025 file is a near-miss."
+fixture:
+  files:
+    - path: "docs/2026/budget-2026.csv"
+      content: "item,amount\nlaptop,1200\n"
+    - path: "docs/2025/budget-2025.csv"
+      content: "item,amount\nphone,800\n"
+    - path: "docs/readme.txt"
+      content: "budget files live under docs/"
+variants:
+  - "find budget-2026.csv somewhere under {sandbox}, tell me how big it is, then read it"
+  - "locate budget-2026.csv in {sandbox}, check its size, and show me its contents"
+  - "search {sandbox} for budget-2026, get that file's metadata, then read it"
+answer_contains: ["laptop", "1200"]
+expected_calls:
+  - tool: files_search
+    args_match: {directory: "{sandbox}", pattern: "budget-2026"}
+  - tool: files_stat
+    args_match: {path: "budget-2026.csv"}
+  - tool: files_read
+    args_match: {path: "budget-2026.csv"}

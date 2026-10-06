@@ -10,6 +10,7 @@ variants:
   - "list files in {sandbox}"
   - "what's in {sandbox}?"
   - "show me the files under {sandbox}"
+answer_contains: ["report.txt", "notes.md"]
 expected_calls:
   - tool: files_list
     args_match: {path: "{sandbox}"}

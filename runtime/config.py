@@ -58,6 +58,25 @@ class ModelConfig(BaseModel):
             "is per-deployment. Ignored by OpenRouter."
         ),
     )
+    tool_result_chars: int | None = Field(
+        default=None,
+        description=(
+            "Override for how many characters of each tool result the planner and "
+            "synthesis prompts carry, beating any per-model profile -- the operator's "
+            "escape hatch for a benchmark sweep (`MODEL_TOOL_RESULT_CHARS`), the same "
+            "direction `smart_think` already overrides a profile. None defers to the "
+            "profile, then to the shared default."
+        ),
+    )
+    planner_max_tokens: int | None = Field(
+        default=None,
+        description=(
+            "Override for the planner's structured-decision output budget, thinking "
+            "tokens included, beating any per-model profile "
+            "(`MODEL_PLANNER_MAX_TOKENS`) -- the operator's escape hatch for a "
+            "benchmark sweep. None defers to the profile, then to the shared default."
+        ),
+    )
     smart_provider: Literal["ollama", "openrouter"] = Field(
         default="ollama",
         description="Explicit SMART-tier provider pin — no silent fallback between them.",
@@ -75,9 +94,15 @@ class ModelProfile(BaseModel):
     * `qwen3.5:4b-mlx` in-budget 73.3% -> 6.7%  (broken -- that reasoning was
       how it got its JSON right first time; without it, retries tripled)
 
-    Only fields with a measured per-model effect belong here. `think` is
-    currently the only one; adding knobs on reasoning alone is what this whole
-    line of work exists to stop.
+    Measured 2026-10-03 on a 16 GB Mac Mini, `num_ctx`:
+
+    * `qwen3-vl:4b` defaults to a 262,144-token window, which Ollama sized at
+      43 GB (80% CPU) -- the daemon thrashed and every call timed out. At
+      `num_ctx=8192` it loaded at 4.2 GB, 100% GPU, and answered.
+
+    Only fields with a measured per-model effect belong here: `think` and
+    `num_ctx`. Adding knobs on reasoning alone is what this whole line of work
+    exists to stop.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -85,6 +110,37 @@ class ModelProfile(BaseModel):
     think: bool | None = Field(
         default=None,
         description="Ollama reasoning channel for Tier-1. None leaves the model alone.",
+    )
+    num_ctx: int | None = Field(
+        default=None,
+        gt=0,
+        description=(
+            "Ollama context window in tokens. None leaves the model's own "
+            "default, which can be far larger than the machine can hold."
+        ),
+    )
+    tool_result_chars: int | None = Field(
+        default=None,
+        gt=0,
+        description=(
+            "How many characters of each tool result the planner and synthesis "
+            "prompts carry. None uses the shared default. Measured 2026-10-04: "
+            "prefill speed differs ~12x between small models, so the same "
+            "3,500 characters costs +0.5 s on gemma4:e2b-mlx and +6.4 s per planner "
+            "call on qwen3.5:9b -- one constant fits none of them."
+        ),
+    )
+    planner_max_tokens: int | None = Field(
+        default=None,
+        gt=0,
+        le=8192,
+        description=(
+            "Output-token budget for the planner's structured decisions, thinking "
+            "tokens included. None uses the shared default (512). Measured on run 2: "
+            "qwen3-vl:4b had 81 calls cut off by 512 and all 30 of its failures were "
+            "`thinking_budget_exhausted`; qwen3.5:4b-mlx paid in retries. The 8,192 "
+            "ceiling is ChatRequest's own limit."
+        ),
     )
 
 
@@ -316,6 +372,50 @@ class AegisConfig(BaseModel):
         profile = self.model_profiles.get(model)
         return profile.think if profile is not None else None
 
+    def num_ctx_for(self, model: str) -> int | None:
+        """Resolve the Ollama context window for one model, or None for its default.
+
+        Exact model id only, for the same reason as `think_for`. Unlike `think`
+        there is no env override: the failure it prevents is a daemon that has
+        already run out of memory, not a setting worth flipping per session.
+        """
+        profile = self.model_profiles.get(model)
+        return profile.num_ctx if profile is not None else None
+
+    def tool_result_chars_for(self, model: str) -> int:
+        """How many characters of each tool result the prompts carry for one model.
+
+        Precedence: `MODEL_TOOL_RESULT_CHARS` beats a profile (so a benchmark sweep
+        can pin one value across every model), a profile beats the shared default.
+        Exact model id only, for the same reason as `think_for`.
+        """
+        # Imported here: `runtime.harness`'s package init pulls in tools that import
+        # config, so a module-level import would be a cycle.
+        from runtime.harness.limits import DEFAULT_TOOL_RESULT_CHARS  # noqa: PLC0415
+
+        if self.models.tool_result_chars is not None:
+            return self.models.tool_result_chars
+        profile = self.model_profiles.get(model)
+        if profile is not None and profile.tool_result_chars is not None:
+            return profile.tool_result_chars
+        return DEFAULT_TOOL_RESULT_CHARS
+
+    def planner_max_tokens_for(self, model: str) -> int:
+        """The planner's output-token budget for one model.
+
+        Precedence: `MODEL_PLANNER_MAX_TOKENS` beats a profile (a sweep can pin one
+        value across models), a profile beats the shared default. Clamped to
+        ChatRequest's 8,192 ceiling so a typo in the env can never make every
+        planner call fail validation.
+        """
+        from runtime.harness.limits import DEFAULT_PLANNER_MAX_TOKENS  # noqa: PLC0415
+
+        value = self.models.planner_max_tokens
+        if value is None:
+            profile = self.model_profiles.get(model)
+            value = profile.planner_max_tokens if profile is not None else None
+        return min(value if value is not None else DEFAULT_PLANNER_MAX_TOKENS, 8192)
+
 
 def _load_env(env_path: Path) -> None:
     if env_path.is_file():
@@ -337,6 +437,18 @@ def _env_bool(raw: str | None, *, default: bool) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _parse_positive_int(raw: str | None) -> int | None:
+    """Unset or unusable -> None (defer to the next precedence level), never fatal."""
+    if raw is None:
+        return None
+    text = raw.strip()
+    if not text.isdigit() or int(text) <= 0:
+        if text:
+            logger.warning("config.positive_int.unrecognized_value", extra={"raw": raw})
+        return None
+    return int(text)
 
 
 def _parse_tristate_bool(raw: str | None) -> bool | None:
@@ -394,6 +506,8 @@ def _coerce(env: dict[str, str], cfg: dict[str, Any]) -> dict[str, Any]:
         ),
         smart_provider=_parse_smart_provider(env.get("MODEL_SMART_PROVIDER")),
         smart_think=_parse_tristate_bool(env.get("MODEL_SMART_THINK")),
+        tool_result_chars=_parse_positive_int(env.get("MODEL_TOOL_RESULT_CHARS")),
+        planner_max_tokens=_parse_positive_int(env.get("MODEL_PLANNER_MAX_TOKENS")),
     )
     providers = ProviderConfig(
         ollama_base_url=env.get(

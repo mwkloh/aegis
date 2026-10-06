@@ -11,7 +11,7 @@ import httpx
 import pytest
 import respx
 
-from runtime.config import AegisConfig, ProviderConfig, get_config
+from runtime.config import AegisConfig, ModelProfile, ProviderConfig, get_config
 from runtime.llm.clients import ChatMessage, ChatRequest, OllamaClient
 from runtime.llm.clients.ollama_client import OllamaHostError, _timeout_for_call
 from runtime.llm.telemetry import PRODUCTION_READ_TIMEOUT_S, collect_calls
@@ -208,6 +208,47 @@ async def test_chat_forwards_think_false() -> None:
         await client.chat(request)
 
     assert captured.get("think") is False
+
+
+async def _options_sent(cfg: AegisConfig, model: str) -> dict[str, object]:
+    captured: dict[str, object] = {}
+
+    def _handler(req: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(req.content))
+        return httpx.Response(
+            200, json={"message": {"role": "assistant", "content": "ok"}}
+        )
+
+    request = ChatRequest(
+        model=model, messages=[ChatMessage(role="user", content="hi")]
+    )
+    with respx.mock() as mock:
+        mock.post("http://127.0.0.1:11434/api/chat").mock(side_effect=_handler)
+        await OllamaClient(cfg).chat(request)
+    options = captured["options"]
+    assert isinstance(options, dict)
+    return options
+
+
+@pytest.mark.asyncio
+async def test_chat_forwards_num_ctx_from_the_model_profile() -> None:
+    # Without this a 4B model reserves a 262k-token KV cache (43 GB measured)
+    # on a 16 GB machine and the daemon thrashes until every call times out.
+    cfg = _config_with_base("http://127.0.0.1:11434").model_copy(
+        update={"model_profiles": {"qwen3-vl:4b": ModelProfile(num_ctx=16384)}}
+    )
+    options = await _options_sent(cfg, "qwen3-vl:4b")
+    assert options["num_ctx"] == 16384
+
+
+@pytest.mark.asyncio
+async def test_chat_omits_num_ctx_for_a_model_without_a_profile() -> None:
+    """Absent means the model's own default, so existing behaviour is unchanged."""
+    cfg = _config_with_base("http://127.0.0.1:11434").model_copy(
+        update={"model_profiles": {"qwen3-vl:4b": ModelProfile(num_ctx=16384)}}
+    )
+    options = await _options_sent(cfg, "gemma4:e2b")
+    assert "num_ctx" not in options
 
 
 @pytest.mark.asyncio

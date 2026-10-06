@@ -19,6 +19,14 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from runtime.events.stream import EventStream
 from runtime.harness import ToolIntent
 from runtime.harness.contract import ToolResult
+from runtime.harness.limits import (
+    DEFAULT_PLANNER_MAX_TOKENS,
+    DEFAULT_TOOL_RESULT_CHARS,
+    DEFAULT_TURN_RESULT_BUDGET_CHARS,
+    allocate_result_limits,
+    clip_text,
+    result_text,
+)
 from runtime.llm.clients import ChatMessage
 from runtime.llm.clients.base import ModelClient
 from runtime.llm.structured_output import request_structured
@@ -27,7 +35,6 @@ from runtime.skills import SkillDescriptor
 _PROMPT_PATH: Path = Path(__file__).parent / "prompts" / "tier1_skill.txt"
 _PLANNER_PROMPT_PATH: Path = Path(__file__).parent / "prompts" / "tier1_planner.txt"
 _MAX_USER_CHARS: int = 8192
-_MAX_TOOL_RESULT_CHARS: int = 1024
 
 _TAG_RE = re.compile(r"</?\s*[A-Za-z][A-Za-z0-9_-]*\s*[^>]*>")
 
@@ -106,6 +113,9 @@ class Tier1Reasoner:
         max_retries: int = 1,
         planner_prompt_path: Path | None = None,
         think: bool | None = None,
+        tool_result_chars: int = DEFAULT_TOOL_RESULT_CHARS,
+        turn_result_budget_chars: int = DEFAULT_TURN_RESULT_BUDGET_CHARS,
+        max_tokens: int = DEFAULT_PLANNER_MAX_TOKENS,
     ) -> None:
         """`think` controls Ollama's reasoning channel on both Tier-1 calls.
 
@@ -128,6 +138,15 @@ class Tier1Reasoner:
         self._client = client
         self._model = model
         self._think = think
+        # How much of each tool result the planner prompt carries, per model:
+        # prefill speed differs ~12x between small models, so one constant fits none
+        # of them. See runtime.harness.limits and the per-model profile knob.
+        self._tool_result_chars = tool_result_chars
+        self._turn_result_budget_chars = turn_result_budget_chars
+        # Output-token budget for both structured calls, thinking included. Per model
+        # for the same reason: a thinking model can spend all of a tight budget
+        # reasoning and never emit the JSON (qwen3-vl:4b: 30 of its 30 failures).
+        self._max_tokens = max_tokens
         self._prompt_template = (prompt_path or _PROMPT_PATH).read_text(encoding="utf-8")
         self._planner_prompt_template = (
             planner_prompt_path or _PLANNER_PROMPT_PATH
@@ -163,7 +182,7 @@ class Tier1Reasoner:
                 schema,
                 model=self._model,
                 temperature=0.0,
-                max_tokens=512,
+                max_tokens=self._max_tokens,
                 max_retries=self._max_retries,
                 events=self._events,
                 call_site="reasoning.tier1",
@@ -210,7 +229,11 @@ class Tier1Reasoner:
         system = self._planner_prompt_template.format(
             available_tools=_format_available_tools(available_skills),
             conversation_history=_format_history(recent),
-            call_history=_format_call_history(history),
+            call_history=_format_call_history(
+                history,
+                per_result_chars=self._tool_result_chars,
+                turn_budget_chars=self._turn_result_budget_chars,
+            ),
             user_text=bounded,
         )
         messages = [
@@ -226,7 +249,7 @@ class Tier1Reasoner:
                 schema,
                 model=self._model,
                 temperature=0.0,
-                max_tokens=512,
+                max_tokens=self._max_tokens,
                 max_retries=self._max_retries,
                 events=self._events,
                 call_site="reasoning.tier1.plan_next",
@@ -277,20 +300,31 @@ def _format_available_tools(skills: Sequence[SkillDescriptor]) -> str:
     return "\n".join(lines) if lines else "(none)"
 
 
-def _format_call_history(history: Sequence[tuple[ToolIntent, ToolResult]]) -> str:
-    """Render prior (call, result) pairs from the current turn."""
+def _format_call_history(
+    history: Sequence[tuple[ToolIntent, ToolResult]],
+    *,
+    per_result_chars: int = DEFAULT_TOOL_RESULT_CHARS,
+    turn_budget_chars: int = DEFAULT_TURN_RESULT_BUDGET_CHARS,
+) -> str:
+    """Render prior (call, result) pairs from the current turn.
+
+    Results are shown as decoded text, each limited per model, with the newest
+    results spending a shared per-turn budget first (runtime.harness.limits). The
+    planner re-sends every earlier result at every step, so without the budget a
+    5-step chain carries ~5x the per-result limit.
+    """
     if not history:
         return "(no calls yet on this turn)"
+    texts = [result_text(result) for _call, result in history]
+    limits = allocate_result_limits(
+        [len(t) for t in texts], per_result=per_result_chars, total=turn_budget_chars
+    )
     lines: list[str] = []
-    for idx, (call, result) in enumerate(history, start=1):
+    for idx, ((call, _result), text, limit) in enumerate(
+        zip(history, texts, limits, strict=True), start=1
+    ):
         args_blob = json.dumps(call.args, sort_keys=True)
-        if result.status == "error":
-            payload = f"ERROR: {result.error or '(no detail)'}"
-        else:
-            payload = json.dumps(result.payload, sort_keys=True)
-        if len(payload) > _MAX_TOOL_RESULT_CHARS:
-            payload = payload[: _MAX_TOOL_RESULT_CHARS] + "…(truncated)"
-        lines.append(f"{idx}. {call.tool}({args_blob}) → {payload}")
+        lines.append(f"{idx}. {call.tool}({args_blob}) → {clip_text(text, limit)}")
     return "\n".join(lines)
 
 

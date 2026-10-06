@@ -17,6 +17,13 @@ from runtime.chat.reply_verdict import annotate_unverified_claim
 from runtime.events import EventStream, EventType
 from runtime.harness.adapter import HarnessAdapter
 from runtime.harness.contract import ToolIntent, ToolResult
+from runtime.harness.limits import (
+    DEFAULT_TOOL_RESULT_CHARS,
+    DEFAULT_TURN_RESULT_BUDGET_CHARS,
+    allocate_result_limits,
+    clip_text,
+    result_text,
+)
 from runtime.llm.clients.base import ChatMessage, ChatRequest, ModelClient
 from runtime.reasoning.skill_runner import SkillRunner
 from runtime.skills.registry import SkillDescriptor, SkillRegistry
@@ -89,7 +96,6 @@ _SYNTHESIS_CHAIN_PROMPT_PATH = (
     / "prompts"
     / "tool_synthesis_chain.txt"
 )
-_MAX_CHAIN_RESULT_CHARS = 1024
 _GUARD_MIN_STEP = 2  # destructive-tool guard applies from step 2 onward
 
 # Classification-fallback sentinel (spec: docs/superpowers/specs/2026-08-21-
@@ -162,24 +168,32 @@ def _clarify_question(descriptor: SkillDescriptor) -> str:
     return f"Could you provide more details for: {descriptor.description}"
 
 
-def _render_chain(history: list[tuple[ToolIntent, ToolResult]]) -> str:
+def _render_chain(
+    history: list[tuple[ToolIntent, ToolResult]],
+    *,
+    per_result_chars: int = DEFAULT_TOOL_RESULT_CHARS,
+    turn_budget_chars: int = DEFAULT_TURN_RESULT_BUDGET_CHARS,
+) -> str:
     """Render the (call, result) chain into the chain-synthesis prompt slot.
 
-    Each result payload is clipped to bound prompt length; even a long chain
-    of fat results stays within `max_tokens`.
+    Shares the planner's rules (runtime.harness.limits): results are decoded text,
+    each limited per model, the newest spending a shared per-turn budget first. It
+    used to carry its own duplicate 1,024-character constant over the JSON-encoded
+    payload, so the planner and the synthesiser could disagree about what a result
+    said.
     """
     if not history:
         return "(no tools ran on this turn)"
+    texts = [result_text(result) for _call, result in history]
+    limits = allocate_result_limits(
+        [len(t) for t in texts], per_result=per_result_chars, total=turn_budget_chars
+    )
     lines: list[str] = []
-    for idx, (call, result) in enumerate(history, start=1):
+    for idx, ((call, _result), text, limit) in enumerate(
+        zip(history, texts, limits, strict=True), start=1
+    ):
         args_blob = _format_args(call.args)
-        if result.status == "error":
-            payload = f"ERROR: {result.error or '(no detail)'}"
-        else:
-            payload = str(result.payload) if result.payload is not None else "(empty)"
-        if len(payload) > _MAX_CHAIN_RESULT_CHARS:
-            payload = payload[:_MAX_CHAIN_RESULT_CHARS] + "…(truncated)"
-        lines.append(f"{idx}. {call.tool}({args_blob}) → {payload}")
+        lines.append(f"{idx}. {call.tool}({args_blob}) → {clip_text(text, limit)}")
     return "\n".join(lines)
 
 
@@ -285,6 +299,8 @@ class HarnessDispatcher:
         max_steps: int = 5,
         events: EventStream | None = None,
         clock: Callable[[], datetime] | None = None,
+        tool_result_chars: int = DEFAULT_TOOL_RESULT_CHARS,
+        turn_result_budget_chars: int = DEFAULT_TURN_RESULT_BUDGET_CHARS,
     ) -> None:
         self._classifier = classifier
         self._registry = registry
@@ -301,6 +317,10 @@ class HarnessDispatcher:
         # those land. See docs/PLAN_MULTI_STEP_AGENT_LOOP.md.
         self._multi_step = multi_step
         self._max_steps = max_steps
+        # How much of each tool result the chain-synthesis prompt carries; the same
+        # per-model value the planner uses (see runtime.harness.limits).
+        self._tool_result_chars = tool_result_chars
+        self._turn_result_budget_chars = turn_result_budget_chars
         # Evidence ledger (Phase 11 Track B). `None` keeps every existing
         # call site/test working unmodified — recording is opt-in.
         self._events = events
@@ -316,6 +336,26 @@ class HarnessDispatcher:
 
     def _footer(self) -> str:
         return f"\n\n[{self._provider} · {self._synthesis_model}]"
+
+    def _with_evidence(
+        self, summary: str, history: list[tuple[ToolIntent, ToolResult]]
+    ) -> str:
+        """The gated summary followed by the tool output it summarises.
+
+        The planner's one sentence was the whole reply, and a small model often leaves
+        out the very thing asked for: measured 2026-10-05, 6 of 9 searches found the
+        file but only 4 of 9 replies named it. Appending the results costs no second
+        model call, so it cannot re-hallucinate (the reason synthesis is skipped on
+        `task_complete`), and it uses the planner's own per-model limits.
+        """
+        if not history:
+            return summary
+        evidence = _render_chain(
+            history,
+            per_result_chars=self._tool_result_chars,
+            turn_budget_chars=self._turn_result_budget_chars,
+        )
+        return f"{summary}\n\nResults:\n{evidence}"
 
     def _append_event(self, event_type: EventType, payload: dict[str, Any]) -> None:
         """Log one structural event, if an EventStream is wired.
@@ -599,10 +639,10 @@ class HarnessDispatcher:
             if chain.completion_summary is not None:
                 # Planner claimed task_complete — the gate already checked the
                 # summary against this turn's evidence (ledger or history) and
-                # annotated it if needed. Use it directly as the reply; do NOT
+                # annotated it if needed. Reply with it plus the tool output; do NOT
                 # run chain synthesis, which would be a second model call that
                 # could re-hallucinate over the same (or gated) evidence.
-                reply_text = chain.completion_summary
+                reply_text = self._with_evidence(chain.completion_summary, chain.history)
                 logger.info("harness_dispatcher.completion_gate_reply")
             else:
                 history = chain.history
@@ -934,7 +974,11 @@ class HarnessDispatcher:
             identity = "AEGIS, an operator-facing assistant"
         logger.info("harness_dispatcher.chain_synthesis.tier1_load_done")
 
-        chain_text = _render_chain(history)
+        chain_text = _render_chain(
+            history,
+            per_result_chars=self._tool_result_chars,
+            turn_budget_chars=self._turn_result_budget_chars,
+        )
         verified_tools = ", ".join(sorted({call.tool for call, _ in history})) or "(none)"
         last_payload_text = _last_payload_text(history)
 
@@ -978,6 +1022,11 @@ class HarnessDispatcher:
                 "harness_dispatcher.chain_synthesis.chat_done",
                 extra={"reply_chars": len(response.content)},
             )
+            if not response.content.strip():
+                # A reasoning model can spend the whole token budget thinking and
+                # return "" with no error; the user would see only the footer.
+                logger.warning("harness_dispatcher.chain_synthesis_empty_reply")
+                return _clip(last_payload_text)
             return response.content
         except Exception:
             logger.exception("harness_dispatcher.chain_synthesis_failed")
@@ -1043,6 +1092,9 @@ class HarnessDispatcher:
                 "harness_dispatcher.synthesis.chat_done",
                 extra={"reply_chars": len(response.content)},
             )
+            if not response.content.strip():
+                logger.warning("harness_dispatcher.synthesis_empty_reply")
+                return _clip(tool_result_text)
             return response.content
         except Exception:
             logger.exception("harness_dispatcher.synthesis_failed")

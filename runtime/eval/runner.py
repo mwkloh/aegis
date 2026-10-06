@@ -11,26 +11,33 @@ from __future__ import annotations
 import shutil
 import tempfile
 import time
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from runtime.chat.memory.tier1 import Tier1Loader
 from runtime.chat.memory.tier3 import Tier3Store
 from runtime.chat.telegram.bot import build_harness_dispatcher
 from runtime.config import AegisConfig
-from runtime.eval.grading import CallRecord, classify_failure, grade_calls
+from runtime.eval.grading import CallRecord, FailureKind, classify_failure, grade_calls
 from runtime.eval.report import (
     ObservedCall,
     TaskResult,
     VariantResult,
     VariantTelemetry,
 )
-from runtime.eval.tasks import EvalTask, ExpectedCall, substitute_sandbox
+from runtime.eval.tasks import EvalTask, resolve_expected_calls, substitute_sandbox
 from runtime.events import EventStream
 from runtime.files.client import FilesClient
 from runtime.harness.adapter import HarnessAdapter
 from runtime.harness.contract import ToolIntent, ToolResult
 from runtime.llm.telemetry import CallTelemetry, collect_calls
 from runtime.skills.registry import SkillRegistry
+
+# One (task, variant) -> result. `run_variant` is the full-harness arm; the bare
+# arm (`runtime.eval.bare.run_variant_bare`) shares the signature.
+VariantRunner = Callable[
+    [AegisConfig, SkillRegistry, Tier1Loader, EvalTask, str], Awaitable[VariantResult]
+]
 
 
 class _ObservingHarness:
@@ -58,7 +65,7 @@ def _seed_fixture(task: EvalTask, sandbox: Path) -> None:
     for f in task.fixture.files:
         target = sandbox / f.path
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(f.content, encoding="utf-8")
+        target.write_text(f.render(), encoding="utf-8")
 
 
 async def run_variant(
@@ -119,13 +126,12 @@ async def _run_variant_inner(
 
     # Resolved up front so every exit path -- including the ones that never
     # reach the dispatcher -- can classify against the same expectations.
-    resolved_expected = tuple(
-        ExpectedCall(
-            tool=ec.tool,
-            args_match=substitute_sandbox(ec.args_match, sandbox),
-        )
-        for ec in task.expected_calls
-    )
+    resolved_expected = resolve_expected_calls(task, sandbox)
+
+    # Filled by the dispatcher's `reply=` callback; read by `_result` so every
+    # exit path -- including ones that raise mid-conversation -- keeps whatever
+    # the model had already said.
+    collected: list[str] = []
 
     def _result(
         *,
@@ -133,6 +139,7 @@ async def _run_variant_inner(
         reason: str,
         calls: tuple[ObservedCall, ...] = (),
         raw_calls: list[CallRecord] | None = None,
+        failure_kind: FailureKind | None = None,
     ) -> VariantResult:
         telemetry = VariantTelemetry.from_calls(model_calls)
         return VariantResult(
@@ -143,10 +150,12 @@ async def _run_variant_inner(
             duration_s=time.monotonic() - t0,
             actual_calls=calls,
             telemetry=telemetry,
+            reply="\n".join(collected) if collected else None,
             failure_kind=(
                 None
                 if passed
-                else classify_failure(resolved_expected, raw_calls or [], telemetry)
+                else failure_kind
+                or classify_failure(resolved_expected, raw_calls or [], telemetry)
             ),
         )
 
@@ -173,12 +182,11 @@ async def _run_variant_inner(
                     "build_harness_dispatcher returned None "
                     "(a hard dependency is unavailable)"
                 ),
+                failure_kind=FailureKind.HARNESS_UNAVAILABLE,
             )
 
         observing = _ObservingHarness(dispatcher._harness)
         dispatcher._harness = observing
-
-        collected: list[str] = []
 
         async def _capture(text: str) -> None:
             collected.append(text)
@@ -207,6 +215,7 @@ async def run_task(
     tier1_loader: Tier1Loader,
     task: EvalTask,
     repeat: int = 1,
+    run_fn: VariantRunner | None = None,
 ) -> TaskResult:
     """Run every variant of one task, sequentially (no concurrency -- keeps
     live-model call ordering predictable and easy to read in the console
@@ -218,11 +227,12 @@ async def run_task(
     minutes later. Defaults to 1 because the suite is slow and costs real
     tokens; opt in per investigation.
     """
+    runner = run_fn or run_variant
     results: list[VariantResult] = []
     for _ in range(repeat):
         for variant_text in task.variants:
             results.append(
-                await run_variant(cfg, registry, tier1_loader, task, variant_text)
+                await runner(cfg, registry, tier1_loader, task, variant_text)
             )
     return TaskResult(task_id=task.id, description=task.description, variants=tuple(results))
 

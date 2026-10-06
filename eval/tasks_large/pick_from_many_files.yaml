@@ -1,0 +1,36 @@
+id: pick_from_many_files
+description: "Long-listing probe: 24 monthly reports; the one wanted (2026-11) is near the end of the listing, past the planner prompt's 1,024-character clip. A model that cannot see it must search by name or guess a path."
+fixture:
+  files:
+    - {path: "reports/report-2025-01.csv", content: "total=1001"}
+    - {path: "reports/report-2025-02.csv", content: "total=1002"}
+    - {path: "reports/report-2025-03.csv", content: "total=1003"}
+    - {path: "reports/report-2025-04.csv", content: "total=1004"}
+    - {path: "reports/report-2025-05.csv", content: "total=1005"}
+    - {path: "reports/report-2025-06.csv", content: "total=1006"}
+    - {path: "reports/report-2025-07.csv", content: "total=1007"}
+    - {path: "reports/report-2025-08.csv", content: "total=1008"}
+    - {path: "reports/report-2025-09.csv", content: "total=1009"}
+    - {path: "reports/report-2025-10.csv", content: "total=1010"}
+    - {path: "reports/report-2025-11.csv", content: "total=1011"}
+    - {path: "reports/report-2025-12.csv", content: "total=1012"}
+    - {path: "reports/report-2026-01.csv", content: "total=2001"}
+    - {path: "reports/report-2026-02.csv", content: "total=2002"}
+    - {path: "reports/report-2026-03.csv", content: "total=2003"}
+    - {path: "reports/report-2026-04.csv", content: "total=2004"}
+    - {path: "reports/report-2026-05.csv", content: "total=2005"}
+    - {path: "reports/report-2026-06.csv", content: "total=2006"}
+    - {path: "reports/report-2026-07.csv", content: "total=2007"}
+    - {path: "reports/report-2026-08.csv", content: "total=2008"}
+    - {path: "reports/report-2026-09.csv", content: "total=2009"}
+    - {path: "reports/report-2026-10.csv", content: "total=2010"}
+    - {path: "reports/report-2026-11.csv", content: "total=4410"}
+    - {path: "reports/report-2026-12.csv", content: "total=2012"}
+variants:
+  - "read the report for November 2026 in {sandbox}/reports and tell me the total"
+  - "what is the total in the 2026-11 report under {sandbox}/reports?"
+  - "find report-2026-11.csv in {sandbox}/reports and give me its total"
+answer_contains: ["4410"]
+expected_calls:
+  - tool: files_read
+    args_match: {path: "report-2026-11.csv"}

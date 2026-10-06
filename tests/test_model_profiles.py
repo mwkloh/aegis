@@ -139,3 +139,160 @@ def test_construction_sites_resolve_think_per_model() -> None:
         src = Path(rel).read_text(encoding="utf-8")
         assert "think=cfg.models.smart_think" not in src, f"{rel} bypasses think_for"
         assert "think_for(" in src, f"{rel} does not resolve per-model think"
+
+
+# --- num_ctx: the context window decides whether a model fits in RAM -----
+# Measured 2026-10-03 on a 16 GB Mac Mini: `qwen3-vl:4b` defaults to a
+# 262,144-token context, which Ollama sized at 43 GB (80% CPU) and then hung;
+# at num_ctx=8192 the same model loaded at 4.2 GB, 100% GPU, and answered.
+
+
+def test_profile_carries_num_ctx_independently_of_think() -> None:
+    profile = _coerce_model_profiles({"qwen3-vl:4b": {"num_ctx": 16384}})["qwen3-vl:4b"]
+    assert profile.num_ctx == 16384
+    assert profile.think is None
+
+
+def test_num_ctx_must_be_positive() -> None:
+    """0 or negative would reach Ollama as a nonsense window; drop it at load."""
+    assert _coerce_model_profiles({"a:1b": {"num_ctx": 0}}) == {}
+    assert _coerce_model_profiles({"a:1b": {"num_ctx": -1}}) == {}
+
+
+def test_num_ctx_for_resolves_by_exact_model_id() -> None:
+    cfg = _config(env_think=None, profiles={"qwen3-vl:4b": ModelProfile(num_ctx=16384)})
+    assert cfg.num_ctx_for("qwen3-vl:4b") == 16384
+    assert cfg.num_ctx_for("qwen3-vl:4b-instruct") is None
+
+
+def test_num_ctx_for_is_none_without_a_profile() -> None:
+    assert _config(env_think=None, profiles={}).num_ctx_for("anything:1b") is None
+
+
+# --- tool_result_chars: how much of a tool result the planner prompt carries ---
+# Measured 2026-10-04 on this Mac Mini: prefill speed differs ~12x between the small
+# models (gemma4:e2b-mlx ~2,500 tok/s, qwen3.5:9b ~185), so the same 3,500 characters
+# costs +0.5 s on one and +6.4 s per planner call on another. The old fixed 1,024
+# had no measurement behind it. See docs/superpowers/plans/2026-10-04-mac-mini-rerun-and-bare-arm.md
+# section 14.
+
+
+def test_profile_carries_tool_result_chars_independently() -> None:
+    profile = _coerce_model_profiles({"qwen3.5:9b": {"tool_result_chars": 2048}})["qwen3.5:9b"]
+    assert profile.tool_result_chars == 2048
+    assert profile.think is None
+    assert profile.num_ctx is None
+
+
+def test_tool_result_chars_must_be_positive() -> None:
+    assert _coerce_model_profiles({"a:1b": {"tool_result_chars": 0}}) == {}
+    assert _coerce_model_profiles({"a:1b": {"tool_result_chars": -5}}) == {}
+
+
+def test_tool_result_chars_defaults_to_the_shared_limit() -> None:
+    from runtime.harness.limits import DEFAULT_TOOL_RESULT_CHARS
+
+    cfg = _config(env_think=None, profiles={})
+    assert cfg.tool_result_chars_for("anything:1b") == DEFAULT_TOOL_RESULT_CHARS
+
+
+def test_tool_result_chars_for_uses_the_models_profile() -> None:
+    cfg = _config(
+        env_think=None, profiles={"gemma4:e2b-mlx": ModelProfile(tool_result_chars=8000)}
+    )
+    assert cfg.tool_result_chars_for("gemma4:e2b-mlx") == 8000
+    assert cfg.tool_result_chars_for("qwen3.5:9b") != 8000
+
+
+def test_the_env_override_beats_a_profile_so_a_sweep_can_pin_one_value() -> None:
+    """`MODEL_TOOL_RESULT_CHARS` is the operator's escape hatch for a benchmark sweep,
+    the same direction MODEL_SMART_THINK already overrides a profile."""
+    base = _config(
+        env_think=None, profiles={"qwen3.5:9b": ModelProfile(tool_result_chars=8000)}
+    )
+    cfg = base.model_copy(update={"models": ModelConfig(tool_result_chars=1024)})
+    assert cfg.tool_result_chars_for("qwen3.5:9b") == 1024
+    assert cfg.tool_result_chars_for("anything:1b") == 1024
+
+
+@pytest.mark.parametrize("raw", [None, "", "  ", "abc", "0", "-5", "3.5"])
+def test_a_bad_env_value_is_ignored_not_fatal(raw: str | None) -> None:
+    from runtime.config import _parse_positive_int
+
+    assert _parse_positive_int(raw) is None
+
+
+def test_a_good_env_value_parses() -> None:
+    from runtime.config import _parse_positive_int
+
+    assert _parse_positive_int(" 8000 ") == 8000
+
+
+# --- planner_max_tokens: the structured-decision token budget ------------------
+# The planner was hard-coded to 512 output tokens, thinking included. Run 2 (full arm,
+# easy suite): qwen3-vl:4b had 81 calls cut off by it and all 30 of its failures were
+# `thinking_budget_exhausted`; qwen3.5:4b-mlx had 13 of 45 variants hit it and paid in
+# retries (57.8% inside the 30 s budget). The dispatcher's free-text synthesis already
+# allows 2,048, so only the structured decisions were on the tight budget. Same audit
+# as the tool-result clip; see docs/superpowers/plans/2026-10-04-mac-mini-rerun-and-bare-arm.md.
+
+
+def test_profile_carries_planner_max_tokens_independently() -> None:
+    profile = _coerce_model_profiles({"qwen3-vl:4b": {"planner_max_tokens": 2048}})["qwen3-vl:4b"]
+    assert profile.planner_max_tokens == 2048
+    assert profile.think is None
+    assert profile.tool_result_chars is None
+
+
+@pytest.mark.parametrize("bad", [0, -1, 8193])
+def test_planner_max_tokens_must_be_a_usable_request_budget(bad: int) -> None:
+    """ChatRequest allows 1..8192; anything else would fail every planner call."""
+    assert _coerce_model_profiles({"a:1b": {"planner_max_tokens": bad}}) == {}
+
+
+def test_planner_max_tokens_default_is_the_current_behaviour() -> None:
+    """The default stays 512 until the sweep decides, so a run without a profile is
+    still the clean baseline the sweep is measured against."""
+    from runtime.harness.limits import DEFAULT_PLANNER_MAX_TOKENS
+
+    assert DEFAULT_PLANNER_MAX_TOKENS == 512
+    assert _config(env_think=None, profiles={}).planner_max_tokens_for("x:1b") == 512
+
+
+def test_planner_max_tokens_for_uses_the_models_profile() -> None:
+    cfg = _config(
+        env_think=None, profiles={"qwen3-vl:4b": ModelProfile(planner_max_tokens=2048)}
+    )
+    assert cfg.planner_max_tokens_for("qwen3-vl:4b") == 2048
+    assert cfg.planner_max_tokens_for("gemma4:e4b-mlx") == 512
+
+
+def test_the_planner_budget_env_override_beats_a_profile() -> None:
+    base = _config(
+        env_think=None, profiles={"qwen3-vl:4b": ModelProfile(planner_max_tokens=2048)}
+    )
+    cfg = base.model_copy(update={"models": ModelConfig(planner_max_tokens=1024)})
+    assert cfg.planner_max_tokens_for("qwen3-vl:4b") == 1024
+    assert cfg.planner_max_tokens_for("anything:1b") == 1024
+
+
+def test_construction_sites_resolve_the_planner_budget_per_model() -> None:
+    from pathlib import Path
+
+    assert "planner_max_tokens_for(" in Path("runtime/chat/telegram/bot.py").read_text(
+        encoding="utf-8"
+    )
+    assert "planner_max_tokens_for(" in Path("runtime/chat/cli.py").read_text(encoding="utf-8")
+
+
+def test_construction_sites_resolve_the_result_limit_per_model() -> None:
+    """Both production wiring sites must go through `tool_result_chars_for`, and the
+    dispatcher must receive it too, so the planner and the synthesiser agree on what
+    a result said. A site that omits it silently falls back to the default."""
+    from pathlib import Path
+
+    bot = Path("runtime/chat/telegram/bot.py").read_text(encoding="utf-8")
+    cli = Path("runtime/chat/cli.py").read_text(encoding="utf-8")
+
+    assert bot.count("tool_result_chars_for(") >= 2  # Tier1Reasoner and HarnessDispatcher
+    assert "tool_result_chars_for(" in cli

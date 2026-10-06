@@ -8,6 +8,7 @@ variants:
   - "read {sandbox}/report.txt"
   - "what does {sandbox}/report.txt say?"
   - "open {sandbox}/report.txt and tell me what's in it"
+answer_contains: ["Q3 numbers look good"]
 expected_calls:
   - tool: files_read
     args_match: {path: "{sandbox}/report.txt"}

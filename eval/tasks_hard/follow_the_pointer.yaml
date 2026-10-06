@@ -1,0 +1,20 @@
+id: follow_the_pointer
+description: "Dependent read: the second file's path is only known from the first file's contents."
+fixture:
+  files:
+    - path: "index.txt"
+      content: "Quarterly figures are stored in archive/q3-figures.txt"
+    - path: "archive/q3-figures.txt"
+      content: "Q3 revenue: 4.2M"
+    - path: "archive/q2-figures.txt"
+      content: "Q2 revenue: 3.9M"
+variants:
+  - "read {sandbox}/index.txt and then open whichever file it points to"
+  - "check {sandbox}/index.txt for where the quarterly figures live, then read that file and tell me the revenue"
+  - "{sandbox}/index.txt says where the Q3 numbers are - go read them and report the revenue figure"
+answer_contains: ["4.2M"]
+expected_calls:
+  - tool: files_read
+    args_match: {path: "index.txt"}
+  - tool: files_read
+    args_match: {path: "q3-figures.txt"}

@@ -163,3 +163,59 @@ async def test_runner_leaves_failure_kind_unset_on_success(
     # No calls were made, so it still fails -- but the label must reflect that,
     # never a stale value from a previous run.
     assert result.failure_kind == "no_tool_call"
+
+
+async def test_runner_labels_an_unbuildable_dispatcher_as_a_harness_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The model was never asked, so this must not read as the model declining.
+
+    2026-10-03 overnight run: 30 of 45 `llama3.2:3b` variants and 14 of 45
+    `qwen3-vl:4b` variants failed in ~2s because the Ollama liveness probe
+    could not get an answer. They were labelled `no_tool_call` -- the same
+    bucket as `lfm2.5:8b` genuinely declining -- and nearly published as model
+    results.
+    """
+    monkeypatch.setattr(runner_mod, "build_harness_dispatcher", lambda *a, **k: None)
+    result = await runner_mod.run_variant(
+        get_config(),
+        registry=None,  # type: ignore[arg-type]
+        tier1_loader=None,  # type: ignore[arg-type]
+        task=_task(),
+        variant_text="what time is it?",
+    )
+
+    assert not result.passed
+    assert result.failure_kind == "harness_unavailable"
+
+
+class _ReplyingDispatcher(_StubDispatcher):
+    """Replies to the user the way the real dispatcher does, via `reply=`."""
+
+    def __init__(self, *texts: str) -> None:
+        super().__init__(calls=[])
+        self._texts = texts
+
+    async def dispatch(self, **kwargs: Any) -> None:
+        for text in self._texts:
+            await kwargs["reply"](text)
+
+
+async def test_runner_records_the_final_reply(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pass/fail grades the tool calls, never the words. Whether the model then
+    *claimed* something it never did is only visible in the reply, so it has to
+    be kept -- it was previously collected and thrown away."""
+    result = await _run(
+        monkeypatch, _ReplyingDispatcher("I listed 3 files.", "Anything else?")
+    )
+
+    assert result.reply == "I listed 3 files.\nAnything else?"
+
+
+async def test_runner_reply_is_none_when_the_model_said_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Absent, not an empty string -- the same distinction telemetry draws."""
+    result = await _run(monkeypatch, _ReplyingDispatcher())
+
+    assert result.reply is None

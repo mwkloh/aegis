@@ -520,3 +520,130 @@ async def test_think_true_is_forwarded_explicitly() -> None:
     await reasoner.plan_next(user_text="hi", available_skills=[_files_list_skill()])
 
     assert stub.calls[0].think is True
+
+
+# --- the planner's output-token budget -------------------------------------------
+# Hard-coded to 512 (thinking tokens included) at both call sites. See
+# tests/test_model_profiles.py for the measurements behind making it per-model.
+
+
+@pytest.mark.asyncio
+async def test_plan_next_defaults_to_the_current_512_token_budget() -> None:
+    stub = _StubClient(content='{"remaining": [], "kind": "respond"}')
+    reasoner = Tier1Reasoner(client=stub, model="m")
+
+    await reasoner.plan_next(user_text="hi", available_skills=[_files_list_skill()])
+
+    assert stub.calls[0].max_tokens == 512
+
+
+@pytest.mark.asyncio
+async def test_plan_next_uses_the_per_model_token_budget() -> None:
+    stub = _StubClient(content='{"remaining": [], "kind": "respond"}')
+    reasoner = Tier1Reasoner(client=stub, model="m", max_tokens=2048)
+
+    await reasoner.plan_next(user_text="hi", available_skills=[_files_list_skill()])
+
+    assert stub.calls[0].max_tokens == 2048
+
+
+@pytest.mark.asyncio
+async def test_reason_uses_the_same_per_model_token_budget() -> None:
+    """Both Tier-1 call sites share one budget, or a model could be rescued in one
+    path and starved in the other."""
+    stub = _StubClient(content='{"args": {"message": "hi"}, "rationale": "greeting"}')
+    reasoner = Tier1Reasoner(client=stub, model="m", max_tokens=1500)
+
+    await reasoner.reason(_ask_question(), "hi")
+
+    assert stub.calls[0].max_tokens == 1500
+
+
+# --- tool-result limits: decoded, per-model, budgeted --------------------------
+# The planner used to clip each result to 1,024 chars of its JSON-encoded form, with
+# no rationale or measurement. See docs/superpowers/plans/2026-10-04-mac-mini-rerun-and-bare-arm.md
+# section 14 and tests/test_harness_limits.py for the shared rules.
+
+
+def _read_history(*texts: str) -> list[tuple[ToolIntent, ToolResult]]:
+    return [
+        (
+            ToolIntent(tool="files_read", args={"path": f"/x/{i}.log"}, skill_id="read_file"),
+            ToolResult(status="ok", payload={"result": text}),
+        )
+        for i, text in enumerate(texts)
+    ]
+
+
+def test_call_history_shows_a_result_in_full_up_to_the_per_model_limit() -> None:
+    from runtime.reasoning.tier1_reasoner import _format_call_history
+
+    out = _format_call_history(
+        _read_history("A" * 3000), per_result_chars=3500, turn_budget_chars=8000
+    )
+
+    assert "A" * 3000 in out
+    assert "truncated" not in out
+
+
+def test_call_history_clips_past_the_limit_and_says_how_much_there_was() -> None:
+    from runtime.reasoning.tier1_reasoner import _format_call_history
+
+    out = _format_call_history(
+        _read_history("B" * 5000), per_result_chars=1000, turn_budget_chars=8000
+    )
+
+    assert "B" * 1000 in out
+    assert "B" * 1001 not in out
+    assert "showing 1,000 of 5,000 chars" in out
+
+
+def test_call_history_is_decoded_text_not_a_json_string() -> None:
+    """Encoding spent the clip on `\\n` escapes and a `{"result": ...}` wrapper."""
+    from runtime.reasoning.tier1_reasoner import _format_call_history
+
+    out = _format_call_history(
+        _read_history("line one\nline two"), per_result_chars=3500, turn_budget_chars=8000
+    )
+
+    assert "line one\nline two" in out
+    assert '{"result"' not in out
+    assert "\\n" not in out
+
+
+def test_call_history_shares_a_turn_budget_newest_first() -> None:
+    from runtime.reasoning.tier1_reasoner import _format_call_history
+
+    out = _format_call_history(
+        _read_history("C" * 5000, "D" * 5000, "E" * 5000),
+        per_result_chars=3500,
+        turn_budget_chars=8000,
+    )
+
+    assert out.count("showing 3,500 of 5,000 chars") == 2  # the two newest
+    assert out.count("showing 1,000 of 5,000 chars") == 1  # the oldest gets the remainder
+
+
+def test_call_history_defaults_come_from_the_shared_limits_module() -> None:
+    import inspect
+
+    from runtime.harness.limits import DEFAULT_TOOL_RESULT_CHARS, DEFAULT_TURN_RESULT_BUDGET_CHARS
+    from runtime.reasoning.tier1_reasoner import _format_call_history
+
+    params = inspect.signature(_format_call_history).parameters
+    assert params["per_result_chars"].default == DEFAULT_TOOL_RESULT_CHARS
+    assert params["turn_budget_chars"].default == DEFAULT_TURN_RESULT_BUDGET_CHARS
+
+
+@pytest.mark.asyncio
+async def test_plan_next_uses_the_per_model_result_limit() -> None:
+    stub = _StubClient(content='{"remaining": [], "kind": "respond"}')
+    reasoner = Tier1Reasoner(client=stub, model="m", tool_result_chars=1200)
+
+    await reasoner.plan_next(
+        user_text="read it",
+        available_skills=[_files_list_skill()],
+        history=_read_history("F" * 3000),
+    )
+
+    assert "showing 1,200 of 3,000 chars" in stub.calls[0].messages[0].content
