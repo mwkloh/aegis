@@ -368,3 +368,41 @@ def test_env_parsing_for_the_harness_overrides() -> None:
     )["models"]
     assert bad.harness_mode is None
     assert bad.guardrails is None
+
+
+def test_plan_lock_is_dropped_in_native_mode_even_when_an_override_asks_for_it() -> None:
+    from runtime.harness.guardrails import Guardrails
+
+    base = _config(env_think=None, profiles={})
+    cfg = base.model_copy(
+        update={
+            "models": ModelConfig(
+                harness_mode="native", guardrails=frozenset({"plan_lock", "evidence"})
+            )
+        }
+    )
+    assert cfg.guardrails_for("x:1b") == Guardrails(
+        autofill=False, claim_gate=False, evidence=True, synthesis=False, plan_lock=False
+    )
+
+
+def test_plan_lock_is_kept_in_planner_mode_with_an_explicit_set() -> None:
+    from runtime.harness.guardrails import Guardrails
+
+    cfg = _config(
+        env_think=None,
+        profiles={
+            "p:1b": ModelProfile(harness_mode="planner", guardrails=frozenset({"plan_lock"}))
+        },
+    )
+    assert cfg.guardrails_for("p:1b") == Guardrails(
+        autofill=False, claim_gate=False, evidence=False, synthesis=False, plan_lock=True
+    )
+
+
+def test_a_valid_native_profile_loads() -> None:
+    profiles = _coerce_model_profiles(
+        {"g:4b": {"harness_mode": "native", "guardrails": ["evidence"]}}
+    )
+    assert profiles["g:4b"].harness_mode == "native"
+    assert profiles["g:4b"].guardrails == frozenset({"evidence"})
