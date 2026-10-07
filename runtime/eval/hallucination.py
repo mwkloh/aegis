@@ -46,6 +46,7 @@ from pathlib import Path
 
 from runtime.eval.report import EvalReport, VariantResult
 from runtime.eval.tasks import EvalTask, load_tasks
+from runtime.files.client import ABSOLUTE_PATH_EXAMPLE
 
 _THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL)
 
@@ -203,8 +204,12 @@ def grade_reply(task: EvalTask, variant: VariantResult) -> ReplyGrade:
 
     # A name is legitimate if the model could have got it from the fixture: a file's
     # own name, the prompt, or a pointer inside a file's contents ("see q4-final.txt").
-    known = {Path(f.path).name.lower() for f in task.fixture.files} | _basenames(
-        variant.variant_text
+    # Or from the harness itself: the relative-path error's example, which an evidence
+    # block echoes verbatim (night 2, 2026-10-08).
+    known = (
+        {Path(f.path).name.lower() for f in task.fixture.files}
+        | _basenames(variant.variant_text)
+        | _basenames(ABSOLUTE_PATH_EXAMPLE)
     )
     for fixture_file in task.fixture.files:
         known |= _basenames(fixture_file.render())

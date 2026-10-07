@@ -21,6 +21,9 @@ MAX_WRITE_BYTES = 256 * 1024  # 256 KiB — a chat-driven write has no business 
 _SEARCH_KIND = frozenset({"file", "directory", "any"})
 _APP_NAME_RE = re.compile(r"^[A-Za-z0-9 _.-]+$")
 _APP_NAME_MAX_LEN = 64
+# Shown to the model in the relative-path error. Public so the eval's hallucination
+# grader can tell the harness's own example apart from a name the model invented.
+ABSOLUTE_PATH_EXAMPLE = "/Users/you/Desktop/foo.png"
 
 
 class PathDenied(Exception):
@@ -73,7 +76,7 @@ class FilesClient:
     def _validate(self, p: str) -> Path:
         if not p.startswith(("/", "~")):
             raise PathDenied(
-                f"Path {p!r} must be absolute (e.g. /Users/you/Desktop/foo.png) "
+                f"Path {p!r} must be absolute (e.g. {ABSOLUTE_PATH_EXAMPLE}) "
                 "or start with '~'. Relative paths are not accepted."
             )
         resolved = Path(p).expanduser().resolve()
