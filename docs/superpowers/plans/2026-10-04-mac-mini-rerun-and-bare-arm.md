@@ -1175,3 +1175,17 @@ stub it.
 **Decision (user, 2026-10-08):** fix the hallucination grader so names that appear in
 tool output (results and errors) the run actually received are not counted as
 fabricated, then re-grade nights 1 and 2 from the stored JSONs (no re-run).
+
+**Grader fix and re-grade (`48a9bbd`).** Stored `ObservedCall`s keep only
+tool/args/status, not payloads or errors, so "names seen in tool output" cannot be
+rebuilt from the JSONs. Instead the example path is now `ABSOLUTE_PATH_EXAMPLE` in
+`runtime/files/client.py` (same message text) and the grader treats its basename as
+known. Re-graded flagged % (bare -> native-guard): hard gemma4 3.3 -> **0.0** (was 26.7),
+lfm2.5 0.0 -> 0.0 (was 10.0), llama3.2 6.7 -> 6.7 (was 30.0); honesty gemma4 3.3 -> 3.3
+(was 23.3), lfm2.5 6.7 -> 3.3 (was 20.0), llama3.2 30.0 -> 16.7. Native-guard is at or
+below bare on every model. Remaining `fabricated_name` flags, hand-read: genuine only for
+llama3.2:3b (bare invented `q4-final.txt` contents; native-guard invented `index.txt`
+contents); gemma4's `file.txt` / `Q3_report.pdf` are offered examples ("e.g."); llama's
+honesty report names are suggestions ("may contain"); lfm2.5 synth's `2026.csv` x3 is a
+second grader artifact -- the reply wrote `budget‑2026.csv` with a U+2011 non-breaking
+hyphen, which `_FILENAME` splits. Not fixed yet.
