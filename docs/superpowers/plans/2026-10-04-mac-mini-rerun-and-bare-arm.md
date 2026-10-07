@@ -1102,3 +1102,76 @@ Readings:
 control, record when the fallback fires), then re-plan night 2 to cover: honesty x10,
 the three skipped hard synth configs, synth re-runs on both qwen models, then the planner
 arms (`full` hard, `full-nolock` easy + hard) as time allows.
+
+## 21. Ablation night 2 (2026-10-07 21:16 to 2026-10-08 ~07:00)
+
+**Changes before the night.** `ae56e22`: both synthesis calls send `think=False`
+(`_SYNTHESIS_THINK`). Not the per-model planner `think` that section 20 proposed: the
+profile has qwen3.5:4b-mlx at `think=True` (measured on the planner), so following it
+would not have fixed qwen. Fallback recording was deferred (the runner does not read
+dispatcher events); the `trnc` column already exposes the defect. `5217762`: `make lint`
+and `make type` green on main (type-only fixes). Night-1 qwen synth results moved to
+`eval/results/ablation/invalid_synth_think/`. The night script was re-ordered by
+priority (honesty first) and gained a synth smoke gate on qwen3.5:4b-mlx
+(`truncated_calls == 0`); started ~70 min early from the desktop terminal pane.
+
+**Coverage.** Honesty 10/10; synth smoke **PASS** (5 variants, 0 truncated, slowest
+call 14.1 s vs 76.4 s on night 1); synth re-runs 6/6; `full` hard 5/5; `full-nolock`
+9/10. Missing: `full-nolock` qwen3.5:9b hard (started 06:42 NZDT; the log ends with no
+abnormal-exit or DONE line, so the script itself was stopped, most likely its terminal
+tab or the app closing, not the per-config cap).
+
+**Results** (TGC / correct-within-30 s budget; `full` easy is the 2026-10-05 run in
+`eval/results/fixed/easy`):
+
+| suite | model | bare | native-guard | synth | full | full-nolock |
+|---|---|---|---|---|---|---|
+| easy | llama3.2:3b | 53.3 | 53.3 | 51.1 | 37.8 | 28.9 |
+| easy | qwen3.5:4b-mlx | 86.7 | 86.7 | 86.7 | 86.7/55.6 | **91.1** |
+| easy | gemma4:e4b-mlx | 93.3 | 93.3 | 91.1 | 88.9 | 93.3 |
+| easy | lfm2.5:8b | 86.7 | 84.4 | **91.1** | 0.0 | 0.0 |
+| easy | qwen3.5:9b | 93.3 | 93.3 | 93.3 | 80.0/37.8 | 80.0/44.4 |
+| hard | llama3.2:3b | 6.7 | 6.7 | 6.7 | 0.0 | 0.0 |
+| hard | qwen3.5:4b-mlx | 90.0 | 90.0 | 90.0 | 73.3 | 80.0 |
+| hard | gemma4:e4b-mlx | 53.3 | 56.7 | **63.3** | 50.0 | 36.7 |
+| hard | lfm2.5:8b | **66.7** | 56.7 | 60.0 | 0.0 | 0.0 |
+| hard | qwen3.5:9b | 90.0 | 86.7 | 86.7 | 76.7/26.7 | missing |
+| honesty | llama3.2:3b | 40.0 | **50.0** | | | |
+| honesty | qwen3.5:4b-mlx | 83.3 | **90.0** | | | |
+| honesty | gemma4:e4b-mlx | 100.0 | 100.0 | | | |
+| honesty | lfm2.5:8b | 73.3 | **80.0** | | | |
+| honesty | qwen3.5:9b | 100.0 | 100.0 | | | |
+
+Where only one number is shown, in-budget equals TGC.
+
+Readings:
+1. **The synthesis fix holds.** qwen synth in-budget 0% -> 86.7-93.3%, TGC equal to
+   native-guard.
+2. **Synthesis helps gemma4 on hard (+10 vs bare) and lfm2.5 on easy (+4.4);** neutral
+   on qwen, slightly below bare for lfm2.5 hard.
+3. **The planner arms lose to bare almost everywhere at 2-4x the time.** lfm2.5:8b is 0%
+   under both planner arms (the planner never makes a tool call; 45/45 `no_tool_call` on
+   easy). qwen3.5:9b `full` hard is 26.7% in budget. Plan-lock (`full` vs `full-nolock`)
+   is mixed: dropping it helps qwen3.5:4b-mlx (easy 86.7 -> 91.1, hard 73.3 -> 80.0) and
+   hurts gemma4 on hard (50.0 -> 36.7).
+4. **Honesty: native-guard >= bare on correctness for all five models.**
+
+**Hallucination flags, hand-read (spec section 7 veto).** The native-guard rise in
+`fabricated_name` is almost all a grader artifact. The files tool's relative-path error
+reads "must be absolute (e.g. /Users/you/Desktop/foo.png)"; native-guard's evidence
+guardrail echoes tool results, errors included, into the reply, and the grader treats
+`foo.png` as a name the model invented. `foo.png` accounts for gemma4 hard 8/8, honesty
+6/7; lfm2.5 hard 3/3, honesty 5/5; llama3.2 hard 7/10. Genuine cases are few: llama3.2
+**bare** invented the contents of `q4-final.txt` on honesty (2); llama3.2 native-guard
+named six report files on `find_absent_report` (not yet checked whether they are invented
+answers or echoed search patterns); gemma4 named `q3_report.pdf` once. Native-guard is
+**not** vetoed on this evidence.
+
+**Side effect found.** The eval runs the real `files_open`, which calls `/usr/bin/open`:
+models that "open" a sandbox file put real windows on the desktop (44 after night 2: 24
+TextEdit, 20 Xcode `.md` editors, closed by hand). Harmless to scores; the eval should
+stub it.
+
+**Decision (user, 2026-10-08):** fix the hallucination grader so names that appear in
+tool output (results and errors) the run actually received are not counted as
+fabricated, then re-grade nights 1 and 2 from the stored JSONs (no re-run).
