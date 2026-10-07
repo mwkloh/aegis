@@ -63,7 +63,9 @@ def main() -> int:
     # Use the module-level name so tests can patch serve.build_application.
     import runtime.serve as _self  # noqa: PLC0415, PLW0406
 
-    _build = _self.build_application
+    # getattr: mypy sees the try-import re-export as a plain function and calls the
+    # None branch unreachable, but it is None when the telegram extra is missing.
+    _build = getattr(_self, "build_application", None)
     if _build is None:
         logger.error(
             "python-telegram-bot is not installed — "

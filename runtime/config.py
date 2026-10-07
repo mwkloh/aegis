@@ -11,7 +11,7 @@ import logging
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
@@ -540,7 +540,7 @@ def _parse_harness_mode(raw: str | None) -> HarnessMode | None:
     return None
 
 
-def _parse_guardrails(raw: str | None) -> frozenset[str] | None:
+def _parse_guardrails(raw: str | None) -> frozenset[GuardrailName] | None:
     """Comma list of guardrail names; `none` = empty set; any unknown name -> None."""
     if raw is None or not raw.strip():
         return None
@@ -550,7 +550,7 @@ def _parse_guardrails(raw: str | None) -> frozenset[str] | None:
     if not names <= _GUARDRAIL_NAMES:
         logger.warning("config.guardrails.unrecognized_value", extra={"raw": raw})
         return None
-    return names
+    return cast("frozenset[GuardrailName]", names)  # every name checked just above
 
 
 def _parse_tristate_bool(raw: str | None) -> bool | None:

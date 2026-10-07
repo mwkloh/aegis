@@ -157,9 +157,7 @@ def _last_payload_text(history: list[tuple[ToolIntent, ToolResult]]) -> str:
     _, last = history[-1]
     if last.status == "error" and last.error:
         return last.error
-    if last.payload is not None:
-        return str(last.payload)
-    return "(empty)"
+    return str(last.payload)
 
 
 def _clip(text: str) -> str:
@@ -693,7 +691,8 @@ class HarnessDispatcher:
         send: Callable[[str], Awaitable[None]],
     ) -> DispatchOutcome:
         """Native harness mode: the model tool-calls in its own format (spec section 4)."""
-        assert self._native_chat is not None  # guaranteed by __init__
+        if self._native_chat is None:  # guaranteed by __init__; explicit so -O keeps it
+            raise RuntimeError("native harness mode without a native chat client")
 
         def _ledger(intent: ToolIntent, result: ToolResult) -> None:
             self._record_tool_call(
@@ -1057,10 +1056,8 @@ class HarnessDispatcher:
 
         if result.status == "error" and result.error:
             tool_result_text = result.error
-        elif result.payload is not None:
-            tool_result_text = str(result.payload)
         else:
-            tool_result_text = "(empty)"
+            tool_result_text = str(result.payload)
 
         logger.info("harness_dispatcher.synthesis.prompt_read_start")
         try:

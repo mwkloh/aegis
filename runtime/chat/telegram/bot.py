@@ -34,7 +34,7 @@ import sys
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from telegram.constants import ChatAction
 
@@ -73,6 +73,9 @@ from runtime.llm.clients import OpenRouterClient
 from runtime.llm.clients.base import ModelClient
 from runtime.llm.clients.ollama_client import OllamaClient, OllamaHostError
 from runtime.llm.clients.openrouter_client import OpenRouterConfigError
+
+if TYPE_CHECKING:
+    from runtime.files.client import FilesClient
 from runtime.llm.router import LocalReadyProbe, ModelRouter, ModelTier
 from runtime.scheduler import (
     JobRunner,
@@ -140,7 +143,7 @@ def build_dispatcher(
     heartbeat_path: Path | None = None,
     health_store: ScheduledJobStore | None = None,
     fire_now_fn: Callable[[str], None] | None = None,
-    files_client: object | None = None,
+    files_client: FilesClient | None = None,
     skill_loader: SkillLoader | None = None,
     skill_state: ChatSkillState | None = None,
     staging_dir: Path | None = None,
@@ -820,7 +823,7 @@ def build_harness_dispatcher(
     skill_registry: SkillRegistry | None,
     tier3: Tier3Store,
     tier1_loader: Tier1Loader,
-    files_client: object | None = None,
+    files_client: FilesClient | None = None,
     events: EventStream | None = None,
 ) -> Any | None:
     """Build a HarnessDispatcher or return None if any hard dependency is unavailable."""
@@ -868,7 +871,7 @@ def build_harness_dispatcher(
             )
             return None
 
-    _file_tools: dict = {}
+    _file_tools: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {}
     if files_client is not None:
         try:
             _file_tools = make_files_tools(files_client)
@@ -1296,7 +1299,7 @@ def build_application(
     board_runner = build_board_stack(cfg, registry=long_runner.registry)
     from runtime.files.client import FilesClient  # noqa: PLC0415
     try:
-        files_client: object | None = FilesClient(cfg.files.allowed_roots)
+        files_client: FilesClient | None = FilesClient(cfg.files.allowed_roots)
     except ValueError:
         logger.warning("files.disabled", extra={"reason": "no_allowed_roots"})
         files_client = None

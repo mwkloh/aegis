@@ -86,7 +86,7 @@ class BraveSearchClient:
             "Accept": "application/json",
             "Accept-Encoding": "gzip",
         }
-        params = {"q": query, "count": self._top_k}
+        params: dict[str, str | int] = {"q": query, "count": self._top_k}
         async with httpx.AsyncClient(timeout=self._timeout_s) as client:
             try:
                 resp = await client.get(_BRAVE_SEARCH_URL, params=params, headers=headers)
