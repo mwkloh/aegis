@@ -1189,3 +1189,58 @@ contents); gemma4's `file.txt` / `Q3_report.pdf` are offered examples ("e.g."); 
 honesty report names are suggestions ("may contain"); lfm2.5 synth's `2026.csv` x3 is a
 second grader artifact -- the reply wrote `budget‑2026.csv` with a U+2011 non-breaking
 hyphen, which `_FILENAME` splits. Not fixed yet.
+
+## 22. Decision analysis (2026-10-09, spec section 7)
+
+Script `~/aegis-eval-run-scripts/decide.py` (re-runnable from the repo root). Metric as
+the spec defines it, per variant: **correct** (reply holds every `answer_contains` fact;
+tool-call pass only for tasks that declare none) **and within budget** (no timed-out
+call, every call <= 30 s). This is stricter than the `inbud` column in sections 20-21,
+which used the tool-call pass. Easy + hard pooled (n=75 per cell); an arm is pooled only
+if it has both suites. Spec `full-lock` = code `full-nolock` (plan-lock off).
+
+**Correct within budget, % (flag rate %)**
+
+| model | bare | native+guard | +synth | full-lock | full |
+|---|---|---|---|---|---|
+| llama3.2:3b | 28.0 (6.7) | **30.7** (2.7) | 29.3 (0.0) | 18.7 (5.3) | 26.7 (4.0) |
+| qwen3.5:4b-mlx | 85.3 (2.7) | **84.0** (2.7) | 88.0 (0.0) | 84.0 (0.0) | 61.3 (0.0) |
+| gemma4:e4b-mlx | 77.3 (1.3) | **78.7** (0.0) | 80.0 (0.0) | 66.7 (1.3) | 64.0 (5.3) |
+| lfm2.5:8b | 74.7 (0.0) | **77.3** (0.0) | 80.0 (8.0) | 0.0 | 0.0 |
+| qwen3.5:9b | 92.0 (2.7) | **90.7** (2.7) | 90.7 (1.3) | easy only | 29.3 (0.0) |
+
+Honesty (bare vs native+guard only): llama3.2 40.0 -> 50.0, qwen3.5:4b 83.3 -> 90.0,
+gemma4 100 -> 100, lfm2.5 73.3 -> 80.0, qwen3.5:9b 100 -> 100.
+
+**Rules applied:**
+1. Veto: no arm's flag rate exceeds the next-cheaper arm's by 10 points. Largest gap
+   lfm2.5 synth +8.0, which is the U+2011 grader artifact (section 21). Nothing vetoed.
+2. Best vs cheapest-within-15: synth is best for qwen3.5:4b (88.0), gemma4 (80.0) and
+   lfm2.5 (80.0), but native+guard is within 4 points every time, so the cheaper arm
+   ships. **native+guard for all five models.**
+3. Guardrails-off: bare never beats native+guard by 15 (largest bare lead +1.3 on
+   qwen3.5:9b). Guardrails stay.
+4. Plan-lock: `full` minus `full-lock` = llama3.2 +8.0, qwen3.5:4b -22.7, gemma4 -2.7,
+   lfm2.5 0.0; none reaches +15. **Remove plan-lock.** The missing qwen3.5:9b
+   `full-lock` hard cell cannot change this: keeping it would need `full-lock` pooled
+   <= 14.3, i.e. a negative hard score given 37.8 on easy.
+5. Inferred by family (unmeasured): gemma4:e2b-mlx, llama3.1:8b, qwen3-vl:4b ->
+   native+guard, marked "inferred" until run.
+
+**Recommendation per model:** `harness_mode=native`, guardrails
+`autofill, claim_gate, evidence` (no synthesis, no planner) for llama3.2:3b,
+qwen3.5:4b-mlx, gemma4:e4b-mlx, lfm2.5:8b, qwen3.5:9b; inferred for the three above.
+
+**How solid.** The win over the planner is large and consistent (16-81 points over
+`full` for every model except llama3.2, which is unusable on hard under any arm at ~7%).
+The choice of native+guard over synth or bare is within noise: at n=75 a difference of
+under ~13 points is not distinguishable, so the decision rests on rule 2's "cheapest
+within 15", not on native+guard scoring highest. Synth is the arm to revisit if a model
+is used mainly for multi-step work (gemma4 hard +6.6 over native+guard).
+
+**Not shippable yet.** Native mode carries the section-19 pre-production blockers (R7
+plain-chat turns, R8 no `recent` context, R9 exception-after-tools returns PASS) and has
+no production prompt/persona. Native mode is Ollama-only; off-Ollama the dispatcher falls
+back to the planner (R5). So the next code step is fixing R7-R9, then setting each
+`ModelProfile`'s `harness_mode`/`guardrails`; removing plan-lock is a separate small change
+to the planner defaults.
