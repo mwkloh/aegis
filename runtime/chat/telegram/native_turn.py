@@ -17,7 +17,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from runtime.harness.contract import ToolIntent, ToolResult
-from runtime.harness.guardrails import DESTRUCTIVE_TOOLS, autofill_path
+from runtime.harness.guardrails import DESTRUCTIVE_TOOLS, autofill_path, strip_evidence
 from runtime.harness.limits import clip_text, result_text
 from runtime.harness.native_loop import NATIVE_SYSTEM_PROMPT, build_tool_specs, parse_tool_calls
 from runtime.skills.registry import SkillDescriptor
@@ -31,6 +31,19 @@ class NativeTurnResult:
     final_text: str | None
     hit_cap: bool
     guarded_intent: ToolIntent | None = None
+
+
+def _recent_message(role: str, text: str, limit: int) -> dict[str, str]:
+    """One prior chat turn as the model sees it.
+
+    A bot reply loses its appended tool output: replayed as "assistant" the model
+    would take untrusted file contents for its own words. Each turn is clipped like
+    a tool result so history cannot crowd the system prompt out of a small context.
+    """
+    if role == "bot":
+        text = strip_evidence(text) or "(replied with tool results)"
+        return {"role": "assistant", "content": clip_text(text, limit)}
+    return {"role": "user", "content": clip_text(text, limit)}
 
 
 async def run_native_turn(
@@ -58,10 +71,7 @@ async def run_native_turn(
     specs = build_tool_specs(descriptors, harness.has_tool)
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": NATIVE_SYSTEM_PROMPT},
-        *(
-            {"role": "assistant" if role == "bot" else "user", "content": text}
-            for role, text in recent
-        ),
+        *(_recent_message(role, text, tool_result_chars) for role, text in recent),
         {"role": "user", "content": user_text},
     ]
     history: list[tuple[ToolIntent, ToolResult]] = []

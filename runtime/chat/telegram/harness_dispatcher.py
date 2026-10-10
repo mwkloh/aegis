@@ -721,19 +721,17 @@ class HarnessDispatcher:
             )
         except Exception:
             logger.exception("harness_dispatcher.native_turn_failed")
-            if not executed:
+            # A call to an unknown tool ran nothing; one that reached a real tool may
+            # have written before it errored, so it counts.
+            ran = [(i, r) for i, r in executed if self._harness.has_tool(i.tool)]
+            if not ran:
                 return DispatchOutcome.PASS
             # Tools already ran (a write may be done): say what happened rather than
             # PASS, which would leave the operator unaware of the side effects.
             # Always shown, whatever the evidence guardrail says.
-            n = len(executed)
+            n = len(ran)
             note = f"Something went wrong after running {n} tool call{'s' if n != 1 else ''}."
-            reply_text = with_evidence(
-                note,
-                executed,
-                per_result_chars=self._tool_result_chars,
-                turn_budget_chars=self._turn_result_budget_chars,
-            )
+            reply_text = self._with_evidence(note, ran)
             await send(reply_text + self._footer())
             self._tier3.append(str(chat_id), "user", user_text)
             self._tier3.append(str(chat_id), "bot", reply_text)

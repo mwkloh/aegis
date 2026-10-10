@@ -106,8 +106,22 @@ def with_evidence(
         history, per_result_chars=per_result_chars, turn_budget_chars=turn_budget_chars
     )
     if not summary.strip():
-        return f"Results:\n{evidence}"
-    return f"{summary}\n\nResults:\n{evidence}"
+        return f"{_EVIDENCE_HEADER}{evidence}"
+    return f"{summary}\n\n{_EVIDENCE_HEADER}{evidence}"
+
+
+_EVIDENCE_HEADER = "Results:\n"
+
+
+def strip_evidence(reply: str) -> str:
+    """A `with_evidence` reply without its appended tool output.
+
+    Stored replies are replayed to the model as its own past turns; tool output is
+    untrusted data (a file can say anything) and must not come back in that role.
+    """
+    if reply.startswith(_EVIDENCE_HEADER):
+        return ""
+    return reply.split(f"\n\n{_EVIDENCE_HEADER}", 1)[0]
 
 
 def history_verified_tools(history: History) -> set[str]:
@@ -168,5 +182,6 @@ __all__ = [
     "format_args",
     "history_verified_tools",
     "render_chain",
+    "strip_evidence",
     "with_evidence",
 ]
