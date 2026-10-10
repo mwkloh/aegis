@@ -45,16 +45,23 @@ async def run_native_turn(
     tool_result_chars: int,
     guard_min_call: int = 2,
     on_executed: Callable[[ToolIntent, ToolResult], None] | None = None,
+    recent: Sequence[tuple[str, str]] = (),
 ) -> NativeTurnResult:
     """Call the model, run the tools it asks for, repeat until it answers.
 
     `max_steps` caps rounds of tool calls, as `run_native_loop` does. A destructive
     tool at call number `guard_min_call` or later is returned unexecuted in
     `guarded_intent` so the dispatcher can ask the operator to confirm it.
+    `recent` is the chat's prior (role, text) turns, oldest first; tier3 stores the
+    bot's side as "bot", which the model sees as "assistant".
     """
     specs = build_tool_specs(descriptors, harness.has_tool)
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": NATIVE_SYSTEM_PROMPT},
+        *(
+            {"role": "assistant" if role == "bot" else "user", "content": text}
+            for role, text in recent
+        ),
         {"role": "user", "content": user_text},
     ]
     history: list[tuple[ToolIntent, ToolResult]] = []

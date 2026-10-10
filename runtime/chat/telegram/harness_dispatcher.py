@@ -501,6 +501,8 @@ class HarnessDispatcher:
                 turn_id=turn_id,
                 guard_min_call=1 if is_fallback else _GUARD_MIN_STEP,
                 send=_send,
+                recent=recent,
+                is_fallback=is_fallback,
             )
         if self._multi_step:
             chain = await self._run_multi_step(
@@ -689,12 +691,16 @@ class HarnessDispatcher:
         turn_id: str,
         guard_min_call: int,
         send: Callable[[str], Awaitable[None]],
+        recent: tuple[tuple[str, str], ...] = (),
+        is_fallback: bool = False,
     ) -> DispatchOutcome:
         """Native harness mode: the model tool-calls in its own format (spec section 4)."""
         if self._native_chat is None:  # guaranteed by __init__; explicit so -O keeps it
             raise RuntimeError("native harness mode without a native chat client")
+        executed: list[tuple[ToolIntent, ToolResult]] = []
 
         def _ledger(intent: ToolIntent, result: ToolResult) -> None:
+            executed.append((intent, result))
             self._record_tool_call(
                 turn_id=turn_id, skill_id=skill_id, tool_intent=intent, result=result
             )
@@ -711,9 +717,30 @@ class HarnessDispatcher:
                 tool_result_chars=self._tool_result_chars,
                 guard_min_call=guard_min_call,
                 on_executed=_ledger,
+                recent=recent,
             )
         except Exception:
             logger.exception("harness_dispatcher.native_turn_failed")
+            if not executed:
+                return DispatchOutcome.PASS
+            # Tools already ran (a write may be done): say what happened rather than
+            # PASS, which would leave the operator unaware of the side effects.
+            # Always shown, whatever the evidence guardrail says.
+            n = len(executed)
+            note = f"Something went wrong after running {n} tool call{'s' if n != 1 else ''}."
+            reply_text = with_evidence(
+                note,
+                executed,
+                per_result_chars=self._tool_result_chars,
+                turn_budget_chars=self._turn_result_budget_chars,
+            )
+            await send(reply_text + self._footer())
+            self._tier3.append(str(chat_id), "user", user_text)
+            self._tier3.append(str(chat_id), "bot", reply_text)
+            return DispatchOutcome.FIRED
+        if is_fallback and not turn.history and turn.guarded_intent is None and not turn.hit_cap:
+            # A classifier miss answered without any tool is ordinary chat: hand it to
+            # the chat pipeline (persona, memory), as the planner path does.
             return DispatchOutcome.PASS
         if turn.guarded_intent is not None:
             return await self._hold_for_confirmation(

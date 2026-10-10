@@ -3108,15 +3108,22 @@ def _tool_call_msg(name: str, **args: Any) -> dict[str, Any]:
 
 
 class _NativeScript:
-    def __init__(self, *replies: dict[str, Any]) -> None:
+    """Scripted native chat. A reply that is an Exception is raised instead."""
+
+    def __init__(self, *replies: dict[str, Any] | Exception) -> None:
         self._replies = list(replies)
         self.calls = 0
+        self.seen: list[list[dict[str, Any]]] = []
 
     async def __call__(
         self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
     ) -> dict[str, Any]:
         self.calls += 1
-        return self._replies.pop(0)
+        self.seen.append(list(messages))
+        reply = self._replies.pop(0)
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
 
 
 def _native(script: Any, *, guardrails: Any = None, **kw: Any) -> HarnessDispatcher:
@@ -3231,6 +3238,70 @@ async def test_native_turn_failure_degrades_to_pass() -> None:
         chat_id=1, user_text="find md files", message=_FakeMessage()
     )
     assert outcome == DispatchOutcome.PASS
+
+
+async def test_native_plain_chat_with_no_tool_call_passes_to_the_chat_pipeline() -> None:
+    """R7: a classifier miss that the model answers without any tool is ordinary
+    chat. It belongs to the chat pipeline (persona, memory), not to native mode."""
+    script = _NativeScript({"role": "assistant", "content": "Hi! How can I help?"})
+    dispatcher = _native(script, classifier=_StubClassifier("unknown", 0.9))
+    message = _FakeMessage()
+
+    outcome = await dispatcher.dispatch(chat_id=1, user_text="hello there", message=message)
+
+    assert outcome == DispatchOutcome.PASS
+    assert message.replies == []
+
+
+async def test_native_classified_turn_with_no_tool_call_keeps_the_model_reply() -> None:
+    """R7, the other side: a turn classified to a file skill whose model replies in
+    text (typically "which folder?") keeps that reply rather than passing."""
+    script = _NativeScript({"role": "assistant", "content": "Which folder should I search?"})
+    dispatcher = _native(script)
+    message = _FakeMessage()
+
+    outcome = await dispatcher.dispatch(chat_id=1, user_text="find md files", message=message)
+
+    assert outcome == DispatchOutcome.FIRED
+    assert message.replies[0].startswith("Which folder should I search?")
+
+
+async def test_native_turn_sees_the_recent_conversation() -> None:
+    """R8: prior turns go to the model between the system prompt and this turn."""
+    script = _NativeScript({"role": "assistant", "content": "Searching now."})
+    tier3 = _StubTier3(
+        preload={
+            "1": [
+                _StubTier3Turn(role="user", text="look in my notes folder"),
+                _StubTier3Turn(role="bot", text="Sure, what should I find?"),
+            ]
+        }
+    )
+    dispatcher = _native(script, tier3=tier3)
+
+    await dispatcher.dispatch(chat_id=1, user_text="the md files", message=_FakeMessage())
+
+    sent = script.seen[0]
+    assert [m["role"] for m in sent] == ["system", "user", "assistant", "user"]
+    assert sent[1]["content"] == "look in my notes folder"
+    assert sent[2]["content"] == "Sure, what should I find?"
+    assert sent[3]["content"] == "the md files"
+
+
+async def test_native_failure_after_a_tool_ran_reports_what_ran() -> None:
+    """R9: once a tool has run, a later failure must not hide it behind PASS --
+    the operator is told which calls happened (a write may already be done)."""
+    script = _NativeScript(
+        _tool_call_msg("files_search", glob="*.md"), RuntimeError("ollama dropped")
+    )
+    dispatcher = _native(script)
+    message = _FakeMessage()
+
+    outcome = await dispatcher.dispatch(chat_id=1, user_text="find md files", message=message)
+
+    assert outcome == DispatchOutcome.FIRED
+    assert message.replies[0].startswith("Something went wrong after running 1 tool call.")
+    assert "files_search(" in message.replies[0]
 
 
 def test_native_mode_falls_back_to_the_planner_off_ollama() -> None:
