@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from runtime.events.stream import EventStream
 from runtime.harness import ToolIntent
 from runtime.harness.contract import ToolResult
+from runtime.harness.guardrails import strip_evidence
 from runtime.harness.limits import (
     DEFAULT_PLANNER_MAX_TOKENS,
     DEFAULT_TOOL_RESULT_CHARS,
@@ -278,11 +279,17 @@ class Tier1Reasoner:
 
 
 def _format_history(turns: Sequence[tuple[str, str]]) -> str:
+    """Prior chat turns for the prompt, each clipped and the whole bounded.
+
+    A bot reply loses its appended tool output: shown as BOT text, untrusted file
+    contents would read as the bot's own words to the (unguarded) first plan step.
+    """
     if not turns:
         return "(no prior turns)"
     lines: list[str] = []
-    for role, text in list(turns)[-_MAX_RECENT_TURNS:]:
+    for role, raw in list(turns)[-_MAX_RECENT_TURNS:]:
         label = "USER" if role == "user" else "BOT"
+        text = raw if label == "USER" else strip_evidence(raw) or "(replied with tool results)"
         clipped = text if len(text) <= _MAX_TURN_CHARS else text[:_MAX_TURN_CHARS] + "…"
         lines.append(f"{label}: {clipped}")
     joined = "\n".join(lines)
