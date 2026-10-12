@@ -33,6 +33,18 @@ class NativeTurnResult:
     guarded_intent: ToolIntent | None = None
 
 
+def native_system_prompt(identity: str) -> str:
+    """The production native-mode system prompt, speaking as the tier1 identity.
+
+    Kept apart from NATIVE_SYSTEM_PROMPT, which the eval's bare arm shares: editing
+    this must not move the benchmark baseline. Opens like the synthesis prompt.
+    """
+    return (
+        f"You are {identity}. Use the provided tools when they help you complete the "
+        "operator's request, and answer in plain language when you are done."
+    )
+
+
 def _recent_message(role: str, text: str, limit: int) -> dict[str, str]:
     """One prior chat turn as the model sees it.
 
@@ -59,6 +71,7 @@ async def run_native_turn(
     guard_min_call: int = 2,
     on_executed: Callable[[ToolIntent, ToolResult], None] | None = None,
     recent: Sequence[tuple[str, str]] = (),
+    system_prompt: str = NATIVE_SYSTEM_PROMPT,
 ) -> NativeTurnResult:
     """Call the model, run the tools it asks for, repeat until it answers.
 
@@ -66,11 +79,12 @@ async def run_native_turn(
     tool at call number `guard_min_call` or later is returned unexecuted in
     `guarded_intent` so the dispatcher can ask the operator to confirm it.
     `recent` is the chat's prior (role, text) turns, oldest first; tier3 stores the
-    bot's side as "bot", which the model sees as "assistant".
+    bot's side as "bot", which the model sees as "assistant". `system_prompt` defaults
+    to the eval's bare prompt; production passes `native_system_prompt(identity)`.
     """
     specs = build_tool_specs(descriptors, harness.has_tool)
     messages: list[dict[str, Any]] = [
-        {"role": "system", "content": NATIVE_SYSTEM_PROMPT},
+        {"role": "system", "content": system_prompt},
         *(_recent_message(role, text, tool_result_chars) for role, text in recent),
         {"role": "user", "content": user_text},
     ]
@@ -119,4 +133,4 @@ async def run_native_turn(
             )
 
 
-__all__ = ["NativeChat", "NativeTurnResult", "run_native_turn"]
+__all__ = ["NativeChat", "NativeTurnResult", "native_system_prompt", "run_native_turn"]

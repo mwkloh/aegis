@@ -93,6 +93,19 @@ async def test_runs_requested_tools_until_the_model_answers() -> None:
     assert turn.hit_cap is False
 
 
+async def test_system_prompt_defaults_to_the_bare_benchmark_prompt() -> None:
+    """The eval's bare arm shares NATIVE_SYSTEM_PROMPT; production passes its own."""
+    from runtime.harness.native_loop import NATIVE_SYSTEM_PROMPT
+
+    script = _Script(_answer("hi"))
+    await _turn(script, _Harness({}))
+    assert script.seen[0][0] == {"role": "system", "content": NATIVE_SYSTEM_PROMPT}
+
+    script = _Script(_answer("hi"))
+    await _turn(script, _Harness({}), system_prompt="You are Eva.")
+    assert script.seen[0][0] == {"role": "system", "content": "You are Eva."}
+
+
 def _search_read_harness() -> _Harness:
     return _Harness(
         {

@@ -980,6 +980,7 @@ def _make_loop_dispatcher(
     guardrails: Any = None,
     harness_mode: str = "planner",
     native_chat: Any = None,
+    tier1_loader: Any = None,
 ) -> HarnessDispatcher:
     if registry is None or harness is None:
         registry, harness = _two_skill_setup()
@@ -990,7 +991,7 @@ def _make_loop_dispatcher(
         harness=harness,
         synthesizer=synthesizer or _StubSynthesizer(reply="chain reply"),
         tier3=tier3 or _StubTier3(),
-        tier1_loader=_StubTier1Loader(),
+        tier1_loader=tier1_loader or _StubTier1Loader(),
         synthesis_model="stub-model",
         multi_step=True,
         max_steps=max_steps,
@@ -3286,6 +3287,35 @@ async def test_native_turn_sees_the_recent_conversation() -> None:
     assert sent[1]["content"] == "look in my notes folder"
     assert sent[2]["content"] == "Sure, what should I find?"
     assert sent[3]["content"] == "the md files"
+
+
+async def test_native_system_prompt_is_the_tier1_identity() -> None:
+    """Production native mode speaks as the operator's assistant (IDENTITY.md), as
+    reply synthesis does, not as the eval's bare "helpful assistant"."""
+    script = _NativeScript({"role": "assistant", "content": "Done."})
+    dispatcher = _native(script)
+
+    await dispatcher.dispatch(chat_id=1, user_text="find md files", message=_FakeMessage())
+
+    system = script.seen[0][0]
+    assert system["role"] == "system"
+    assert system["content"].startswith("You are Eva, your personal assistant.")
+    assert "tools" in system["content"]
+
+
+async def test_native_system_prompt_falls_back_when_tier1_fails() -> None:
+    class _BrokenLoader:
+        def load(self, chat_id: str) -> Tier1Snapshot:
+            raise OSError("workspace unreadable")
+
+    script = _NativeScript({"role": "assistant", "content": "Done."})
+    dispatcher = _native(script, tier1_loader=_BrokenLoader())
+    message = _FakeMessage()
+
+    outcome = await dispatcher.dispatch(chat_id=1, user_text="find md files", message=message)
+
+    assert outcome == DispatchOutcome.FIRED
+    assert script.seen[0][0]["content"].startswith("You are AEGIS, an operator-facing assistant.")
 
 
 async def test_native_replayed_bot_turn_drops_the_tool_evidence() -> None:
