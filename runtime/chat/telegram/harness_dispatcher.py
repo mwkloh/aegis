@@ -31,6 +31,7 @@ from runtime.harness.limits import (
     DEFAULT_TOOL_RESULT_CHARS,
     DEFAULT_TURN_RESULT_BUDGET_CHARS,
 )
+from runtime.harness.native_loop import NATIVE_SYSTEM_PROMPT
 from runtime.llm.clients.base import ChatMessage, ChatRequest, ModelClient
 from runtime.reasoning.skill_runner import SkillRunner
 from runtime.skills.registry import SkillDescriptor, SkillRegistry
@@ -200,6 +201,7 @@ class HarnessDispatcher:
         guardrails: Guardrails | None = None,
         harness_mode: str = "planner",
         native_chat: NativeChat | None = None,
+        native_prompt: str = "identity",
     ) -> None:
         self._classifier = classifier
         self._registry = registry
@@ -224,6 +226,8 @@ class HarnessDispatcher:
         # No chat function means native mode cannot run, so fall back to the planner.
         self._harness_mode = harness_mode if native_chat is not None else "planner"
         self._native_chat = native_chat
+        # "identity" speaks as IDENTITY.md; "bare" is the eval's baseline prompt.
+        self._native_prompt = native_prompt
         # Evidence ledger (Phase 11 Track B). `None` keeps every existing
         # call site/test working unmodified — recording is opt-in.
         self._events = events
@@ -254,6 +258,11 @@ class HarnessDispatcher:
             identity = _DEFAULT_IDENTITY
         logger.info(f"harness_dispatcher.{event}.tier1_load_done")
         return identity
+
+    def _native_system_prompt(self, chat_id: int) -> str:
+        if self._native_prompt == "bare":
+            return NATIVE_SYSTEM_PROMPT
+        return native_system_prompt(self._load_identity(chat_id, event="native_turn"))
 
     def _with_evidence(
         self, summary: str, history: list[tuple[ToolIntent, ToolResult]]
@@ -739,9 +748,7 @@ class HarnessDispatcher:
                 guard_min_call=guard_min_call,
                 on_executed=_ledger,
                 recent=recent,
-                system_prompt=native_system_prompt(
-                    self._load_identity(chat_id, event="native_turn")
-                ),
+                system_prompt=self._native_system_prompt(chat_id),
             )
         except Exception:
             logger.exception("harness_dispatcher.native_turn_failed")

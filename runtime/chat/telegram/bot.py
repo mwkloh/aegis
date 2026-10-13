@@ -938,6 +938,7 @@ def build_harness_dispatcher(
         guardrails=guardrails,
         harness_mode=harness_mode,
         native_chat=native,
+        native_prompt=cfg.models.native_prompt,
     )
 
 

@@ -37,6 +37,23 @@ def test_each_arm_is_a_config_preset(arm: str, mode: str, guard: Guardrails) -> 
     assert cfg.guardrails_for(M) == guard
 
 
+@pytest.mark.parametrize("arm", ["native", "native-guard", "native-guard-synth"])
+def test_measured_native_arms_keep_the_bare_prompt(arm: str) -> None:
+    """Nights 1-2 measured these arms with the bare prompt; a rerun must too."""
+    assert _apply_arm(_cfg(), arm).models.native_prompt == "bare"
+
+
+def test_native_guard_id_is_native_guard_with_the_identity_prompt() -> None:
+    cfg = _apply_arm(_cfg(), "native-guard-id")
+    assert cfg.harness_mode_for(M) == "native"
+    assert cfg.guardrails_for(M) == _apply_arm(_cfg(), "native-guard").guardrails_for(M)
+    assert cfg.models.native_prompt == "identity"
+
+
+def test_production_defaults_to_the_identity_prompt() -> None:
+    assert AegisConfig().models.native_prompt == "identity"
+
+
 def test_bare_stays_the_eval_only_control() -> None:
     from runtime.eval import bare
 
@@ -45,7 +62,9 @@ def test_bare_stays_the_eval_only_control() -> None:
     assert _variant_runner("bare") is bare.run_variant_bare
 
 
-@pytest.mark.parametrize("arm", ["native", "native-guard", "native-guard-synth", "bare"])
+@pytest.mark.parametrize(
+    "arm", ["native", "native-guard", "native-guard-synth", "native-guard-id", "bare"]
+)
 def test_native_arms_need_ollama(arm: str) -> None:
     assert _arm_unsupported_reason(arm, "openrouter") is not None
     assert _arm_unsupported_reason(arm, "ollama") is None

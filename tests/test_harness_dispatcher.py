@@ -981,6 +981,7 @@ def _make_loop_dispatcher(
     harness_mode: str = "planner",
     native_chat: Any = None,
     tier1_loader: Any = None,
+    native_prompt: str = "identity",
 ) -> HarnessDispatcher:
     if registry is None or harness is None:
         registry, harness = _two_skill_setup()
@@ -1000,6 +1001,7 @@ def _make_loop_dispatcher(
         guardrails=guardrails,
         harness_mode=harness_mode,
         native_chat=native_chat,
+        native_prompt=native_prompt,
     )
 
 
@@ -3301,6 +3303,18 @@ async def test_native_system_prompt_is_the_tier1_identity() -> None:
     assert system["role"] == "system"
     assert system["content"].startswith("You are Eva, your personal assistant.")
     assert "tools" in system["content"]
+
+
+async def test_native_bare_prompt_choice_sends_the_benchmark_prompt() -> None:
+    """native_prompt="bare" is how the measured eval arms keep their baseline."""
+    from runtime.harness.native_loop import NATIVE_SYSTEM_PROMPT
+
+    script = _NativeScript({"role": "assistant", "content": "Done."})
+    dispatcher = _native(script, native_prompt="bare")
+
+    await dispatcher.dispatch(chat_id=1, user_text="find md files", message=_FakeMessage())
+
+    assert script.seen[0][0] == {"role": "system", "content": NATIVE_SYSTEM_PROMPT}
 
 
 async def test_native_system_prompt_falls_back_when_tier1_fails() -> None:

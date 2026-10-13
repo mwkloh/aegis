@@ -182,7 +182,13 @@ class EvalReport(BaseModel):
         ),
     )
     arm: Literal[
-        "full", "full-nolock", "native", "native-guard", "native-guard-synth", "bare"
+        "full",
+        "full-nolock",
+        "native",
+        "native-guard",
+        "native-guard-synth",
+        "native-guard-id",
+        "bare",
     ] = Field(
         default="full",
         description=(

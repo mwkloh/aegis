@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 HarnessMode = Literal["planner", "native"]
+NativePrompt = Literal["identity", "bare"]
 GuardrailName = Literal["autofill", "claim_gate", "evidence", "synthesis", "plan_lock"]
 _GUARDRAIL_NAMES: frozenset[str] = frozenset(
     {"autofill", "claim_gate", "evidence", "synthesis", "plan_lock"}
@@ -100,6 +101,14 @@ class ModelConfig(BaseModel):
             "Override for which deterministic guardrails run, beating any profile "
             "(`MODEL_GUARDRAILS`, comma list; `none` = no guardrails). None defers to "
             "the profile, then to the mode's default."
+        ),
+    )
+    native_prompt: NativePrompt = Field(
+        default="identity",
+        description=(
+            "Native mode's system prompt: `identity` speaks as the tier1 IDENTITY.md; "
+            "`bare` is the eval's two-sentence prompt, which the measured native arms "
+            "keep so their reruns stay comparable."
         ),
     )
     smart_provider: Literal["ollama", "openrouter"] = Field(

@@ -33,27 +33,38 @@ _DEFAULT_EVAL_READ_TIMEOUT_S = 300.0
 # Every arm but `bare` is a preset of the production config, so whatever wins can ship
 # as a ModelProfile (spec: docs/superpowers/specs/2026-10-06-harness-ablation-design.md).
 _GUARDED = frozenset({"autofill", "claim_gate", "evidence"})
-_ARM_PRESETS: dict[str, tuple[str, frozenset[str]]] = {
-    "full": ("planner", _GUARDED | {"plan_lock"}),
-    "full-nolock": ("planner", _GUARDED),
-    "native": ("native", frozenset()),
-    "native-guard": ("native", _GUARDED),
-    "native-guard-synth": ("native", _GUARDED | {"synthesis"}),
+# (harness mode, guardrails, native prompt). The arms measured on nights 1-2 keep the
+# bare prompt so reruns stay comparable; native-guard-id is native-guard with the
+# production identity prompt. The prompt only matters in native mode.
+_ARM_PRESETS: dict[str, tuple[str, frozenset[str], str]] = {
+    "full": ("planner", _GUARDED | {"plan_lock"}, "bare"),
+    "full-nolock": ("planner", _GUARDED, "bare"),
+    "native": ("native", frozenset(), "bare"),
+    "native-guard": ("native", _GUARDED, "bare"),
+    "native-guard-synth": ("native", _GUARDED | {"synthesis"}, "bare"),
+    "native-guard-id": ("native", _GUARDED, "identity"),
 }
 ARMS: tuple[str, ...] = (*_ARM_PRESETS, "bare")
-_NATIVE_ARMS = frozenset({"native", "native-guard", "native-guard-synth", "bare"})
+_NATIVE_ARMS = frozenset(
+    {"native", "native-guard", "native-guard-synth", "native-guard-id", "bare"}
+)
 
 
 def _apply_arm(cfg: AegisConfig, arm: str) -> AegisConfig:
-    """Pin the harness mode and guardrails for one arm, overriding any profile."""
+    """Pin the harness mode, guardrails and native prompt for one arm, overriding any
+    profile."""
     preset = _ARM_PRESETS.get(arm)
     if preset is None:  # `bare` runs its own eval-only loop
         return cfg
-    mode, guardrails = preset
+    mode, guardrails, native_prompt = preset
     return cfg.model_copy(
         update={
             "models": cfg.models.model_copy(
-                update={"harness_mode": mode, "guardrails": guardrails}
+                update={
+                    "harness_mode": mode,
+                    "guardrails": guardrails,
+                    "native_prompt": native_prompt,
+                }
             )
         }
     )
@@ -113,6 +124,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "native = native tool calls, no guardrails; "
             "native-guard = plus autofill, claim gate and evidence; "
             "native-guard-synth = plus a synthesis call; "
+            "native-guard-id = native-guard with the production identity prompt "
+            "(the other native arms keep the bare prompt they were measured with); "
             "bare = the eval-only control loop. "
             "Native arms and bare: Ollama-served models only."
         ),
