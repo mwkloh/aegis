@@ -41,18 +41,20 @@ _PATH_CONSUMER_TOOLS: frozenset[str] = frozenset({"files_read"})
 
 @dataclass(frozen=True)
 class Guardrails:
-    """Which deterministic mechanisms a turn applies. Defaults = today's planner.
+    """Which deterministic mechanisms a turn applies. Defaults = native+guard.
 
     `synthesis` is honoured only in native mode; the planner always synthesises on
     `respond` and never on `task_complete`. `plan_lock` is honoured only by the
-    planner (it needs the planner's `remaining` list).
+    planner (it needs the planner's `remaining` list) and is off by default: the
+    2026-10 ablation found it never earned its latency (plan doc section 22, rule 4).
+    The eval's `full` arm switches it on to stay reproducible.
     """
 
     autofill: bool = True
     claim_gate: bool = True
     evidence: bool = True
     synthesis: bool = False
-    plan_lock: bool = True
+    plan_lock: bool = False
 
 
 def format_args(args: dict[str, Any]) -> str:

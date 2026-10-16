@@ -1161,7 +1161,9 @@ async def test_multi_step_restricts_tool_choices_to_plan_cursor() -> None:
             PlanStep(kind="respond"),
         ],
     )
-    dispatcher = _make_loop_dispatcher(runner=runner, registry=registry, harness=harness)
+    dispatcher = _make_loop_dispatcher(
+        runner=runner, registry=registry, harness=harness, guardrails=Guardrails(plan_lock=True)
+    )
 
     await dispatcher.dispatch(chat_id=1, user_text="find and read", message=_FakeMessage())
 
@@ -1193,7 +1195,9 @@ async def test_multi_step_restriction_persists_after_step_failure() -> None:
             PlanStep(kind="tool_call", tool="files_read", args={"path": "/tmp/a.md"}),
         ],
     )
-    dispatcher = _make_loop_dispatcher(runner=runner, registry=registry, harness=harness)
+    dispatcher = _make_loop_dispatcher(
+        runner=runner, registry=registry, harness=harness, guardrails=Guardrails(plan_lock=True)
+    )
 
     await dispatcher.dispatch(chat_id=1, user_text="find and read", message=_FakeMessage())
 
@@ -1225,7 +1229,9 @@ async def test_multi_step_plan_leads_with_actual_tool_called() -> None:
             PlanStep(kind="respond"),
         ],
     )
-    dispatcher = _make_loop_dispatcher(runner=runner, registry=registry, harness=harness)
+    dispatcher = _make_loop_dispatcher(
+        runner=runner, registry=registry, harness=harness, guardrails=Guardrails(plan_lock=True)
+    )
 
     await dispatcher.dispatch(chat_id=1, user_text="find and read", message=_FakeMessage())
 
@@ -3012,10 +3018,18 @@ def _search_then_read_runner(read_path: str = "/tmp/a.md") -> _StubPlanRunner:
 
 async def test_plan_lock_narrows_step_two_to_the_planned_tool() -> None:
     runner = _search_then_read_runner()
-    dispatcher = _make_loop_dispatcher(runner=runner)
+    dispatcher = _make_loop_dispatcher(runner=runner, guardrails=Guardrails(plan_lock=True))
     await dispatcher.dispatch(chat_id=1, user_text="find and read", message=_FakeMessage())
     second = runner.plan_next_calls[1]
     assert {d.tool for d in second["available_skills"]} == {"files_read"}
+
+
+async def test_plan_lock_is_off_by_default() -> None:
+    runner = _search_then_read_runner()
+    dispatcher = _make_loop_dispatcher(runner=runner)
+    await dispatcher.dispatch(chat_id=1, user_text="find and read", message=_FakeMessage())
+    second = runner.plan_next_calls[1]
+    assert {d.tool for d in second["available_skills"]} == {"files_search", "files_read"}
 
 
 async def test_plan_lock_off_offers_the_full_catalogue_at_step_two() -> None:

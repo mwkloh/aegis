@@ -103,12 +103,13 @@ class ModelConfig(BaseModel):
             "the profile, then to the mode's default."
         ),
     )
-    native_prompt: NativePrompt = Field(
-        default="identity",
+    native_prompt: NativePrompt | None = Field(
+        default=None,
         description=(
-            "Native mode's system prompt: `identity` speaks as the tier1 IDENTITY.md; "
-            "`bare` is the eval's two-sentence prompt, which the measured native arms "
-            "keep so their reruns stay comparable."
+            "Override for native mode's system prompt, beating any per-model profile: "
+            "`identity` speaks as the tier1 IDENTITY.md; `bare` is the eval's two-sentence "
+            "prompt, which the measured native arms pin so their reruns stay comparable. "
+            "None defers to the profile, then to `identity`."
         ),
     )
     smart_provider: Literal["ollama", "openrouter"] = Field(
@@ -188,6 +189,15 @@ class ModelProfile(BaseModel):
         description=(
             "Deterministic guardrails to run. None = the mode's default (planner: all "
             "but synthesis; native: autofill, claim_gate, evidence)."
+        ),
+    )
+    native_prompt: NativePrompt | None = Field(
+        default=None,
+        description=(
+            "Native mode's system prompt for this model. None = `identity`. Night 3 "
+            "(plan doc section 23): the identity prompt held score and honesty on "
+            "qwen3.5:4b, gemma4:e4b and lfm2.5:8b but raised llama3.2:3b's flag rate "
+            "(+9.3 points), so that model keeps `bare`."
         ),
     )
 
@@ -479,6 +489,19 @@ class AegisConfig(BaseModel):
             return profile.harness_mode
         return "planner"
 
+    def native_prompt_for(self, model: str) -> NativePrompt:
+        """The global `models.native_prompt` beats a profile; a profile beats `identity`.
+
+        The eval arms set the global, so a production profile can never leak into a
+        measured rerun. There is no env var for it.
+        """
+        if self.models.native_prompt is not None:
+            return self.models.native_prompt
+        profile = self.model_profiles.get(model)
+        if profile is not None and profile.native_prompt is not None:
+            return profile.native_prompt
+        return "identity"
+
     def guardrails_for(self, model: str) -> Guardrails:
         """Which guardrails run for one model, resolved like `harness_mode_for`.
 
@@ -494,7 +517,7 @@ class AegisConfig(BaseModel):
             profile = self.model_profiles.get(model)
             names = profile.guardrails if profile is not None else None
         if names is None:
-            return Guardrails() if mode == "planner" else Guardrails(plan_lock=False)
+            return Guardrails()
         return Guardrails(
             autofill="autofill" in names,
             claim_gate="claim_gate" in names,

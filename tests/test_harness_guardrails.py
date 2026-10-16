@@ -15,11 +15,12 @@ def _search(result: str) -> tuple[ToolIntent, ToolResult]:
     )
 
 
-def test_default_guardrails_are_todays_planner_behaviour() -> None:
+def test_default_guardrails_keep_the_checks_and_drop_plan_lock() -> None:
+    """Plan-lock removed by default: ablation decision, plan doc section 22 rule 4."""
     from runtime.harness.guardrails import Guardrails
 
     g = Guardrails()
-    assert (g.autofill, g.claim_gate, g.evidence, g.plan_lock) == (True, True, True, True)
+    assert (g.autofill, g.claim_gate, g.evidence, g.plan_lock) == (True, True, True, False)
     assert g.synthesis is False
 
 

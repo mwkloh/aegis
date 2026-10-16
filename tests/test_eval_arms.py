@@ -24,7 +24,7 @@ def _cfg() -> AegisConfig:
 @pytest.mark.parametrize(
     ("arm", "mode", "guard"),
     [
-        ("full", "planner", Guardrails()),
+        ("full", "planner", Guardrails(plan_lock=True)),
         ("full-nolock", "planner", Guardrails(plan_lock=False)),
         ("native", "native", Guardrails(False, False, False, False, False)),
         ("native-guard", "native", Guardrails(plan_lock=False)),
@@ -51,7 +51,18 @@ def test_native_guard_id_is_native_guard_with_the_identity_prompt() -> None:
 
 
 def test_production_defaults_to_the_identity_prompt() -> None:
-    assert AegisConfig().models.native_prompt == "identity"
+    cfg = AegisConfig()
+    assert cfg.models.native_prompt is None  # unset: defer to the profile, then identity
+    assert cfg.native_prompt_for(M) == "identity"
+
+
+def test_an_arm_beats_a_models_profile_prompt() -> None:
+    """Eval arms pin the prompt globally, so a production profile cannot leak into a rerun."""
+    cfg = AegisConfig(
+        model_profiles={M: ModelProfile(harness_mode="native", native_prompt="bare")}
+    )
+    assert _apply_arm(cfg, "native-guard-id").native_prompt_for(M) == "identity"
+    assert _apply_arm(cfg, "native-guard").native_prompt_for(M) == "bare"
 
 
 def test_bare_stays_the_eval_only_control() -> None:

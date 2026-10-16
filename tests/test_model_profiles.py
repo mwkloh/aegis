@@ -406,3 +406,41 @@ def test_a_valid_native_profile_loads() -> None:
     )
     assert profiles["g:4b"].harness_mode == "native"
     assert profiles["g:4b"].guardrails == frozenset({"evidence"})
+
+
+# --- native prompt per model (plan doc section 23: identity prompt regressed llama3.2:3b) ---
+
+
+def test_native_prompt_defaults_to_identity() -> None:
+    cfg = _config(env_think=None, profiles={})
+    assert cfg.native_prompt_for("x:1b") == "identity"
+
+
+def test_a_profile_can_pick_the_bare_native_prompt() -> None:
+    cfg = _config(
+        env_think=None,
+        profiles={"l:3b": ModelProfile(harness_mode="native", native_prompt="bare")},
+    )
+    assert cfg.native_prompt_for("l:3b") == "bare"
+    assert cfg.native_prompt_for("g:4b") == "identity"  # other models are unaffected
+
+
+def test_the_global_native_prompt_beats_a_profile() -> None:
+    """The eval arms pin the prompt globally; a profile must not leak into a rerun."""
+    base = _config(
+        env_think=None,
+        profiles={"l:3b": ModelProfile(harness_mode="native", native_prompt="bare")},
+    )
+    cfg = base.model_copy(
+        update={"models": base.models.model_copy(update={"native_prompt": "identity"})}
+    )
+    assert cfg.native_prompt_for("l:3b") == "identity"
+
+
+def test_native_prompt_is_parsed_from_a_profile_dict() -> None:
+    profiles = _coerce_model_profiles({"l:3b": {"harness_mode": "native", "native_prompt": "bare"}})
+    assert profiles["l:3b"].native_prompt == "bare"
+
+
+def test_an_unknown_native_prompt_drops_the_profile_not_the_boot() -> None:
+    assert _coerce_model_profiles({"l:3b": {"native_prompt": "fancy"}}) == {}
