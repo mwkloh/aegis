@@ -176,6 +176,34 @@ def _check_models() -> list[Row]:
     return rows
 
 
+_USERNAME_PLACEHOLDER = "YOUR_USERNAME"
+
+
+def _check_skill_placeholders() -> Row:
+    """Warn while the bundled skills' example paths still say `/Users/YOUR_USERNAME`.
+
+    The examples are model-visible prompt text; an unfilled placeholder can be copied
+    into a tool call verbatim. A warning, not an error: nothing is broken until a model
+    does that, and the README documents the one-line fix.
+    """
+    catalog = _aegis_home() / "skills"
+    stale = sorted(
+        p.parent.name
+        for p in catalog.glob("*/skill.yaml")
+        if _USERNAME_PLACEHOLDER in p.read_text(encoding="utf-8")
+    )
+    if not stale:
+        return ("skills:example_paths", True, "ok", "ok")
+    fix = f"sed -i '' \"s#{_USERNAME_PLACEHOLDER}#$(id -un)#g\" {catalog}/*/skill.yaml"
+    return (
+        "skills:example_paths",
+        False,
+        f"{len(stale)} skill(s) still show {_USERNAME_PLACEHOLDER} in example paths "
+        f"(Linux: drop the '' after -i). Fix: {fix}",
+        "warn",
+    )
+
+
 def _check_reflection_writable() -> Row:
     """Plane 2 needs to be able to create its own output directory."""
     target = _aegis_home() / "reflection"
@@ -387,6 +415,9 @@ def main(argv: list[str] | None = None) -> int:
     print("models:")
     models = _check_models()
     _print(models)
+    print("skills:")
+    skills = [_check_skill_placeholders()]
+    _print(skills)
     print("reflection:")
     reflection = [_check_reflection_writable()]
     _print(reflection)
@@ -397,7 +428,8 @@ def main(argv: list[str] | None = None) -> int:
     coding_harness = [_check_coding_harness_writable()]
     _print(coding_harness)
     all_rows = (
-        *layout, *env, *services, *models, *reflection, *improvement, *coding_harness,
+        *layout, *env, *services, *models, *skills, *reflection, *improvement,
+        *coding_harness,
     )
     errors = [r for r in all_rows if r[3] == "error"]
     return 0 if not errors else 1

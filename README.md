@@ -251,6 +251,8 @@ Skills are copied into `~/.aegis/workspace/skills/` on first run and never overw
 
 - **Before first run** (affects what gets seeded): run the same `sed` on `runtime/skills/_bundle/*/skill.yaml` first, then `make bootstrap`.
 
+`make doctor` prints a warning (with this command filled in for your paths) until no installed skill still contains `YOUR_USERNAME`.
+
 The examples are only hints to the model; the file tools are limited to the sandbox roots in `config.json` regardless. The eval harness works in a throwaway temp directory, so benchmark runs never need these paths to exist. The example text is still part of the prompt, though: the published benchmark numbers were measured with a real username in it, so if you compare against them, note that yours differs.
 
 #### Per-model profiles

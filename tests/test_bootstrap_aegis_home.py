@@ -121,6 +121,13 @@ def test_env_template_defines_every_key_the_doctor_requires() -> None:
         assert f"\n{key}=" in text, f"{key} is required by the doctor but absent from .env.example"
 
 
+def test_env_template_does_not_pin_aegis_home() -> None:
+    # Loaded into the environment at startup, an uncommented AEGIS_HOME would beat a
+    # relocated AEGIS_ROOT and send the doctor and the bot back to ~/.aegis/workspace.
+    lines = (REPO / ".env.example").read_text(encoding="utf-8").splitlines()
+    assert not [ln for ln in lines if ln.strip().startswith("AEGIS_HOME=")]
+
+
 def test_bootstrap_tells_the_operator_what_to_do_next(
     root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

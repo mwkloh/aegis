@@ -77,6 +77,39 @@ def test_models_check_covers_the_smart_local_model_with_a_pull_hint(
     assert rows["ollama:model:gemma4:e2b"][0] == "ok"
 
 
+def _install_skill(root: Path, name: str, text: str) -> None:
+    skill = root / "workspace" / "skills" / name
+    skill.mkdir(parents=True)
+    (skill / "skill.yaml").write_text(text, encoding="utf-8")
+
+
+def test_unfilled_username_placeholder_in_installed_skills_warns(root: Path) -> None:
+    _install_skill(root, "read_file", "e.g. /Users/YOUR_USERNAME/Desktop/foo.png\n")
+    _install_skill(root, "list_files", "e.g. /Users/YOUR_USERNAME/Desktop\n")
+    _install_skill(root, "echo", "no paths here\n")
+
+    name, ok, detail, severity = doctor._check_skill_placeholders()
+
+    assert (name, ok, severity) == ("skills:example_paths", False, "warn")
+    assert "2 skill(s)" in detail
+    assert "YOUR_USERNAME" in detail
+    assert "sed" in detail  # the fix is in the row, copy-pasteable
+
+
+def test_filled_in_skills_pass(root: Path) -> None:
+    _install_skill(root, "read_file", "e.g. /Users/alice/Desktop/foo.png\n")
+
+    _name, ok, _detail, severity = doctor._check_skill_placeholders()
+
+    assert (ok, severity) == (True, "ok")
+
+
+def test_no_skills_installed_yet_is_not_a_warning(root: Path) -> None:
+    _name, ok, _detail, severity = doctor._check_skill_placeholders()
+
+    assert (ok, severity) == (True, "ok")
+
+
 def test_a_different_tag_of_the_same_family_is_not_installed() -> None:
     # gemma4:e2b on disk must not make gemma4:e4b look pulled.
     assert not doctor._model_present(["gemma4:e2b"], "gemma4:e4b")

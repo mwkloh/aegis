@@ -13,6 +13,8 @@ stability guarantees.
   `~/.aegis/workspace/`; bootstrap also seeds the bundled skills and prints the
   `ollama pull` commands to run next. README gains a copy-paste Quickstart.
 - `AEGIS_ROOT` is honoured by bootstrap and doctor, as it already was by the runtime.
+- Doctor warns (`skills:example_paths`) while an installed skill's example paths still
+  contain the `YOUR_USERNAME` placeholder, and prints the `sed` that fixes it.
 
 ### Fixed
 - **Doctor** no longer demands `OPENROUTER_API_KEY` for an all-local setup (required
@@ -21,6 +23,9 @@ stability guarantees.
   installed because `gemma4:e2b` is.
 - **`make run`** on a fresh install answered every intent with "I don't know how to
   handle"; the CLI now seeds the bundled skills the way the Telegram bot does.
+- `.env.example` no longer pins `AEGIS_HOME=~/.aegis/workspace`. Loaded at startup, it
+  overrode a relocated `AEGIS_ROOT` and sent the doctor and the bot back to the default
+  workspace.
 - The starter `config.json` no longer carries a `models` block the runtime ignores.
 - `.gitignore`'s `workspace/` rule no longer swallows `templates/workspace/`.
 - Operator-specific paths and an email address removed from tracked docs and the newsyslog
