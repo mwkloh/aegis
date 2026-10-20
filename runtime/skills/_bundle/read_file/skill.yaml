@@ -15,7 +15,7 @@ args_schema:
       minLength: 1
       maxLength: 512
       description: >-
-        Absolute path to the file (e.g. /Users/michaelloh/Desktop/foo.png).
+        Absolute path to the file (e.g. /Users/YOUR_USERNAME/Desktop/foo.png).
         '~' is allowed. Relative paths and bare filenames are rejected.
     offset:
       type: integer

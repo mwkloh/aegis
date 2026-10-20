@@ -13,7 +13,7 @@ args_schema:
       minLength: 1
       maxLength: 512
       description: >-
-        Absolute path for the file (e.g. /Users/michaelloh/Desktop/notes.txt).
+        Absolute path for the file (e.g. /Users/YOUR_USERNAME/Desktop/notes.txt).
         '~' is allowed. Must be inside an allowed folder.
     content:
       type: string

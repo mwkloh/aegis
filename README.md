@@ -238,14 +238,20 @@ The benchmark behind this project (`docs/superpowers/plans/2026-10-04-mac-mini-r
 
 #### Example paths in the bundled skills
 
-The skill descriptors in `runtime/skills/_bundle/` (`read_file`, `list_files`, `search_files`, `file_info`, `write_file`, `run_command`) show the model example paths such as `/Users/michaelloh/Desktop/foo.png`. They are kept exactly as the benchmark ran them, so you can reproduce its numbers and compare against them. The eval itself works in a throwaway temp directory, so those paths never need to exist.
+The skill descriptors in `runtime/skills/_bundle/` (`read_file`, `list_files`, `search_files`, `file_info`, `write_file`, `run_command`) show the model example paths such as `/Users/YOUR_USERNAME/Desktop/foo.png`. **Replace `YOUR_USERNAME` with your own account name** so the examples point at a folder that exists on your machine (on Linux use `/home/<you>` instead of `/Users/<you>`).
 
-For day-to-day use you will probably want your own username in them. Skills are copied into `~/.aegis/workspace/skills/` on first run and are never overwritten afterwards, so there are two ways to customise:
+Skills are copied into `~/.aegis/workspace/skills/` on first run and never overwritten afterwards, so there are two ways to do it:
 
-- **Your installed copies** (affects your assistant only): edit `~/.aegis/workspace/skills/<skill>/skill.yaml` and change the `e.g.` path in the argument descriptions.
-- **Before first run** (affects what gets seeded): edit the files in `runtime/skills/_bundle/` first, then run `make bootstrap`.
+- **Your installed copies** (affects your assistant only). After `make setup`:
 
-If you change them and then compare against the published benchmark numbers, record that you did: the example text is part of the prompt.
+  ```bash
+  # macOS; on Linux use `sed -i` with no `''`
+  sed -i '' "s#YOUR_USERNAME#$(id -un)#g" ~/.aegis/workspace/skills/*/skill.yaml
+  ```
+
+- **Before first run** (affects what gets seeded): run the same `sed` on `runtime/skills/_bundle/*/skill.yaml` first, then `make bootstrap`.
+
+The examples are only hints to the model; the file tools are limited to the sandbox roots in `config.json` regardless. The eval harness works in a throwaway temp directory, so benchmark runs never need these paths to exist. The example text is still part of the prompt, though: the published benchmark numbers were measured with a real username in it, so if you compare against them, note that yours differs.
 
 #### Per-model profiles
 

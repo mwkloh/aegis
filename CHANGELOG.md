@@ -24,8 +24,9 @@ stability guarantees.
 - The starter `config.json` no longer carries a `models` block the runtime ignores.
 - `.gitignore`'s `workspace/` rule no longer swallows `templates/workspace/`.
 - Operator-specific paths and an email address removed from tracked docs and the newsyslog
-  template (now `__USER__` / `/Users/alice` placeholders). The bundled skill descriptors
-  deliberately keep their benchmark example paths; the README explains how to customise.
+  template (now `__USER__` / `/Users/alice` placeholders). The bundled skill descriptors'
+  example paths use a `/Users/YOUR_USERNAME` placeholder; the README explains how to
+  fill it in.
 - README documents bringing your own local model (`MODEL_SMART_LOCAL`, a `modelProfiles`
   entry, and how to measure it with the eval harness).
 
