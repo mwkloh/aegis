@@ -10,6 +10,8 @@ secrets/
 # --- AEGIS local state (lives in ~/.aegis/, but block stray copies) ---
 .aegis/
 workspace/
+# ...except the starter files `make bootstrap` copies into ~/.aegis/workspace/.
+!/templates/workspace/
 
 # --- Python ---
 __pycache__/

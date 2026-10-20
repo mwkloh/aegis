@@ -7,6 +7,28 @@ stability guarantees.
 
 ## [Unreleased]
 
+### Added
+- **Fresh-install path that works** — `make setup` on a clean clone now ends green. New
+  `templates/workspace/` supplies the identity/memory files bootstrap copies into
+  `~/.aegis/workspace/`; bootstrap also seeds the bundled skills and prints the
+  `ollama pull` commands to run next. README gains a copy-paste Quickstart.
+- `AEGIS_ROOT` is honoured by bootstrap and doctor, as it already was by the runtime.
+
+### Fixed
+- **Doctor** no longer demands `OPENROUTER_API_KEY` for an all-local setup (required
+  only when `MODEL_SMART_PROVIDER=openrouter`), checks the smart-tier local model, gives
+  an `ollama pull` hint for a missing one, and no longer reports `gemma4:e4b` as
+  installed because `gemma4:e2b` is.
+- **`make run`** on a fresh install answered every intent with "I don't know how to
+  handle"; the CLI now seeds the bundled skills the way the Telegram bot does.
+- The starter `config.json` no longer carries a `models` block the runtime ignores.
+- `.gitignore`'s `workspace/` rule no longer swallows `templates/workspace/`.
+- Operator-specific paths and an email address removed from tracked docs and the newsyslog
+  template (now `__USER__` / `/Users/alice` placeholders). The bundled skill descriptors
+  deliberately keep their benchmark example paths; the README explains how to customise.
+- README documents bringing your own local model (`MODEL_SMART_LOCAL`, a `modelProfiles`
+  entry, and how to measure it with the eval harness).
+
 ### Changed
 - **Lint debt cleared** — `ruff check .` and `bandit` (via `[tool.bandit]` in
   `pyproject.toml`) now pass clean. Genuine issues were fixed (line length,

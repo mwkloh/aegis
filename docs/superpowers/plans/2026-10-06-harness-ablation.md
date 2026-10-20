@@ -1756,14 +1756,14 @@ Live model runs load the machine: run them only when the user says the Mac Mini 
 - [ ] **Step 1: Smoke-test each new arm on one model** (search tasks only, ~2-10 min each; `preflight.py` and `tasks_search/` already exist in `~/aegis-eval-run-scripts/`)
 
 ```bash
-cd /Volumes/DATA_SSD/Development/aegis
+cd <repo>
 S=~/aegis-eval-run-scripts
 for ARM in native native-guard native-guard-synth full-nolock; do
   .venv/bin/python3 $S/preflight.py gemma4:e4b-mlx && \
   MODEL_SMART_PROVIDER=ollama MODEL_SMART_LOCAL=gemma4:e4b-mlx .venv/bin/python3 -u -m runtime.eval.cli \
     --arm $ARM --yes --repeat 1 --require-local --tasks-dir $S/tasks_search --out-dir eval/results/ablation/smoke 2>&1 | tail -8
 done
-/Volumes/DATA_SSD/Applications/Ollama.app/Contents/Resources/ollama stop gemma4:e4b-mlx
+ollama stop gemma4:e4b-mlx
 ```
 
 Expected: four result files named `...-native.json`, `...-native-guard.json`, `...-native-guard-synth.json`, `...-full-nolock.json`; no `raised:` reasons in the output. Read every reply in them and confirm the shape matches the arm (no `Results:` block for `native`; one for the guarded arms).

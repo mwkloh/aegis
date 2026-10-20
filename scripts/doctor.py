@@ -23,54 +23,76 @@ from dotenv import load_dotenv
 Severity = str  # "ok" | "warn" | "error"
 Row = tuple[str, bool, str, Severity]
 
-AEGIS_ROOT = Path.home() / ".aegis"
-AEGIS_HOME = AEGIS_ROOT / "workspace"
 DEFAULT_FAST_MODEL = "gemma4:e2b"
 DEFAULT_REFLECTION_MODEL = "gemma4:e4b"
 DEFAULT_SMART_MODEL = "minimax/minimax-m2.7"
+# Mirrors `ModelConfig.smart_local` in runtime/config.py.
+DEFAULT_SMART_LOCAL_MODEL = "llama3.1:8b"
 
-REQUIRED_FILES = (
-    AEGIS_HOME / "AGENTS.md",
-    AEGIS_HOME / "USER.md",
-    AEGIS_HOME / "IDENTITY.md",
-    AEGIS_HOME / "SOUL.md",
-    AEGIS_HOME / "HEARTBEAT.md",
-    AEGIS_ROOT / "config.json",
-    AEGIS_ROOT / ".env",
-)
+_CANON_FILES = ("AGENTS.md", "USER.md", "IDENTITY.md", "SOUL.md", "HEARTBEAT.md")
+
+
+def _aegis_root() -> Path:
+    """Same resolution as `runtime.config`: `AEGIS_ROOT`, else `~/.aegis`."""
+    return Path(os.environ.get("AEGIS_ROOT", str(Path.home() / ".aegis"))).expanduser()
+
+
+def _aegis_home() -> Path:
+    return Path(os.environ.get("AEGIS_HOME", str(_aegis_root() / "workspace"))).expanduser()
 
 
 def _check_layout() -> list[Row]:
+    root, home = _aegis_root(), _aegis_home()
+    required = (*(home / name for name in _CANON_FILES), root / "config.json", root / ".env")
     rows: list[Row] = []
-    for p in REQUIRED_FILES:
+    for p in required:
         ok = p.exists()
         rows.append((str(p), ok, "ok" if ok else "missing", "ok" if ok else "error"))
     return rows
 
 
-_REQUIRED_ENV_KEYS: Final[tuple[str, ...]] = ("OPENROUTER_API_KEY", "MODEL_FAST")
+# `OPENROUTER_API_KEY` is only required when the smart tier is pinned to OpenRouter; an
+# all-local Ollama setup has no use for it.
+REQUIRED_ENV_KEYS: Final[tuple[str, ...]] = ("MODEL_FAST",)
 _OPTIONAL_ENV_KEYS: Final[tuple[str, ...]] = (
-    "OLLAMA_BASE_URL", "MODEL_SMART", "MODEL_REFLECTION", "MODEL_CODING",
+    "OLLAMA_BASE_URL", "MODEL_SMART_LOCAL", "MODEL_REFLECTION", "MODEL_CODING",
 )
 
 
+def _read_env_file(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    if not path.is_file():
+        return values
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        values[k.strip()] = v.split("#", 1)[0].strip()
+    return values
+
+
+def _smart_provider(lookup: dict[str, str]) -> str:
+    return (lookup.get("MODEL_SMART_PROVIDER") or "ollama").strip().lower()
+
+
 def _check_env() -> list[Row]:
+    # The shell wins over the file, as in `runtime.config`.
+    lookup = {**_read_env_file(_aegis_root() / ".env"), **os.environ}
+    openrouter = _smart_provider(lookup) == "openrouter"
     rows: list[Row] = []
-    env_path = AEGIS_ROOT / ".env"
-    found: set[str] = set()
-    if env_path.is_file():
-        for raw_line in env_path.read_text(encoding="utf-8").splitlines():
-            line = raw_line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            k, _, _ = line.partition("=")
-            found.add(k.strip())
-    for k in _REQUIRED_ENV_KEYS:
-        present = k in found or k in os.environ
+    for k in REQUIRED_ENV_KEYS:
+        present = bool(lookup.get(k))
         rows.append((f".env:{k}", present, "ok" if present else "missing",
                      "ok" if present else "error"))
-    for k in _OPTIONAL_ENV_KEYS:
-        present = k in found or k in os.environ
+    if openrouter:
+        present = bool(lookup.get("OPENROUTER_API_KEY"))
+        rows.append((".env:OPENROUTER_API_KEY", present,
+                     "ok" if present else "empty (required when MODEL_SMART_PROVIDER=openrouter)",
+                     "ok" if present else "error"))
+    optional = _OPTIONAL_ENV_KEYS if openrouter else (*_OPTIONAL_ENV_KEYS, "OPENROUTER_API_KEY")
+    for k in optional:
+        present = bool(lookup.get(k))
         rows.append((f".env:{k}", present, "ok" if present else "unset (optional)",
                      "ok" if present else "warn"))
     return rows
@@ -111,31 +133,52 @@ def _list_ollama_models() -> list[str] | None:
 
 
 def _model_present(installed: list[str], wanted: str) -> bool:
-    """A digestless `wanted` matches any tag of the same model family."""
-    base = wanted.split(":", 1)[0]
-    return any(name == wanted or name.split(":", 1)[0] == base for name in installed)
+    """A tagged `wanted` must match exactly (`gemma4:e2b` is not `gemma4:e4b`).
+
+    An untagged `wanted` (`llama3.2`) matches any installed tag of that model.
+    """
+    if ":" in wanted:
+        return wanted in installed
+    return any(name.split(":", 1)[0] == wanted for name in installed)
+
+
+def _wanted_models() -> list[tuple[str, str]]:
+    """(model, severity-if-missing) for every Ollama model this setup will call.
+
+    The smart-tier local model is only needed when the smart tier is pinned to Ollama.
+    A model named twice keeps its first (stricter) severity.
+    """
+    wanted = [(os.environ.get("MODEL_FAST", DEFAULT_FAST_MODEL), "error")]
+    if _smart_provider(dict(os.environ)) == "ollama":
+        wanted.append(
+            (os.environ.get("MODEL_SMART_LOCAL", DEFAULT_SMART_LOCAL_MODEL), "error")
+        )
+    wanted.append((os.environ.get("MODEL_REFLECTION", DEFAULT_REFLECTION_MODEL), "warn"))
+    deduped: dict[str, str] = {}
+    for name, severity in wanted:
+        deduped.setdefault(name, severity)
+    return list(deduped.items())
 
 
 def _check_models() -> list[Row]:
-    fast = os.environ.get("MODEL_FAST", DEFAULT_FAST_MODEL)
-    reflection = os.environ.get("MODEL_REFLECTION", DEFAULT_REFLECTION_MODEL)
+    wanted = _wanted_models()
     installed = _list_ollama_models()
     if installed is None:
         return [
-            (f"ollama:model:{fast}", False, "ollama unreachable", "error"),
-            (f"ollama:model:{reflection}", False, "ollama unreachable", "warn"),
+            (f"ollama:model:{name}", False, "ollama unreachable (start it: ollama serve)", sev)
+            for name, sev in wanted
         ]
     rows: list[Row] = []
-    for name, severity in ((fast, "error"), (reflection, "warn")):
+    for name, severity in wanted:
         ok = _model_present(installed, name)
-        detail = "installed" if ok else f"not installed ({severity})"
+        detail = "installed" if ok else f"not installed — run: ollama pull {name}"
         rows.append((f"ollama:model:{name}", ok, detail, "ok" if ok else severity))
     return rows
 
 
 def _check_reflection_writable() -> Row:
     """Plane 2 needs to be able to create its own output directory."""
-    target = AEGIS_HOME / "reflection"
+    target = _aegis_home() / "reflection"
     try:
         target.mkdir(parents=True, exist_ok=True)
         probe = target / ".probe"
@@ -148,7 +191,7 @@ def _check_reflection_writable() -> Row:
 
 def _check_improvement_writable() -> Row:
     """Plane 3 needs to be able to create its own governance directory."""
-    target = AEGIS_HOME / "improvement"
+    target = _aegis_home() / "improvement"
     try:
         target.mkdir(parents=True, exist_ok=True)
         probe = target / ".probe"
@@ -161,7 +204,7 @@ def _check_improvement_writable() -> Row:
 
 def _check_coding_harness_writable() -> Row:
     """Phase 4 — drafts land in `<workspace>/coding_harness/diffs/`."""
-    target = AEGIS_HOME / "coding_harness" / "diffs"
+    target = _aegis_home() / "coding_harness" / "diffs"
     try:
         target.mkdir(parents=True, exist_ok=True)
         probe = target / ".probe"
@@ -321,7 +364,7 @@ def main(argv: list[str] | None = None) -> int:
     # Mirror runtime/config.py: load ~/.aegis/.env into os.environ (without
     # clobbering anything already exported in the shell). Without this, the
     # openrouter ping rows skip because OPENROUTER_API_KEY only lives in .env.
-    env_path = AEGIS_ROOT / ".env"
+    env_path = _aegis_root() / ".env"
     if env_path.is_file():
         load_dotenv(env_path, override=False)
     print("AEGIS doctor")

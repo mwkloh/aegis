@@ -180,7 +180,7 @@ args_schema:
       minLength: 1
       maxLength: 512
       description: >-
-        Absolute path to the file (e.g. /Users/michaelloh/Desktop/foo.png).
+        Absolute path to the file (e.g. /Users/alice/Desktop/foo.png).
         '~' is allowed. Relative paths and bare filenames are rejected.
     app:
       type: string
@@ -251,7 +251,7 @@ launchctl kickstart -k gui/$(id -u)/com.aegis.bot
 > show files in main Desktop folder
 < (Eva lists ~/Desktop)
 > open ava-selfie.png in the same folder
-< Opened /Users/michaelloh/Desktop/ava-selfie.png.
+< Opened /Users/alice/Desktop/ava-selfie.png.
 ```
 
 Preview should pop on the dev box.
@@ -533,10 +533,10 @@ Create `deploy/aegis.newsyslog.conf`:
 #
 # Format: <logfile> <owner:group> <mode> <count> <size_kb> <when> <flags>
 # Rotates at 10MB or daily, keeps 7 archives, gz-compresses.
-__AEGIS_ROOT__/logs/aegis.stdout.log  michaelloh:staff  644  7  10240  *  GZ
-__AEGIS_ROOT__/logs/aegis.stderr.log  michaelloh:staff  644  7  10240  *  GZ
-__AEGIS_ROOT__/logs/aegis-backup.stdout.log  michaelloh:staff  644  7  10240  *  GZ
-__AEGIS_ROOT__/logs/aegis-backup.stderr.log  michaelloh:staff  644  7  10240  *  GZ
+__AEGIS_ROOT__/logs/aegis.stdout.log  __USER__:staff  644  7  10240  *  GZ
+__AEGIS_ROOT__/logs/aegis.stderr.log  __USER__:staff  644  7  10240  *  GZ
+__AEGIS_ROOT__/logs/aegis-backup.stdout.log  __USER__:staff  644  7  10240  *  GZ
+__AEGIS_ROOT__/logs/aegis-backup.stderr.log  __USER__:staff  644  7  10240  *  GZ
 ```
 
 - [ ] **Step 2: Document install in `deploy/README.md`**
@@ -740,7 +740,7 @@ In Telegram:
 1. `/health` → STATUS OK + scheduler tick recent
 2. `show files in main Desktop folder` → list
 3. `open ava-selfie.png in the same folder` → Preview opens
-4. `read me the first paragraph of /Users/michaelloh/Desktop/notes.md` → text reply
+4. `read me the first paragraph of /Users/alice/Desktop/notes.md` → text reply
 5. `/cron list` → job table
 
 Expected: all 5 succeed, no `Thinking…` orphan bubbles, no allowlist errors.

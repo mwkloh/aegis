@@ -16,7 +16,7 @@
 
 ## 1. Goal
 
-Give the operator (a single human, for now — `mwkloh@gmail.com`) a
+Give the operator (a single human, for now) a
 way to:
 
 1. **Approve or reject proposals from a phone.** Track B.

@@ -124,45 +124,69 @@ Never runs in CI, costs real tokens: `python -m runtime.eval.cli --yes` (`--repe
 
 ### Prerequisites
 
-- **Python 3.11+** (project tested on 3.11–3.13)
-- **Ollama** running locally (`brew install ollama && ollama serve`) — required for the harness dispatcher to enable
-- A Telegram bot token if you want the chat interface (`@BotFather`)
-- Optional: OpenRouter / Anthropic / OpenAI keys for frontier-tier routing
+- **Python 3.11+** (project tested on 3.11–3.13) and **git**
+- **[Ollama](https://ollama.com)** running locally. It serves every model AEGIS uses by default, so **no API key is needed to get started**
+- Optional: a Telegram bot token if you want the chat interface (`@BotFather`)
+- Optional: an OpenRouter / Anthropic / OpenAI key for frontier-tier routing
 
-### First-time setup
+### Quickstart
 
 ```bash
-git clone https://github.com/<you>/aegis.git
-cd aegis
+# 1. Prerequisites (macOS shown; on Linux use your package manager)
+brew install ollama python@3.12
+ollama serve &                 # or just open the Ollama app
 
-# Create venv, install runtime + dev deps, provision ~/.aegis/, run doctor
+# 2. Get the code and the two models the defaults use
+git clone https://github.com/mwkloh/aegis.git
+cd aegis
+ollama pull gemma4:e2b         # Tier 0: intent classification
+ollama pull gemma4:e4b         # Tier 1 + reflection
+
+# 3. Install, provision ~/.aegis/, and verify everything
 make setup
 
-# One-shot health check (re-runnable)
-make doctor
+# 4. Try the terminal demo (a small walking skeleton: `ping`, `echo hi`,
+#    `what time is it in Tokyo?`). The full assistant is the Telegram bot, below.
+make run
 ```
+
+If `make setup` ends with a `✗`, the doctor prints the fix next to it (usually an `ollama pull`). `make doctor` is re-runnable and safe at any time.
 
 `make setup` runs three steps you can also invoke individually:
 
 | Step | What it does |
 |---|---|
-| `make install` | Creates `.venv`, installs runtime + dev dependencies via pip |
-| `make bootstrap` | Idempotently provisions `~/.aegis/workspace/` (memory, sessions, skills, canonical .md files), copies a starter `config.json` and `.env` if absent |
-| `make doctor` | Verifies Ollama is reachable, required models are pulled, `~/.aegis/` layout is correct, optional API keys are valid |
+| `make install` | Creates `.venv` and installs runtime + dev dependencies via pip |
+| `make bootstrap` | Idempotently provisions `~/.aegis/` from `templates/workspace/` (identity, memory, sessions, skills), and writes a starter `.env` and `config.json` if absent. Never overwrites anything you've edited |
+| `make doctor` | Checks Ollama is reachable, the configured models are pulled, the `~/.aegis/` layout is complete, and any optional API keys work |
+
+To keep state somewhere other than `~/.aegis`, set `AEGIS_ROOT` before running any of the above; bootstrap, doctor and the bot all honour it.
 
 ### Configure secrets and models
 
-Edit `~/.aegis/.env` (created by bootstrap):
+Settings live in two files under `~/.aegis/`, both created by bootstrap:
+
+- **`.env`**: which models to use (`MODEL_*`), provider keys, Telegram credentials.
+- **`config.json`**: harness behaviour, per-model profiles, Telegram on/off, file sandbox.
+
+Models are chosen in `.env`, not `config.json`. The defaults run everything on Ollama:
+
+```bash
+MODEL_FAST=gemma4:e2b            # intent classification
+MODEL_SMART_LOCAL=gemma4:e4b     # skill reasoning
+MODEL_SMART_PROVIDER=ollama      # ollama | openrouter
+```
+
+To use a hosted model for the reasoning tier instead, set `MODEL_SMART_PROVIDER=openrouter`, `MODEL_SMART=<vendor>/<model>` and `OPENROUTER_API_KEY`. For the Telegram bot add:
 
 ```bash
 TELEGRAM_BOT_TOKEN=...
 TELEGRAM_ALLOW_FROM=<your-numeric-tg-user-id>
-OPENROUTER_API_KEY=...        # optional
-ANTHROPIC_API_KEY=...         # optional
-OPENAI_API_KEY=...            # optional
 ```
 
-Edit `~/.aegis/config.json` to pick model defaults (see the `models:` and `modelAliases:` sections). To enable the multi-step tool loop:
+and set `"telegram": {"enabled": true}` in `config.json`.
+
+The starter `config.json` already turns on the multi-step tool loop:
 
 ```json
 {
@@ -174,6 +198,54 @@ Edit `~/.aegis/config.json` to pick model defaults (see the `models:` and `model
 ```
 
 The flag can also be set per-process via `HARNESS_MULTI_STEP=1`.
+
+#### Choosing a harness mode
+
+The benchmark behind this project (`docs/superpowers/plans/2026-10-04-mac-mini-rerun-and-bare-arm.md`) ran 3–9B models on a 16 GB Mac Mini. In short: the lightest harness mode, `native` (the model calls tools itself, with three plain-code guards), matched or beat the heavy planner on all four models in the final comparison and was roughly 2–3x faster on the hard suite. The starter config enables it for `gemma4:e4b`. That was measured on the `-mlx` build of the model; the plain tag is the same weights but has not been benchmarked itself. Models without a profile use the planner. See [Per-model profiles](#per-model-profiles) to change that.
+
+#### Using your own local model
+
+`gemma4:e4b` is only the default. To run a different model:
+
+1. **Pull it:** `ollama pull <your-model>` (any tag shown by `ollama list` works).
+2. **Point the smart tier at it** in `~/.aegis/.env`, replacing the placeholder:
+
+   ```bash
+   MODEL_SMART_LOCAL=<your-model>
+   ```
+
+   (`MODEL_FAST` and `MODEL_REFLECTION` work the same way for the other two tiers.)
+3. **Check it:** `make doctor` confirms the model is pulled and prints the `ollama pull` fix if it isn't.
+4. **Choose a harness mode for it** in `~/.aegis/config.json`. Keys are the exact model id:
+
+   ```json
+   {
+     "modelProfiles": {
+       "<your-model>": { "harness_mode": "native" }
+     }
+   }
+   ```
+
+   With no profile the model uses the planner. `native` was faster and at least as accurate on every model benchmarked here, but that is a measurement about those models, not a promise about yours.
+5. **Measure it** (optional, slow, uses your local model; see [Instrumented eval harness](#instrumented-eval-harness)):
+
+   ```bash
+   .venv/bin/python -m runtime.eval.cli --yes --arm native-guard --repeat 3
+   .venv/bin/python -m runtime.eval.cli --yes --arm full --repeat 3      # the planner, for comparison
+   ```
+
+   Compare `tgc` and `tgc_within_budget` between the two. With a few dozen runs per arm, differences under roughly 15 points are noise.
+
+#### Example paths in the bundled skills
+
+The skill descriptors in `runtime/skills/_bundle/` (`read_file`, `list_files`, `search_files`, `file_info`, `write_file`, `run_command`) show the model example paths such as `/Users/michaelloh/Desktop/foo.png`. They are kept exactly as the benchmark ran them, so you can reproduce its numbers and compare against them. The eval itself works in a throwaway temp directory, so those paths never need to exist.
+
+For day-to-day use you will probably want your own username in them. Skills are copied into `~/.aegis/workspace/skills/` on first run and are never overwritten afterwards, so there are two ways to customise:
+
+- **Your installed copies** (affects your assistant only): edit `~/.aegis/workspace/skills/<skill>/skill.yaml` and change the `e.g.` path in the argument descriptions.
+- **Before first run** (affects what gets seeded): edit the files in `runtime/skills/_bundle/` first, then run `make bootstrap`.
+
+If you change them and then compare against the published benchmark numbers, record that you did: the example text is part of the prompt.
 
 #### Per-model profiles
 
