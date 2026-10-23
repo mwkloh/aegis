@@ -53,17 +53,17 @@ def test_validate_denies_traversal_attack(client: FilesClient, tmp_path: Path) -
 
 def test_validate_denies_bare_filename(client: FilesClient) -> None:
     with pytest.raises(PathDenied, match="absolute"):
-        client._validate("ava-selfie.png")
+        client._validate("photo.png")
 
 
 def test_validate_denies_relative_path(client: FilesClient) -> None:
     with pytest.raises(PathDenied, match="absolute"):
-        client._validate("Desktop/ava-selfie.png")
+        client._validate("Desktop/photo.png")
 
 
 def test_validate_denies_dotdot_relative(client: FilesClient) -> None:
     with pytest.raises(PathDenied, match="absolute"):
-        client._validate("../ava-selfie.png")
+        client._validate("../photo.png")
 
 
 def test_validate_allows_tilde(

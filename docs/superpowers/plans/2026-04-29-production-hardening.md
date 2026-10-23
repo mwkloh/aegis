@@ -51,7 +51,7 @@ Expected: PASS (1308+ tests, no regressions).
 
 ```bash
 git add runtime/chat/telegram/harness_dispatcher.py runtime/files/client.py runtime/reasoning/prompts/tier1_skill.txt runtime/reasoning/skill_runner.py runtime/reasoning/tier1_reasoner.py runtime/skills/_bundle/file_info/skill.yaml runtime/skills/_bundle/list_files/skill.yaml runtime/skills/_bundle/read_file/skill.yaml runtime/skills/_bundle/search_files/skill.yaml tests/test_files_client.py tests/test_harness_dispatcher.py tests/test_tier1_reasoner.py
-git commit -m "fix(eva): reject relative paths and thread tier3 history into Tier 1 reasoner"
+git commit -m "fix(aegis): reject relative paths and thread tier3 history into Tier 1 reasoner"
 ```
 
 Expected: clean working tree.
@@ -60,7 +60,7 @@ Expected: clean working tree.
 
 ## Phase 1 — Ship `open_file` skill (HIGH; closes visible UX bug)
 
-Aegis currently routes "open ava-selfie.png" through `read_file`, which returns UTF-8 replacement chars for binary files. `FilesClient.open_with_app` exists at `runtime/files/client.py:190` but is only reachable from the `/files open` slash command. We need a skill descriptor + harness tool registration so the HarnessDispatcher can pick it.
+Aegis currently routes "open photo.png" through `read_file`, which returns UTF-8 replacement chars for binary files. `FilesClient.open_with_app` exists at `runtime/files/client.py:190` but is only reachable from the `/files open` slash command. We need a skill descriptor + harness tool registration so the HarnessDispatcher can pick it.
 
 ### Task 1: Add `files_open` harness callable
 
@@ -250,8 +250,8 @@ launchctl kickstart -k gui/$(id -u)/com.aegis.bot
 ```
 > show files in main Desktop folder
 < (Aegis lists ~/Desktop)
-> open ava-selfie.png in the same folder
-< Opened /Users/alice/Desktop/ava-selfie.png.
+> open photo.png in the same folder
+< Opened /Users/alice/Desktop/photo.png.
 ```
 
 Preview should pop on the dev box.
@@ -739,7 +739,7 @@ launchctl kickstart -k gui/$(id -u)/com.aegis.bot
 In Telegram:
 1. `/health` → STATUS OK + scheduler tick recent
 2. `show files in main Desktop folder` → list
-3. `open ava-selfie.png in the same folder` → Preview opens
+3. `open photo.png in the same folder` → Preview opens
 4. `read me the first paragraph of /Users/alice/Desktop/notes.md` → text reply
 5. `/cron list` → job table
 

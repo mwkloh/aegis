@@ -470,7 +470,7 @@ async def test_recent_turns_threaded_to_runner() -> None:
     )
     runner_intent = ToolIntent(
         tool="files_read",
-        args={"path": "~/Desktop/ava-selfie.png"},
+        args={"path": "~/Desktop/photo.png"},
         skill_id="read_file",
     )
     descriptor = _stub_descriptor("read_file", "files_read", ["read_file"])
@@ -491,7 +491,7 @@ async def test_recent_turns_threaded_to_runner() -> None:
 
     outcome = await dispatcher.dispatch(
         chat_id=777,
-        user_text="open ava-selfie.png in the same folder",
+        user_text="open photo.png in the same folder",
         message=_FakeMessage(),
     )
     assert outcome == DispatchOutcome.FIRED
