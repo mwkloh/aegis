@@ -34,7 +34,7 @@ The design principle, lifted from `AEGIS_BLUEPRINT.md`:
 
 *Teal-outlined boxes changed after the benchmarks described [below](#what-the-benchmarks-changed). Everything else is as originally designed.*
 
-The path a request takes in **`native` mode**, which is what the starter config uses for `gemma4:e4b`:
+The path a request takes in **`native` mode**, which is what the starter config uses for every model the benchmark measured:
 
 ```
 ┌──────────────────────────────────────────────┐
@@ -186,11 +186,12 @@ The first design wrapped small models in a lot of structure: a planner that wrot
 brew install ollama python@3.12
 ollama serve &                 # or just open the Ollama app
 
-# 2. Get the code and the two models the defaults use
+# 2. Get the code and the models
 git clone https://github.com/mwkloh/aegis.git
 cd aegis
 ollama pull gemma4:e2b         # Tier 0: intent classification
-ollama pull gemma4:e4b         # Tier 1 + reflection
+ollama pull gemma4:e4b         # reflection
+ollama pull qwen3.5:4b-mlx     # Tier 1 reasoning: your pick, see "Configure secrets and models"
 
 # 3. Install, provision ~/.aegis/, and verify everything
 make setup
@@ -200,7 +201,7 @@ make setup
 make run
 ```
 
-If `make setup` ends with a `✗`, the doctor prints the fix next to it (usually an `ollama pull`). `make doctor` is re-runnable and safe at any time.
+`make setup` ends with a `✗` until you replace the `MODEL_SMART_LOCAL=YOUR_MODEL` placeholder in `~/.aegis/.env` (see below). For any other `✗`, the doctor prints the fix next to it (usually an `ollama pull`). `make doctor` is re-runnable and safe at any time.
 
 `make setup` runs three steps you can also invoke individually:
 
@@ -223,15 +224,17 @@ Models are chosen in `.env`, not `config.json`. The defaults run everything on O
 
 ```bash
 MODEL_FAST=gemma4:e2b            # intent classification
-MODEL_SMART_LOCAL=gemma4:e4b     # skill reasoning
+MODEL_SMART_LOCAL=YOUR_MODEL     # skill reasoning: replace this placeholder
 MODEL_SMART_PROVIDER=ollama      # ollama | openrouter
 ```
+
+The reasoning model ships as a placeholder on purpose. Replace `YOUR_MODEL` with one of the models the benchmark measured (`gemma4:e4b-mlx`, `qwen3.5:4b-mlx`, `lfm2.5:8b` or `llama3.2:3b`), each of which has a profile in the starter `config.json`, and `ollama pull` it. Any other model works too but runs the planner until you give it a profile (see [Using your own local model](#using-your-own-local-model)).
 
 To use a hosted model for the reasoning tier instead, set `MODEL_SMART_PROVIDER=openrouter`, `MODEL_SMART=<vendor>/<model>` and `OPENROUTER_API_KEY`. For the Telegram bot add:
 
 ```bash
 TELEGRAM_BOT_TOKEN=...
-TELEGRAM_ALLOW_FROM=<your-numeric-tg-user-id>
+TELEGRAM_USER_ALLOWLIST=<your-numeric-tg-user-id>   # comma-separated for more than one
 ```
 
 and set `"telegram": {"enabled": true}` in `config.json`.
@@ -251,11 +254,11 @@ The flag can also be set per-process via `HARNESS_MULTI_STEP=1`.
 
 #### Choosing a harness mode
 
-The benchmark behind this project (`docs/superpowers/plans/2026-10-04-mac-mini-rerun-and-bare-arm.md`) ran 3–9B models on a 16 GB Mac Mini. In short: the lightest harness mode, `native` (the model calls tools itself, with three plain-code guards), matched or beat the heavy planner on all four models in the final comparison and was roughly 2–3x faster on the hard suite. The starter config enables it, with the other per-model settings the benchmark chose, for `gemma4:e4b`, `gemma4:e4b-mlx`, `qwen3.5:4b-mlx`, `lfm2.5:8b` and `llama3.2:3b` (all at a 32k context window; Llama 3.2 3B also keeps the bare prompt, and Qwen 3.5 4B needs its reasoning channel on). Gemma was measured on the `-mlx` build. The plain `gemma4:e4b` tag, which the defaults pull, is the same weights; a spot check of it on the honesty suite (30 runs) scored 90% against 100% for `-mlx`. Three runs is inside the noise at that size, but it is a reason to run the eval on your own setup before trusting these numbers. Any other model has no profile, so it uses the planner. See [Per-model profiles](#per-model-profiles) to change that.
+The benchmark behind this project (`docs/superpowers/plans/2026-10-04-mac-mini-rerun-and-bare-arm.md`) ran 3–9B models on a 16 GB Mac Mini. In short: the lightest harness mode, `native` (the model calls tools itself, with three plain-code guards), matched or beat the heavy planner on all four models in the final comparison and was roughly 2–3x faster on the hard suite. The starter config enables it, with the other per-model settings the benchmark chose, for `gemma4:e4b-mlx`, `qwen3.5:4b-mlx`, `lfm2.5:8b` and `llama3.2:3b` (all at a 32k context window; Llama 3.2 3B also keeps the bare prompt, and Qwen 3.5 4B needs its reasoning channel on). Gemma was measured on the `-mlx` build only. The plain `gemma4:e4b` tag is the same weights, but it has no profile: a spot check of it on the honesty suite (30 runs) scored 90% against 100% for `-mlx`. Three runs is inside the noise at that size, but it is a reason to run the eval on your own setup before trusting these numbers. Any other model has no profile, so it uses the planner. See [Per-model profiles](#per-model-profiles) to change that.
 
 #### Using your own local model
 
-`gemma4:e4b` is only the default. To run a different model:
+To run a model the benchmark did not measure:
 
 1. **Pull it:** `ollama pull <your-model>` (any tag shown by `ollama list` works).
 2. **Point the smart tier at it** in `~/.aegis/.env`, replacing the placeholder:
@@ -326,8 +329,8 @@ The same per-model block carries the harness settings the benchmark chose (see [
 ```json
 {
   "modelProfiles": {
-    "gemma4:e4b":   { "harness_mode": "native" },
-    "llama3.2:3b":  { "harness_mode": "native", "native_prompt": "bare" }
+    "gemma4:e4b-mlx": { "harness_mode": "native" },
+    "llama3.2:3b":    { "harness_mode": "native", "native_prompt": "bare" }
   }
 }
 ```

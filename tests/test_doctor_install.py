@@ -110,6 +110,45 @@ def test_no_skills_installed_yet_is_not_a_warning(root: Path) -> None:
     assert (ok, severity) == (True, "ok")
 
 
+def test_an_unreadable_skill_is_reported_not_a_crash(root: Path) -> None:
+    _install_skill(root, "read_file", "e.g. /Users/alice/Desktop\n")
+    bad = root / "workspace" / "skills" / "binary" / "skill.yaml"
+    bad.parent.mkdir(parents=True)
+    bad.write_bytes(b"\xff\xfe not utf-8")
+
+    _name, ok, detail, severity = doctor._check_skill_placeholders()
+
+    assert (ok, severity) == (False, "warn")
+    assert "binary" in detail
+
+
+def test_placeholder_fix_quotes_a_catalog_path_with_spaces(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "Application Support" / ".aegis"
+    monkeypatch.setenv("AEGIS_ROOT", str(target))
+    monkeypatch.delenv("AEGIS_HOME", raising=False)
+    _install_skill(target, "read_file", "e.g. /Users/YOUR_USERNAME/Desktop\n")
+
+    _name, _ok, detail, _severity = doctor._check_skill_placeholders()
+
+    assert f"'{target / 'workspace' / 'skills'}'/*/skill.yaml" in detail
+
+
+def test_smart_local_placeholder_says_to_choose_a_model(
+    root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(doctor, "_list_ollama_models", lambda: ["gemma4:e2b"])
+    monkeypatch.setenv("MODEL_SMART_LOCAL", "YOUR_MODEL")
+
+    rows = {name: (sev, detail) for name, _ok, detail, sev in doctor._check_models()}
+
+    sev, detail = rows["ollama:model:YOUR_MODEL"]
+    assert sev == "error"
+    assert "MODEL_SMART_LOCAL" in detail
+    assert "ollama pull YOUR_MODEL" not in detail
+
+
 def test_a_different_tag_of_the_same_family_is_not_installed() -> None:
     # gemma4:e2b on disk must not make gemma4:e4b look pulled.
     assert not doctor._model_present(["gemma4:e2b"], "gemma4:e4b")

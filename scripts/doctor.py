@@ -11,6 +11,7 @@ or not a repo, since apply will refuse but doctor itself still passes).
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 import subprocess  # nosec
 import sys
@@ -171,11 +172,21 @@ def _check_models() -> list[Row]:
     rows: list[Row] = []
     for name, severity in wanted:
         ok = _model_present(installed, name)
-        detail = "installed" if ok else f"not installed — run: ollama pull {name}"
+        if ok:
+            detail = "installed"
+        elif name == _MODEL_PLACEHOLDER:
+            detail = (
+                "placeholder — set MODEL_SMART_LOCAL in the .env to a model with a "
+                "profile in config.json (modelProfiles), then ollama pull it"
+            )
+        else:
+            detail = f"not installed — run: ollama pull {name}"
         rows.append((f"ollama:model:{name}", ok, detail, "ok" if ok else severity))
     return rows
 
 
+# The starter `.env`'s MODEL_SMART_LOCAL (scripts/bootstrap_aegis_home.py).
+_MODEL_PLACEHOLDER = "YOUR_MODEL"
 _USERNAME_PLACEHOLDER = "YOUR_USERNAME"
 
 
@@ -187,19 +198,34 @@ def _check_skill_placeholders() -> Row:
     does that, and the README documents the one-line fix.
     """
     catalog = _aegis_home() / "skills"
-    stale = sorted(
-        p.parent.name
-        for p in catalog.glob("*/skill.yaml")
-        if _USERNAME_PLACEHOLDER in p.read_text(encoding="utf-8")
-    )
-    if not stale:
+    stale: list[str] = []
+    unreadable: list[str] = []
+    for p in sorted(catalog.glob("*/skill.yaml")):
+        try:
+            text = p.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            unreadable.append(p.parent.name)
+            continue
+        if _USERNAME_PLACEHOLDER in text:
+            stale.append(p.parent.name)
+    if not stale and not unreadable:
         return ("skills:example_paths", True, "ok", "ok")
-    fix = f"sed -i '' \"s#{_USERNAME_PLACEHOLDER}#$(id -un)#g\" {catalog}/*/skill.yaml"
+    problems: list[str] = []
+    if stale:
+        fix = (
+            f"sed -i '' \"s#{_USERNAME_PLACEHOLDER}#$(id -un)#g\" "
+            f"{shlex.quote(str(catalog))}/*/skill.yaml"
+        )
+        problems.append(
+            f"{len(stale)} skill(s) still show {_USERNAME_PLACEHOLDER} in example paths "
+            f"(Linux: drop the '' after -i). Fix: {fix}"
+        )
+    if unreadable:
+        problems.append(f"unreadable skill.yaml (not UTF-8?): {', '.join(unreadable)}")
     return (
         "skills:example_paths",
         False,
-        f"{len(stale)} skill(s) still show {_USERNAME_PLACEHOLDER} in example paths "
-        f"(Linux: drop the '' after -i). Fix: {fix}",
+        "; ".join(problems),
         "warn",
     )
 

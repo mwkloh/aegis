@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Idempotently provision `~/.aegis/` (canon, env, config).
 
 Safe to run repeatedly. Never overwrites existing files; only fills gaps. Honours
@@ -23,31 +24,34 @@ CANONICAL_FILES = (
     "SKILLS_INDEX.md",
 )
 
+# Per-model settings the 2026-10 benchmark chose (README: "What the benchmarks
+# changed"; docs/superpowers/plans/2026-10-04-mac-mini-rerun-and-bare-arm.md, sections
+# 22-23). Every model below was measured in native mode at a 32k context window.
+# Llama 3.2 3B keeps the bare prompt: the persona prompt raised its flagged-reply rate.
+# Qwen 3.5 4B needs its reasoning channel on. Models not listed here (and not measured,
+# including the plain `gemma4:e4b` tag) fall back to the planner; see README
+# "Per-model profiles".
+MEASURED_PROFILES: dict[str, dict[str, object]] = {
+    "gemma4:e4b-mlx": {"harness_mode": "native", "num_ctx": 32768},
+    "qwen3.5:4b-mlx": {"harness_mode": "native", "think": True, "num_ctx": 32768},
+    "lfm2.5:8b": {"harness_mode": "native", "num_ctx": 32768},
+    "llama3.2:3b": {"harness_mode": "native", "native_prompt": "bare", "num_ctx": 32768},
+}
+
 # Only keys `runtime.config` reads from config.json. Models are chosen in `.env`
-# (MODEL_*), so a `models` block here would be silently ignored. `gemma4:e4b` runs in
-# native mode because the 2026-10 ablation measured it ahead of the planner on the
-# `-mlx` build of this model (docs/superpowers/plans/2026-10-04-mac-mini-rerun-and-bare-arm.md,
-# sections 22-23); the plain tag is the same weights but has not been measured itself.
+# (MODEL_*), so a `models` block here would be silently ignored.
 STARTER_CONFIG: dict[str, object] = {
     "telegram": {"enabled": False, "userAllowlist": []},
     "harness": {"multi_step": True, "max_steps": 5},
-    # Per-model settings the 2026-10 benchmark chose (README: "What the benchmarks
-    # changed"). Every model below was measured in native mode at a 32k context window.
-    # `gemma4:e4b` is the plain tag of the weights measured as `gemma4:e4b-mlx`.
-    # Llama 3.2 3B keeps the bare prompt: the persona prompt raised its flagged-reply
-    # rate. Qwen 3.5 4B needs its reasoning channel on. Models not listed here (and
-    # not measured) fall back to the planner; see README "Per-model profiles".
-    "modelProfiles": {
-        "gemma4:e4b": {"harness_mode": "native", "num_ctx": 32768},
-        "gemma4:e4b-mlx": {"harness_mode": "native", "num_ctx": 32768},
-        "qwen3.5:4b-mlx": {"harness_mode": "native", "think": True, "num_ctx": 32768},
-        "lfm2.5:8b": {"harness_mode": "native", "num_ctx": 32768},
-        "llama3.2:3b": {"harness_mode": "native", "native_prompt": "bare", "num_ctx": 32768},
-    },
+    "modelProfiles": MEASURED_PROFILES,
 }
 
 # What the starter `.env` asks Ollama for; printed so the operator can pull them.
 STARTER_MODELS = ("gemma4:e2b", "gemma4:e4b")
+
+# The starter `.env`'s MODEL_SMART_LOCAL. Shipping a real default would run a model
+# the benchmark never measured; the operator picks one of the profiled models instead.
+MODEL_PLACEHOLDER = "YOUR_MODEL"
 
 
 def aegis_root() -> Path:
@@ -109,10 +113,17 @@ def _print_next_steps() -> None:
     print("  1. Install Ollama (https://ollama.com) and start it: ollama serve")
     for step, model in enumerate(STARTER_MODELS, start=2):
         print(f"  {step}. ollama pull {model}")
-    last = 2 + len(STARTER_MODELS)
-    print(f"  {last}. make doctor    # re-runnable health check")
-    print(f"  {last + 1}. make run       # chat in the terminal")
-    print("  Optional: add TELEGRAM_BOT_TOKEN and TELEGRAM_ALLOW_FROM to the .env above.")
+    step = 2 + len(STARTER_MODELS)
+    profiled = ", ".join(MEASURED_PROFILES)
+    print(f"  {step}. Choose the reasoning model: replace MODEL_SMART_LOCAL={MODEL_PLACEHOLDER}")
+    print(f"     in the .env above with one the benchmark measured ({profiled}),")
+    print("     then ollama pull it")
+    print(f"  {step + 1}. make doctor    # re-runnable health check")
+    print(f"  {step + 2}. make run       # chat in the terminal")
+    print(
+        "  Optional: add TELEGRAM_BOT_TOKEN and TELEGRAM_USER_ALLOWLIST (your numeric "
+        "Telegram user id) to the .env above."
+    )
 
 
 def main(argv: list[str] | None = None) -> int:

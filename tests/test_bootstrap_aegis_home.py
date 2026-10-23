@@ -105,15 +105,7 @@ def test_starter_config_only_holds_keys_the_runtime_reads(root: Path) -> None:
     assert kwargs["telegram"].enabled is False
 
 
-def test_starter_config_runs_gemma_in_native_mode(root: Path) -> None:
-    bootstrap.main([])
-    cfg = json.loads((root / "config.json").read_text(encoding="utf-8"))
-
-    profiles = _coerce_model_profiles(cfg["modelProfiles"])
-    assert profiles["gemma4:e4b"].harness_mode == "native"
-
-
-MEASURED_NATIVE = ("gemma4:e4b", "gemma4:e4b-mlx", "qwen3.5:4b-mlx", "lfm2.5:8b", "llama3.2:3b")
+MEASURED_NATIVE = ("gemma4:e4b-mlx", "qwen3.5:4b-mlx", "lfm2.5:8b", "llama3.2:3b")
 
 
 def test_starter_config_ships_the_per_model_settings_the_benchmark_chose(root: Path) -> None:
@@ -128,7 +120,7 @@ def test_starter_config_ships_the_per_model_settings_the_benchmark_chose(root: P
         assert profiles[model].num_ctx == 32768, model
     assert profiles["llama3.2:3b"].native_prompt == "bare"
     assert profiles["qwen3.5:4b-mlx"].think is True
-    for model in ("gemma4:e4b", "gemma4:e4b-mlx", "qwen3.5:4b-mlx", "lfm2.5:8b"):
+    for model in ("gemma4:e4b-mlx", "qwen3.5:4b-mlx", "lfm2.5:8b"):
         assert profiles[model].native_prompt in (None, "identity"), model
 
 
@@ -137,8 +129,33 @@ def test_starter_config_does_not_ship_settings_for_unmeasured_models(root: Path)
     cfg = json.loads((root / "config.json").read_text(encoding="utf-8"))
 
     # Dropped or never measured in the benchmark: shipping a profile would be a guess.
-    for model in ("qwen3.5:9b", "llama3.1:8b", "qwen3-vl:4b", "gemma4:e2b-mlx"):
+    # The plain `gemma4:e4b` tag is the same weights as `-mlx` but was never benchmarked.
+    for model in ("qwen3.5:9b", "llama3.1:8b", "qwen3-vl:4b", "gemma4:e2b-mlx", "gemma4:e4b"):
         assert model not in cfg["modelProfiles"], model
+
+
+def _env_template_lines() -> list[str]:
+    return (REPO / ".env.example").read_text(encoding="utf-8").splitlines()
+
+
+def test_env_template_leaves_the_smart_model_to_the_operator() -> None:
+    # No unmeasured default: the operator picks one of the profiled models.
+    active = [ln.split("#", 1)[0].strip() for ln in _env_template_lines()]
+    assert f"MODEL_SMART_LOCAL={bootstrap.MODEL_PLACEHOLDER}" in active
+
+
+def test_env_template_names_only_the_telegram_allowlist_the_runtime_reads() -> None:
+    lines = _env_template_lines()
+    keys = {ln.split("=", 1)[0].strip() for ln in lines if "=" in ln and not ln.startswith("#")}
+    assert not keys & {"TELEGRAM_USER_ID", "TELEGRAM_ALLOW_FROM"}
+    # Commented out: a blank TELEGRAM_USER_ALLOWLIST= would empty config.json's list.
+    assert "TELEGRAM_USER_ALLOWLIST" not in keys
+    assert any(ln.startswith("# TELEGRAM_USER_ALLOWLIST=") for ln in lines)
+
+
+def test_bootstrap_script_runs_directly() -> None:
+    script = REPO / "scripts" / "bootstrap_aegis_home.py"
+    assert script.read_text(encoding="utf-8").startswith("#!/usr/bin/env python3\n")
 
 
 def test_env_template_defines_every_key_the_doctor_requires() -> None:
@@ -163,3 +180,8 @@ def test_bootstrap_tells_the_operator_what_to_do_next(
     out = capsys.readouterr().out
     assert "ollama pull" in out
     assert "make doctor" in out
+    assert "TELEGRAM_USER_ALLOWLIST" in out  # the name the runtime reads
+    assert "TELEGRAM_ALLOW_FROM" not in out
+    # The smart model is a placeholder; the steps say how to choose a measured one.
+    assert "MODEL_SMART_LOCAL" in out
+    assert "qwen3.5:4b-mlx" in out

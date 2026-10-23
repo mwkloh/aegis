@@ -14,7 +14,9 @@ stability guarantees.
   `native_prompt` and `guardrails` settings. `docs/ARCHITECTURE.md` gets an additive §15
   recording what changed in the Runtime plane and what did not. Figures live in
   `docs/images/`.
-- **Fresh-install path that works** — `make setup` on a clean clone now ends green. New
+- **Fresh-install path that works** — `make setup` on a clean clone ends green once the
+  operator has chosen a reasoning model (`MODEL_SMART_LOCAL` ships as the `YOUR_MODEL`
+  placeholder, so nothing runs a model the benchmark never measured). New
   `templates/workspace/` supplies the identity/memory files bootstrap copies into
   `~/.aegis/workspace/`; bootstrap also seeds the bundled skills and prints the
   `ollama pull` commands to run next. README gains a copy-paste Quickstart.
@@ -26,9 +28,19 @@ stability guarantees.
 - **Starter `config.json` now ships the per-model settings the 2026-10 benchmark chose.**
   Before, only `gemma4:e4b` ran in `native` mode, so a fresh clone running Qwen 3.5 4B,
   LFM 2.5 8B or Llama 3.2 3B got the planner the benchmark found slower, and Llama got the
-  persona prompt that raised its flagged-reply rate. The five measured models now carry
+  persona prompt that raised its flagged-reply rate. The four measured models
+  (`gemma4:e4b-mlx`, `qwen3.5:4b-mlx`, `lfm2.5:8b`, `llama3.2:3b`) now carry
   `harness_mode: native` and the 32k `num_ctx` they were measured at; Llama keeps the bare
-  prompt and Qwen keeps `think: true`. Unmeasured models are deliberately left unlisted.
+  prompt and Qwen keeps `think: true`. Unmeasured models, including the plain `gemma4:e4b`
+  tag, are deliberately left unlisted.
+- Bootstrap's next steps, `.env.example` and the README named `TELEGRAM_ALLOW_FROM` /
+  `TELEGRAM_USER_ID`, which the runtime never reads, so a bot set up that way refused
+  everyone. They now name `TELEGRAM_USER_ALLOWLIST` (commented out in `.env.example`: a
+  blank value would empty `config.json`'s allowlist).
+- Doctor no longer crashes on an unreadable or non-UTF-8 `skill.yaml`, quotes the catalog
+  path in its `sed` fix, and explains the `YOUR_MODEL` placeholder instead of suggesting
+  `ollama pull YOUR_MODEL`.
+- `scripts/bootstrap_aegis_home.py` is executable and now has the shebang to match.
 - `ModelProfile.guardrails` described the planner default as "all but synthesis", which
   implied plan-lock was on. It is off (as tested); the text now says so.
 - README eval commands now select the hard and honesty suites and say that the CLI's

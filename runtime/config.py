@@ -506,9 +506,10 @@ class AegisConfig(BaseModel):
     def guardrails_for(self, model: str) -> Guardrails:
         """Which guardrails run for one model, resolved like `harness_mode_for`.
 
-        Unset means the mode's default: today's planner behaviour, or the
-        `native+guard` preset in native mode. `plan_lock` never applies in native
-        mode (an env override cannot raise at run time, so it is dropped here).
+        Unset means `Guardrails()` in either mode: autofill, claim gate and evidence,
+        with `plan_lock` and `synthesis` off. So a model with no profile runs the
+        planner without plan-lock (2026-10 ablation decision). `plan_lock` never applies
+        in native mode (an env override cannot raise at run time, so it is dropped here).
         """
         from runtime.harness.guardrails import Guardrails  # noqa: PLC0415
 

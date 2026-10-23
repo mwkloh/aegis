@@ -3465,9 +3465,10 @@ def test_resolve_harness_native_on_ollama_keeps_the_profile_guardrails() -> None
     assert guardrails == cfg.guardrails_for("g:4b") == Guardrails(plan_lock=False)
 
 
-def test_resolve_harness_unset_profile_is_todays_planner() -> None:
+def test_resolve_harness_unset_profile_is_the_planner_without_plan_lock() -> None:
     from runtime.chat.telegram.bot import _resolve_harness
     from runtime.config import AegisConfig
 
     result = _resolve_harness(AegisConfig(), _resolve_target("ollama", "g:4b"), object())
     assert result == ("planner", None, Guardrails())
+    assert result[2].plan_lock is False
