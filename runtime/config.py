@@ -187,8 +187,9 @@ class ModelProfile(BaseModel):
     guardrails: frozenset[GuardrailName] | None = Field(
         default=None,
         description=(
-            "Deterministic guardrails to run. None = the mode's default (planner: all "
-            "but synthesis; native: autofill, claim_gate, evidence)."
+            "Deterministic guardrails to run. None = autofill, claim_gate and evidence in "
+            "either mode; `plan_lock` (planner only) and `synthesis` (native only) are "
+            "opt-in and off by default, as the 2026-10 benchmark found."
         ),
     )
     native_prompt: NativePrompt | None = Field(

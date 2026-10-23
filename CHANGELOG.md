@@ -8,6 +8,12 @@ stability guarantees.
 ## [Unreleased]
 
 ### Added
+- **Benchmark learnings in the docs** — README gains an amended architecture figure, a
+  "What the benchmarks changed" section (pooled scores, what earned its keep, what was
+  retired, how far to trust it) and documentation for the per-model `harness_mode`,
+  `native_prompt` and `guardrails` settings. `docs/ARCHITECTURE.md` gets an additive §15
+  recording what changed in the Runtime plane and what did not. Figures live in
+  `docs/images/`.
 - **Fresh-install path that works** — `make setup` on a clean clone now ends green. New
   `templates/workspace/` supplies the identity/memory files bootstrap copies into
   `~/.aegis/workspace/`; bootstrap also seeds the bundled skills and prints the
@@ -17,6 +23,16 @@ stability guarantees.
   contain the `YOUR_USERNAME` placeholder, and prints the `sed` that fixes it.
 
 ### Fixed
+- **Starter `config.json` now ships the per-model settings the 2026-10 benchmark chose.**
+  Before, only `gemma4:e4b` ran in `native` mode, so a fresh clone running Qwen 3.5 4B,
+  LFM 2.5 8B or Llama 3.2 3B got the planner the benchmark found slower, and Llama got the
+  persona prompt that raised its flagged-reply rate. The five measured models now carry
+  `harness_mode: native` and the 32k `num_ctx` they were measured at; Llama keeps the bare
+  prompt and Qwen keeps `think: true`. Unmeasured models are deliberately left unlisted.
+- `ModelProfile.guardrails` described the planner default as "all but synthesis", which
+  implied plan-lock was on. It is off (as tested); the text now says so.
+- README eval commands now select the hard and honesty suites and say that the CLI's
+  default arm is the heavy planner, so the article's numbers can be reproduced.
 - **Doctor** no longer demands `OPENROUTER_API_KEY` for an all-local setup (required
   only when `MODEL_SMART_PROVIDER=openrouter`), checks the smart-tier local model, gives
   an `ollama pull` hint for a missing one, and no longer reports `gemma4:e4b` as

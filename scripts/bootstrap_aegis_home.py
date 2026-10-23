@@ -31,7 +31,19 @@ CANONICAL_FILES = (
 STARTER_CONFIG: dict[str, object] = {
     "telegram": {"enabled": False, "userAllowlist": []},
     "harness": {"multi_step": True, "max_steps": 5},
-    "modelProfiles": {"gemma4:e4b": {"harness_mode": "native"}},
+    # Per-model settings the 2026-10 benchmark chose (README: "What the benchmarks
+    # changed"). Every model below was measured in native mode at a 32k context window.
+    # `gemma4:e4b` is the plain tag of the weights measured as `gemma4:e4b-mlx`.
+    # Llama 3.2 3B keeps the bare prompt: the persona prompt raised its flagged-reply
+    # rate. Qwen 3.5 4B needs its reasoning channel on. Models not listed here (and
+    # not measured) fall back to the planner; see README "Per-model profiles".
+    "modelProfiles": {
+        "gemma4:e4b": {"harness_mode": "native", "num_ctx": 32768},
+        "gemma4:e4b-mlx": {"harness_mode": "native", "num_ctx": 32768},
+        "qwen3.5:4b-mlx": {"harness_mode": "native", "think": True, "num_ctx": 32768},
+        "lfm2.5:8b": {"harness_mode": "native", "num_ctx": 32768},
+        "llama3.2:3b": {"harness_mode": "native", "native_prompt": "bare", "num_ctx": 32768},
+    },
 }
 
 # What the starter `.env` asks Ollama for; printed so the operator can pull them.

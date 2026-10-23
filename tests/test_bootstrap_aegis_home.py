@@ -113,6 +113,34 @@ def test_starter_config_runs_gemma_in_native_mode(root: Path) -> None:
     assert profiles["gemma4:e4b"].harness_mode == "native"
 
 
+MEASURED_NATIVE = ("gemma4:e4b", "gemma4:e4b-mlx", "qwen3.5:4b-mlx", "lfm2.5:8b", "llama3.2:3b")
+
+
+def test_starter_config_ships_the_per_model_settings_the_benchmark_chose(root: Path) -> None:
+    # The published benchmark ran every one of these in native mode at a 32k context
+    # window; a reader who follows it must not land on the planner it found slower.
+    bootstrap.main([])
+    cfg = json.loads((root / "config.json").read_text(encoding="utf-8"))
+    profiles = _coerce_model_profiles(cfg["modelProfiles"])
+
+    for model in MEASURED_NATIVE:
+        assert profiles[model].harness_mode == "native", model
+        assert profiles[model].num_ctx == 32768, model
+    assert profiles["llama3.2:3b"].native_prompt == "bare"
+    assert profiles["qwen3.5:4b-mlx"].think is True
+    for model in ("gemma4:e4b", "gemma4:e4b-mlx", "qwen3.5:4b-mlx", "lfm2.5:8b"):
+        assert profiles[model].native_prompt in (None, "identity"), model
+
+
+def test_starter_config_does_not_ship_settings_for_unmeasured_models(root: Path) -> None:
+    bootstrap.main([])
+    cfg = json.loads((root / "config.json").read_text(encoding="utf-8"))
+
+    # Dropped or never measured in the benchmark: shipping a profile would be a guess.
+    for model in ("qwen3.5:9b", "llama3.1:8b", "qwen3-vl:4b", "gemma4:e2b-mlx"):
+        assert model not in cfg["modelProfiles"], model
+
+
 def test_env_template_defines_every_key_the_doctor_requires() -> None:
     from scripts.doctor import REQUIRED_ENV_KEYS
 
