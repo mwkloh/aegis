@@ -1,4 +1,4 @@
-"""Path-sandboxed filesystem operations for Eva.
+"""Path-sandboxed filesystem operations for Aegis.
 
 Ported from ~/.atamai/mcp-servers/macos-files-mcp (Node.js → Python).
 All paths are validated against `allowed_roots` before any operation.

@@ -9,7 +9,7 @@ The clean fix is a bounded multi-step loop.
 
 ## Goal
 
-Eva can chain tool calls inside one Telegram turn, with auditable history and
+Aegis can chain tool calls inside one Telegram turn, with auditable history and
 an honest synthesis that only reports actions that actually ran.
 
 ## Architecture change

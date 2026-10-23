@@ -102,8 +102,8 @@ async def test_system_prompt_defaults_to_the_bare_benchmark_prompt() -> None:
     assert script.seen[0][0] == {"role": "system", "content": NATIVE_SYSTEM_PROMPT}
 
     script = _Script(_answer("hi"))
-    await _turn(script, _Harness({}), system_prompt="You are Eva.")
-    assert script.seen[0][0] == {"role": "system", "content": "You are Eva."}
+    await _turn(script, _Harness({}), system_prompt="You are Aegis.")
+    assert script.seen[0][0] == {"role": "system", "content": "You are Aegis."}
 
 
 def _search_read_harness() -> _Harness:

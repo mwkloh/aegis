@@ -146,7 +146,7 @@ class _StubTier3:
 class _StubTier1Loader:
     def load(self, chat_id: str) -> Tier1Snapshot:
         return Tier1Snapshot(
-            identity="Eva, your personal assistant",
+            identity="Aegis, your personal assistant",
             user="",
             bytes_identity=30,
             bytes_user=0,
@@ -3315,7 +3315,7 @@ async def test_native_system_prompt_is_the_tier1_identity() -> None:
 
     system = script.seen[0][0]
     assert system["role"] == "system"
-    assert system["content"].startswith("You are Eva, your personal assistant.")
+    assert system["content"].startswith("You are Aegis, your personal assistant.")
     assert "tools" in system["content"]
 
 

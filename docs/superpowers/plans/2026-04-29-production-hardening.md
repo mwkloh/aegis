@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Close the gaps between Track-D-complete state and a fully production-ready Eva. Ship the missing `open_file` skill (visible UX bug), harden the LLM input surface and `open_with_app` arg, fix sqlite connection-close hygiene, log-rotate launchd output, retire dead `/skills` code, and add unit-test coverage for the three untested critical paths (harness_dispatcher, files_handler, llm/router).
+**Goal:** Close the gaps between Track-D-complete state and a fully production-ready Aegis. Ship the missing `open_file` skill (visible UX bug), harden the LLM input surface and `open_with_app` arg, fix sqlite connection-close hygiene, log-rotate launchd output, retire dead `/skills` code, and add unit-test coverage for the three untested critical paths (harness_dispatcher, files_handler, llm/router).
 
-**Architecture:** No new subsystems. Each task is a localised fix in an existing module. The plan is phased so the user can stop at any phase boundary and still have shipped value: Phase 0 commits the pre-existing Eva path-resolution fix; Phase 1 closes the most-visible UX bug (`open_file`); Phase 2 is security hardening; Phase 3 is hygiene + ops; Phase 4 backfills tests for untested critical paths.
+**Architecture:** No new subsystems. Each task is a localised fix in an existing module. The plan is phased so the user can stop at any phase boundary and still have shipped value: Phase 0 commits the pre-existing Aegis path-resolution fix; Phase 1 closes the most-visible UX bug (`open_file`); Phase 2 is security hardening; Phase 3 is hygiene + ops; Phase 4 backfills tests for untested critical paths.
 
 **Tech Stack:** Python 3.12, Pydantic v2, python-telegram-bot, pytest, launchd (macOS dev box), `newsyslog` for log rotation. No new third-party dependencies.
 
@@ -35,9 +35,9 @@
 
 ## Phase 0 — Commit pending work
 
-The working tree is dirty from the 2026-04-24 Eva path-resolution fix. Lock that in before adding new changes.
+The working tree is dirty from the 2026-04-24 Aegis path-resolution fix. Lock that in before adding new changes.
 
-### Task 0: Commit the Eva path-resolution fix
+### Task 0: Commit the Aegis path-resolution fix
 
 **Files:**
 - Modified (already on disk): `runtime/chat/telegram/harness_dispatcher.py`, `runtime/files/client.py`, `runtime/reasoning/prompts/tier1_skill.txt`, `runtime/reasoning/skill_runner.py`, `runtime/reasoning/tier1_reasoner.py`, `runtime/skills/_bundle/{file_info,list_files,read_file,search_files}/skill.yaml`, `tests/test_files_client.py`, `tests/test_harness_dispatcher.py`, `tests/test_tier1_reasoner.py`.
@@ -60,7 +60,7 @@ Expected: clean working tree.
 
 ## Phase 1 — Ship `open_file` skill (HIGH; closes visible UX bug)
 
-Eva currently routes "open ava-selfie.png" through `read_file`, which returns UTF-8 replacement chars for binary files. `FilesClient.open_with_app` exists at `runtime/files/client.py:190` but is only reachable from the `/files open` slash command. We need a skill descriptor + harness tool registration so the HarnessDispatcher can pick it.
+Aegis currently routes "open ava-selfie.png" through `read_file`, which returns UTF-8 replacement chars for binary files. `FilesClient.open_with_app` exists at `runtime/files/client.py:190` but is only reachable from the `/files open` slash command. We need a skill descriptor + harness tool registration so the HarnessDispatcher can pick it.
 
 ### Task 1: Add `files_open` harness callable
 
@@ -215,7 +215,7 @@ intents:
 
 The skill bootstrapper seeds `~/.aegis/workspace/skills/` from `runtime/skills/_bundle/` only on first boot. To pick up the new skill on a dev box that already booted once, the operator must remove the workspace copy.
 
-Document in commit message: "Operator: `rm -rf ~/.aegis/workspace/skills/read_file ~/.aegis/workspace/skills/open_file` then restart Eva to re-seed."
+Document in commit message: "Operator: `rm -rf ~/.aegis/workspace/skills/read_file ~/.aegis/workspace/skills/open_file` then restart Aegis to re-seed."
 
 - [ ] **Step 4: Run the suite to confirm no regressions**
 
@@ -229,10 +229,10 @@ git add runtime/skills/_bundle/open_file/skill.yaml runtime/skills/_bundle/read_
 git commit -m "feat(skills): add open_file skill so binary files route to /usr/bin/open
 
 Operator follow-up: rm -rf ~/.aegis/workspace/skills/{read_file,open_file}
-then restart Eva to re-seed the bundle."
+then restart Aegis to re-seed the bundle."
 ```
 
-### Task 3: End-to-end smoke against live Eva
+### Task 3: End-to-end smoke against live Aegis
 
 **Files:** none (manual test).
 
@@ -249,14 +249,14 @@ launchctl kickstart -k gui/$(id -u)/com.aegis.bot
 
 ```
 > show files in main Desktop folder
-< (Eva lists ~/Desktop)
+< (Aegis lists ~/Desktop)
 > open ava-selfie.png in the same folder
 < Opened /Users/alice/Desktop/ava-selfie.png.
 ```
 
 Preview should pop on the dev box.
 
-Expected: Eva calls `files_open`, not `files_read`. Bot responds with "Opened …" and the file opens in Preview.
+Expected: Aegis calls `files_open`, not `files_read`. Bot responds with "Opened …" and the file opens in Preview.
 
 - [ ] **Step 3: If smoke fails, capture the Tier 1 prompt trace and revisit**
 
@@ -730,7 +730,7 @@ Expected: PASS, 1308+ tests (count grows by ~12-20 across this plan).
 Run: `make check` (or whatever `pyproject.toml` / `Makefile` defines).
 Expected: clean.
 
-- [ ] **Step 3: Restart Eva and run a 5-message smoke**
+- [ ] **Step 3: Restart Aegis and run a 5-message smoke**
 
 ```bash
 launchctl kickstart -k gui/$(id -u)/com.aegis.bot
@@ -753,7 +753,7 @@ Save a `session_handoff_2026-04-29.md` noting what shipped and any deferred item
 
 ## Stop-points
 
-- After **Phase 1** — visible UX bug closed; Eva can open binaries. Safe to merge.
+- After **Phase 1** — visible UX bug closed; Aegis can open binaries. Safe to merge.
 - After **Phase 2** — security hardening shipped. Safe to merge.
 - After **Phase 3** — hygiene and ops complete. Production-ready by the punch-list definition.
 - After **Phase 4** — full confidence; recommended before opening to anyone other than the operator.
