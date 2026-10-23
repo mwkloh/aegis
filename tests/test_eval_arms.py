@@ -50,6 +50,18 @@ def test_native_guard_id_is_native_guard_with_the_identity_prompt() -> None:
     assert cfg.models.native_prompt == "identity"
 
 
+def test_identity_arm_measures_the_shipped_template_not_the_operator_persona() -> None:
+    """native-guard-id measures what a fresh install sends: the repo's Aegis template,
+    never this machine's own IDENTITY.md (a private persona, different per machine)."""
+    from runtime.eval.cli import _TEMPLATE_WORKSPACE, _tier1_root
+
+    cfg = _cfg()
+    assert _tier1_root(cfg, "native-guard-id") == _TEMPLATE_WORKSPACE
+    assert "**Name:** Aegis" in (_TEMPLATE_WORKSPACE / "IDENTITY.md").read_text(encoding="utf-8")
+    for arm in ("full", "full-nolock", "native", "native-guard", "native-guard-synth", "bare"):
+        assert _tier1_root(cfg, arm) == cfg.storage.workspace
+
+
 def test_production_defaults_to_the_identity_prompt() -> None:
     cfg = AegisConfig()
     assert cfg.models.native_prompt is None  # unset: defer to the profile, then identity

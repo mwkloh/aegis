@@ -71,6 +71,22 @@ def _apply_arm(cfg: AegisConfig, arm: str) -> AegisConfig:
 
 _DEFAULT_TASKS_DIR = Path(__file__).resolve().parent.parent.parent / "eval" / "tasks"
 _DEFAULT_OUT_DIR = Path(__file__).resolve().parent.parent.parent / "eval" / "results"
+# The workspace a fresh install is seeded from (bootstrap copies it to ~/.aegis/workspace).
+_TEMPLATE_WORKSPACE = Path(__file__).resolve().parent.parent.parent / "templates" / "workspace"
+
+
+def _tier1_root(cfg: AegisConfig, arm: str) -> Path:
+    """Where an arm reads IDENTITY.md (and USER.md) from.
+
+    An identity-prompt arm measures what a fresh install sends, so it reads the repo's
+    Aegis template: pinned by the commit, the same on every machine, and never the
+    operator's own persona. Every other arm keeps the machine workspace it was
+    measured with (only synthesis prompts read the identity there).
+    """
+    preset = _ARM_PRESETS.get(arm)
+    if preset is not None and preset[0] == "native" and preset[2] == "identity":
+        return _TEMPLATE_WORKSPACE
+    return cfg.storage.workspace
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -199,7 +215,7 @@ async def _run(args: argparse.Namespace) -> int:
             return 0
 
     registry = SkillRegistry.from_directory(cfg.skills.catalog_dir)
-    tier1_loader = Tier1Loader(cfg.storage.workspace)
+    tier1_loader = Tier1Loader(_tier1_root(cfg, args.arm))
 
     if not args.no_prewarm:
         client = (
