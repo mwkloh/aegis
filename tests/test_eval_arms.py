@@ -50,16 +50,18 @@ def test_native_guard_id_is_native_guard_with_the_identity_prompt() -> None:
     assert cfg.models.native_prompt == "identity"
 
 
-def test_identity_arm_measures_the_shipped_template_not_the_operator_persona() -> None:
-    """native-guard-id measures what a fresh install sends: the repo's Aegis template,
-    never this machine's own IDENTITY.md (a private persona, different per machine)."""
+def test_every_arm_reads_the_shipped_template_never_the_operator_workspace(
+    tmp_path: Path,
+) -> None:
+    """The eval measures what a fresh install sends: the repo's Aegis template, pinned by
+    the commit. It never reads this machine's IDENTITY.md (a private persona, different
+    per machine) -- in the native prompt or in reply synthesis, for any arm."""
     from runtime.eval.cli import _TEMPLATE_WORKSPACE, _tier1_root
 
-    cfg = _cfg()
-    assert _tier1_root(cfg, "native-guard-id") == _TEMPLATE_WORKSPACE
+    cfg = AegisConfig.model_validate({"storage": {"workspace": str(tmp_path / "private")}})
+    assert _tier1_root() == _TEMPLATE_WORKSPACE
+    assert _tier1_root() != cfg.storage.workspace
     assert "**Name:** Aegis" in (_TEMPLATE_WORKSPACE / "IDENTITY.md").read_text(encoding="utf-8")
-    for arm in ("full", "full-nolock", "native", "native-guard", "native-guard-synth", "bare"):
-        assert _tier1_root(cfg, arm) == cfg.storage.workspace
 
 
 def test_production_defaults_to_the_identity_prompt() -> None:
