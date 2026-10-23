@@ -30,12 +30,17 @@ The design principle, lifted from `AEGIS_BLUEPRINT.md`:
 
 ## High-level architecture
 
+![AEGIS architecture: three nested planes, with the Runtime plane amended after the benchmarks](docs/images/aegis-architecture-amended.png)
+
+*Teal-outlined boxes changed after the benchmarks described [below](#what-the-benchmarks-changed). Everything else is as originally designed.*
+
+The path a request takes in **`native` mode**, which is what the starter config uses for `gemma4:e4b`:
+
 ```
 ┌──────────────────────────────────────────────┐
 │              Chat Interface                  │
 │             (Telegram / CLI)                 │
 └────────────────────┬─────────────────────────┘
-                     │
                      ▼
 ┌──────────────────────────────────────────────┐
 │        Intent Classifier (Tier 0)            │
@@ -50,12 +55,19 @@ The design principle, lifted from `AEGIS_BLUEPRINT.md`:
                      │ selected skill descriptor
                      ▼
 ┌──────────────────────────────────────────────┐
-│   Multi-Step Planner + Skill-Scoped Reasoner │
-│   • bounded step count (max 5 by default)    │
+│   Per-model profile  (config.json)           │
+│   harness mode · native prompt · think ·     │
+│   context window, chosen by measurement      │
+└────────────────────┬─────────────────────────┘
+                     ▼
+┌──────────────────────────────────────────────┐
+│   Tier-1 model calls tools natively          │
+│   • no JSON plan written first               │
+│   • bounded rounds (max 5 by default)        │
 │   • allowed-tools list per skill             │
 │   • destructive-guard interception           │
 └────────────────────┬─────────────────────────┘
-                     │ tool-intent contracts
+                     │ tool calls
                      ▼
 ┌──────────────────────────────────────────────┐
 │              Harness Adapter                 │
@@ -65,11 +77,14 @@ The design principle, lifted from `AEGIS_BLUEPRINT.md`:
                      │ tool results + audit trail
                      ▼
 ┌──────────────────────────────────────────────┐
-│   Reply Synthesizer  →  Verdict Gate         │
-│   model writes prose → gate annotates if     │
-│   the prose claims actions that didn't run   │
-└──────────────────────────────────────────────┘
+│   Code-only guards (no extra model call)     │
+│   path repair → claim gate → evidence        │
+└────────────────────┬─────────────────────────┘
+                     ▼
+                   Reply
 ```
+
+The older **`planner` mode** (the model first writes a JSON plan, then each step runs) is still in the code and selectable per model. It is what a model gets when `config.json` has no profile for it. The benchmark found it slower and no more accurate than `native` on the models tested, so it is no longer where the project's effort goes. Its extra mechanisms (completion gate, plan-lock, reply synthesis) are described under [Key features](#key-features) and are planner-mode only unless noted.
 
 The codebase is split into **three planes**, enforced by import-graph tests:
 
@@ -82,7 +97,7 @@ The codebase is split into **three planes**, enforced by import-graph tests:
 ## Key features
 
 ### Bounded multi-step tool loop
-The planner can chain tools (e.g. `files_search` → `files_read` → respond) but is hard-capped at `cfg.harness.max_steps` (default 5). Termination conditions: planner returns `kind=respond`, step cap hit, registry empty, or destructive-guard interception. See `runtime/chat/telegram/harness_dispatcher.py:_run_multi_step`.
+The model can chain tools (e.g. `files_search` → `files_read` → respond), as planner steps or as rounds of native tool calls, but is hard-capped at `cfg.harness.max_steps` (default 5) either way. Termination conditions: planner returns `kind=respond`, step cap hit, registry empty, or destructive-guard interception. See `runtime/chat/telegram/harness_dispatcher.py:_run_multi_step`.
 
 ### Destructive guard + confirmation flow
 Mutating tools are allowed at step 1 (the operator's explicit opening request) but intercepted at step 2+ with a deterministic message that surfaces the exact tool id and args — no LLM paraphrase between the model and the operator. Implemented as a `frozenset` lookup, not a prompt instruction, so it can't be jailbroken by clever phrasing. On interception the harness holds the pending intent and executes it only on an **exact-match** affirmative follow-up ("yes", "confirm", "go ahead") within a 120s TTL — no model in the confirmation loop, and the intent is armed only *after* the prompt is delivered, so a failed send can't leave an invisible pending action. See `runtime/chat/telegram/harness_dispatcher.py`.
@@ -91,7 +106,7 @@ Mutating tools are allowed at step 1 (the operator's explicit opening request) b
 Every tool the harness executes leaves a structural proof record — skill, tool, an argv hash, a byte count, and a classified verdict (`verified` / `exit_nonzero` / `tool_error` / …) — appended to the session event shard, scoped to the turn. No argv contents or output bodies are stored. This is the substrate the completion gate reads. See `runtime/tools/record.py`.
 
 ### Completion gate
-When the planner declares it's done (`kind=task_complete`), the harness checks the claimed summary against the turn's *verified* ledger evidence rather than trusting the model. A tool that failed (including a soft failure like a non-zero `run_command` exit) never counts as verified, and an unrecovered failure appends an honest "⚠️ this did not complete successfully" note to the reply. Annotate-not-block for now — the `harness.completion_gated` events measure how often a hard block would fire before one is turned on. This is the direct counter to a small model lying about completion.
+*(Planner mode.)* When the planner declares it's done (`kind=task_complete`), the harness checks the claimed summary against the turn's *verified* ledger evidence rather than trusting the model. A tool that failed (including a soft failure like a non-zero `run_command` exit) never counts as verified, and an unrecovered failure appends an honest "⚠️ this did not complete successfully" note to the reply. Annotate-not-block for now — the `harness.completion_gated` events measure how often a hard block would fire before one is turned on. This is the direct counter to a small model lying about completion.
 
 ### Schema-constrained decoding
 For local models via Ollama, tool-call and plan JSON is constrained in the decoder itself (a JSON schema passed as Ollama's `format`, compiled to a GBNF grammar) so malformed output is impossible rather than merely discouraged — the single biggest reliability lever for 2B-class models. A deterministic `repair_json()` pass salvages wrapper noise (markdown fences, prose, trailing commas) before spending a corrective retry. Client-side schema validation stays the trust boundary; the decoder constraint is an optimization that can never weaken it.
@@ -117,6 +132,41 @@ Four-tier memory (preferences / identity / episodic / external knowledge) plus p
 Two design points that changed what the numbers mean. **Capability and the shipped budget are reported separately** — `tgc_within_budget` says whether a passing run would also have fit the 30 s production timeout, because a model can be capable and unusable at once. And **the eval gets its own generous read timeout**, so a slow model is measured on what it can do rather than cut off mid-answer; the production path keeps its shipped timeout untouched. Slow and incapable are different findings, and conflating them previously published a working model as a flat 0%.
 
 Never runs in CI, costs real tokens: `python -m runtime.eval.cli --yes` (`--repeat N` for variance, `--read-timeout`, `--no-prewarm`).
+
+---
+
+## What the benchmarks changed
+
+The first design wrapped small models in a lot of structure: a planner that wrote its steps as JSON, a plan-lock that narrowed each step to one tool, a completion gate, an evidence ledger. Then each piece was switched off in turn and measured. Four small models (Gemma 4 E4B, Qwen 3.5 4B, LFM 2.5 8B, Llama 3.2 3B) ran through Ollama on one 16 GB Mac Mini, 75 runs per model per setup. A run scored only if the reply was correct **and** every model call finished inside 30 seconds.
+
+![Pooled scores for bare, light and heavy harness setups across four small models](docs/images/harness-benchmark-pooled-scores.png)
+
+| Model | Bare | Light (`native` + 3 guards) | Planner + plan-lock |
+|---|---:|---:|---:|
+| Gemma 4 E4B | 77.3% | 78.7% | 64.0% |
+| Qwen 3.5 4B | 85.3% | 84.0% | 61.3% |
+| LFM 2.5 8B | 74.7% | 77.3% | **0.0%** |
+| Llama 3.2 3B | 28.0% | 30.7% | 26.7% |
+
+**What the data said**
+
+- The heavy planner never beat the light harness on any model. Under it LFM 2.5 never made a single tool call and scored zero; why is not known, and the light harness avoids it.
+- Light costs about one extra model call per task. The planner roughly triples the wait on the hard suite.
+- Three things are kept on, and none needs a model call, so they cost almost nothing to leave in: **path repair** (a path the model guessed right after a search is swapped for the search's own top match), the **claim check** (a reply that says something was done with no successful tool call behind it gets a note), and **receipts** (the real tool output is shown under a `Results:` header). Their measured benefit is small. A later re-check on the honesty suite, no guards against the light guards at 75 runs per setup, found no difference for LFM 2.5 8B or Qwen 3.5 4B. It was run twice. At the default context window the scores were LFM 78.7% both ways and Qwen 92.0% both ways. At the starter per-model settings (32k context, `think` on for Qwen) they were LFM 74.7% both ways and Qwen 89.3% without the guards against 88.0% with them. The same setup moved by 3 to 4 points between the two runs, as large as any guard effect. The earlier 30-run gaps of about 7 points for those models did not repeat. Llama 3.2 3B and Gemma 4 E4B were not re-checked, and failures cluster by task phrasing (one Qwen phrasing failed every run under both setups), so the effective sample is closer to 15 phrasings than 75 runs. Both models' remaining failures were wrong or errored tool calls, which happen before any guard runs. Treat the guards as cheap safety nets, not as a proven gain.
+- Plan-lock, measured against the same planner without it: Llama 3.2 3B +8.0 points, Qwen 3.5 4B −22.7, Gemma 4 E4B −2.7, LFM 2.5 8B 0.0. It is off.
+- An extra model call to write the final reply (`synthesis`) lifted Gemma 4's hard-suite score from 56.7% to 63.3%; elsewhere the change was inside the noise. It is off.
+- Parameter count did not predict results. The 8B LFM scored below both 4B models. A 9B Qwen scored 92.0% bare, the best of anything tried, but decoded at about 18 tokens per second against 67 for Gemma 4 E4B, which is too slow for an assistant on 16 GB.
+- The persona prompt that production uses held up in `native` mode for Qwen 3.5 4B, Gemma 4 E4B and LFM 2.5. For Llama 3.2 3B it raised the share of flagged replies by about 9 points, so that model keeps the bare prompt.
+
+**What that changed in AEGIS**
+
+- `harness_mode` (`native` or `planner`), `native_prompt` (`identity` or `bare`) and `guardrails` are now **per-model settings** in `config.json`. See [Per-model profiles](#per-model-profiles).
+- `native` mode runs three code-only guards by default: `autofill` (path repair), `claim_gate`, `evidence` (receipts). `plan_lock` and `synthesis` are opt-in.
+- Settings are chosen per model, not per parameter count.
+
+**Reproducing it.** The five setups compared are eval arms: `bare` (the model and the tool catalogue only), `native-guard` (light), `native-guard-synth` (light plus the reply-writing call), `full-nolock` (planner without plan-lock) and `full` (planner with plan-lock). The easy suite is `eval/tasks` (15 phrasings, run three times for 45 runs per model per setup), the hard suite `eval/tasks_hard` and the honesty suite `eval/tasks_honesty` (15 phrasings each, run twice for 30). Easy plus hard is the 75-run pool in the table. Commands are under [Using your own local model](#using-your-own-local-model). The overnight driver scripts that ran the whole matrix are not part of this repo, so you run one arm and suite at a time.
+
+**How far to trust this.** It is one machine, four models and 75 runs per setup, so gaps under about 13 points cannot be told apart, and that covers most differences between bare and light. "Light came top on three of four models" is best read as a tie broken on cost. The 30-run honesty figures are noisier still: the same setup, rerun at 75 runs, moved by up to 9 points on two models. The persona-prompt result is a single run, and why Llama reacted badly was not isolated. The figures above are not a general benchmark of these models. The full record is in `docs/superpowers/plans/2026-10-04-mac-mini-rerun-and-bare-arm.md` (sections 18–23) and the design in `docs/superpowers/specs/2026-10-06-harness-ablation-design.md`. You can reproduce a run with the commands under [Using your own local model](#using-your-own-local-model).
 
 ---
 
@@ -201,7 +251,7 @@ The flag can also be set per-process via `HARNESS_MULTI_STEP=1`.
 
 #### Choosing a harness mode
 
-The benchmark behind this project (`docs/superpowers/plans/2026-10-04-mac-mini-rerun-and-bare-arm.md`) ran 3–9B models on a 16 GB Mac Mini. In short: the lightest harness mode, `native` (the model calls tools itself, with three plain-code guards), matched or beat the heavy planner on all four models in the final comparison and was roughly 2–3x faster on the hard suite. The starter config enables it for `gemma4:e4b`. That was measured on the `-mlx` build of the model; the plain tag is the same weights but has not been benchmarked itself. Models without a profile use the planner. See [Per-model profiles](#per-model-profiles) to change that.
+The benchmark behind this project (`docs/superpowers/plans/2026-10-04-mac-mini-rerun-and-bare-arm.md`) ran 3–9B models on a 16 GB Mac Mini. In short: the lightest harness mode, `native` (the model calls tools itself, with three plain-code guards), matched or beat the heavy planner on all four models in the final comparison and was roughly 2–3x faster on the hard suite. The starter config enables it, with the other per-model settings the benchmark chose, for `gemma4:e4b`, `gemma4:e4b-mlx`, `qwen3.5:4b-mlx`, `lfm2.5:8b` and `llama3.2:3b` (all at a 32k context window; Llama 3.2 3B also keeps the bare prompt, and Qwen 3.5 4B needs its reasoning channel on). Gemma was measured on the `-mlx` build. The plain `gemma4:e4b` tag, which the defaults pull, is the same weights; a spot check of it on the honesty suite (30 runs) scored 90% against 100% for `-mlx`. Three runs is inside the noise at that size, but it is a reason to run the eval on your own setup before trusting these numbers. Any other model has no profile, so it uses the planner. See [Per-model profiles](#per-model-profiles) to change that.
 
 #### Using your own local model
 
@@ -221,17 +271,20 @@ The benchmark behind this project (`docs/superpowers/plans/2026-10-04-mac-mini-r
    ```json
    {
      "modelProfiles": {
-       "<your-model>": { "harness_mode": "native" }
+       "<your-model>": { "harness_mode": "native", "num_ctx": 32768 }
      }
    }
    ```
 
-   With no profile the model uses the planner. `native` was faster and at least as accurate on every model benchmarked here, but that is a measurement about those models, not a promise about yours.
-5. **Measure it** (optional, slow, uses your local model; see [Instrumented eval harness](#instrumented-eval-harness)):
+   With no profile the model uses the planner. `native` was faster and at least as accurate on every model benchmarked here, but that is a measurement about those models, not a promise about yours. `num_ctx` is the 32k window the benchmark ran at; without it Ollama picks the window itself, and some models default to one far too large for a 16 GB machine (`qwen3-vl:4b` was sized at 43 GB and every call timed out).
+5. **Measure it** (optional, slow, uses your local model; see [Instrumented eval harness](#instrumented-eval-harness)). The default arm is `full`, the heavy planner, so name the arm you mean:
 
    ```bash
+   # the "light" setup, on the easy, hard and honesty suites
    .venv/bin/python -m runtime.eval.cli --yes --arm native-guard --repeat 3
-   .venv/bin/python -m runtime.eval.cli --yes --arm full --repeat 3      # the planner, for comparison
+   .venv/bin/python -m runtime.eval.cli --yes --arm native-guard --tasks-dir eval/tasks_hard --repeat 2
+   .venv/bin/python -m runtime.eval.cli --yes --arm native-guard --tasks-dir eval/tasks_honesty --repeat 2
+   # the planner with plan-lock, for comparison: same commands with --arm full
    ```
 
    Compare `tgc` and `tgc_within_budget` between the two. With a few dozen runs per arm, differences under roughly 15 points are noise.
@@ -267,6 +320,23 @@ Some model settings are not safe to set tier-wide. Ollama's reasoning channel is
   }
 }
 ```
+
+The same per-model block carries the harness settings the benchmark chose (see [What the benchmarks changed](#what-the-benchmarks-changed)):
+
+```json
+{
+  "modelProfiles": {
+    "gemma4:e4b":   { "harness_mode": "native" },
+    "llama3.2:3b":  { "harness_mode": "native", "native_prompt": "bare" }
+  }
+}
+```
+
+- `harness_mode`: `native` (the model calls tools itself) or `planner` (JSON plan first). No profile means `planner`.
+- `native_prompt`: `identity` (speaks as your `IDENTITY.md`, the default) or `bare` (the eval's two-sentence prompt). `bare` is what Llama 3.2 3B needed.
+- `guardrails`: a list from `autofill`, `claim_gate`, `evidence`, `synthesis`, `plan_lock`. Left unset, `native` runs the first three. `plan_lock` is rejected in `native` mode because it needs the planner's step list.
+
+`MODEL_HARNESS_MODE` and `MODEL_GUARDRAILS` in `.env` override every profile; they exist for eval runs and debugging sessions, so leave them unset normally.
 
 Keys match on **exact model id** — there is no family-prefix fallback, because the two models above share a vendor string and need opposite values. A model with no profile keeps its own default. `MODEL_SMART_THINK` in `.env` is a global override that beats every profile, so it stays the escape hatch for a debugging session; leave it unset for profiles to apply. Ollama-only — OpenRouter has no equivalent request field.
 
