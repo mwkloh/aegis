@@ -13,6 +13,8 @@ import shutil
 import sys
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 from runtime.skills.bootstrap import seed_builtin_skills
 
 CANONICAL_FILES = (
@@ -129,6 +131,11 @@ def _print_next_steps() -> None:
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     root = aegis_root()
+    # As runtime/config.py and doctor do: ~/.aegis/.env may set AEGIS_HOME, and a shell
+    # export still wins (override=False). Absent on a first run, which is fine.
+    env_path = root / ".env"
+    if env_path.is_file():
+        load_dotenv(env_path, override=False)
     home = aegis_home(root)
     repo = Path(__file__).resolve().parent.parent
     template_dir = Path(argv[0]).expanduser() if argv else repo / "templates" / "workspace"

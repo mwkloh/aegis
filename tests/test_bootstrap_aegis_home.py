@@ -6,8 +6,10 @@ none of them can touch the real `~/.aegis`.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess  # nosec
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -20,11 +22,16 @@ TEMPLATE = REPO / "templates" / "workspace"
 
 
 @pytest.fixture
-def root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     target = tmp_path / ".aegis"
     monkeypatch.setenv("AEGIS_ROOT", str(target))
     monkeypatch.delenv("AEGIS_HOME", raising=False)
-    return target
+    # bootstrap loads <root>/.env into os.environ (as the runtime does); a second run in
+    # one test would otherwise leak the starter .env into every later test.
+    saved = dict(os.environ)
+    yield target
+    os.environ.clear()
+    os.environ.update(saved)
 
 
 def test_repo_ships_every_canonical_template() -> None:
@@ -62,6 +69,19 @@ def test_bootstrap_provisions_a_fresh_root(root: Path) -> None:
     assert (home / "memory" / "MEMORY.md").is_file()
     assert (root / "config.json").is_file()
     assert (root / ".env").stat().st_mode & 0o777 == 0o600
+
+
+def test_bootstrap_honours_aegis_home_set_in_the_env_file(root: Path, tmp_path: Path) -> None:
+    """The runtime and doctor load `~/.aegis/.env` before reading AEGIS_HOME; bootstrap
+    must too, or it seeds a different workspace from the one the bot reads."""
+    elsewhere = tmp_path / "elsewhere"
+    root.mkdir(parents=True)
+    (root / ".env").write_text(f"AEGIS_HOME={elsewhere}\n", encoding="utf-8")
+
+    assert bootstrap.main([]) == 0
+
+    assert (elsewhere / "IDENTITY.md").is_file()
+    assert not (root / "workspace" / "IDENTITY.md").exists()
 
 
 def test_bootstrap_seeds_the_bundled_skills(root: Path) -> None:
