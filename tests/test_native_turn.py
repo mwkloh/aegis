@@ -106,6 +106,26 @@ async def test_system_prompt_defaults_to_the_bare_benchmark_prompt() -> None:
     assert script.seen[0][0] == {"role": "system", "content": "You are Aegis."}
 
 
+def test_native_system_prompt_frames_the_identity_file_and_drops_editor_notes() -> None:
+    """IDENTITY.md is a markdown file, not a noun phrase: "You are # IDENTITY.md ..." read
+    badly. The file is framed as the identity, and HTML comments (notes for whoever edits
+    the file) never reach the model."""
+    from pathlib import Path
+
+    from runtime.chat.telegram.native_turn import native_system_prompt
+
+    template = (
+        Path(__file__).resolve().parent.parent / "templates" / "workspace" / "IDENTITY.md"
+    ).read_text(encoding="utf-8")
+    prompt = native_system_prompt(template)
+
+    assert prompt.startswith("You are the assistant described here:\n\n")
+    assert "**Name:** Aegis" in prompt
+    assert "<!--" not in prompt
+    assert "Rename this file" not in prompt
+    assert prompt.rstrip().endswith("answer in plain language when you are done.")
+
+
 def _search_read_harness() -> _Harness:
     return _Harness(
         {

@@ -3315,7 +3315,8 @@ async def test_native_system_prompt_is_the_tier1_identity() -> None:
 
     system = script.seen[0][0]
     assert system["role"] == "system"
-    assert system["content"].startswith("You are Aegis, your personal assistant.")
+    assert system["content"].startswith("You are the assistant described here:")
+    assert "Aegis, your personal assistant" in system["content"]
     assert "tools" in system["content"]
 
 
@@ -3343,7 +3344,7 @@ async def test_native_system_prompt_falls_back_when_tier1_fails() -> None:
     outcome = await dispatcher.dispatch(chat_id=1, user_text="find md files", message=message)
 
     assert outcome == DispatchOutcome.FIRED
-    assert script.seen[0][0]["content"].startswith("You are AEGIS, an operator-facing assistant.")
+    assert "AEGIS, an operator-facing assistant" in script.seen[0][0]["content"]
 
 
 async def test_native_replayed_bot_turn_drops_the_tool_evidence() -> None:
