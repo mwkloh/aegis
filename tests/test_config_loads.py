@@ -294,3 +294,17 @@ def test_config_smart_provider_invalid_value_falls_back_to_ollama(
     cfg = get_config()
     assert cfg.models.smart_provider == "ollama"
 
+
+
+def test_model_placeholder_blocks_only_the_ollama_route() -> None:
+    """YOUR_MODEL is the starter .env's MODEL_SMART_LOCAL; it only matters when the
+    smart tier runs on Ollama (the OpenRouter route never reads smart_local)."""
+    from runtime.config import AegisConfig, ModelConfig, model_placeholder_error
+
+    def cfg(provider: str, local: str) -> AegisConfig:
+        return AegisConfig(models=ModelConfig(smart_provider=provider, smart_local=local))
+
+    message = model_placeholder_error(cfg("ollama", "YOUR_MODEL"))
+    assert message is not None and "MODEL_SMART_LOCAL" in message
+    assert model_placeholder_error(cfg("openrouter", "YOUR_MODEL")) is None
+    assert model_placeholder_error(cfg("ollama", "gemma4:e4b")) is None

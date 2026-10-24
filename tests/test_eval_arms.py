@@ -105,3 +105,24 @@ def test_result_files_do_not_collide_across_arms(tmp_path: Path) -> None:
     }
     assert len(names) == len(ARMS)
     assert "2026-10-06T00-00-00Z-ollama-gemma4-e4b-mlx.json" in names  # full: unchanged
+
+
+async def test_eval_refuses_to_run_while_the_model_is_the_placeholder(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Refuses before asking Ollama for its models or prompting to proceed."""
+    from runtime.config import ModelConfig
+    from runtime.eval import cli
+
+    cfg = AegisConfig(models=ModelConfig(smart_provider="ollama", smart_local="YOUR_MODEL"))
+    monkeypatch.setattr(cli, "get_config", lambda: cfg)
+
+    def _no_ollama(*_a: object, **_k: object) -> None:
+        raise AssertionError("contacted Ollama before refusing")
+
+    monkeypatch.setattr(cli, "OllamaClient", _no_ollama)
+    repo = Path(__file__).resolve().parent.parent
+    args = cli._parse_args(["--arm", "full", "--tasks-dir", str(repo / "eval" / "tasks")])
+
+    assert await cli._run(args) == 2
+    assert "YOUR_MODEL" in capsys.readouterr().err
