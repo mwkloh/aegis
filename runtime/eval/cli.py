@@ -34,8 +34,10 @@ _DEFAULT_EVAL_READ_TIMEOUT_S = 300.0
 # as a ModelProfile (spec: docs/superpowers/specs/2026-10-06-harness-ablation-design.md).
 _GUARDED = frozenset({"autofill", "claim_gate", "evidence"})
 # (harness mode, guardrails, native prompt). The arms measured on nights 1-2 keep the
-# bare prompt so reruns stay comparable; native-guard-id is native-guard with the
-# production identity prompt. The prompt only matters in native mode.
+# bare native prompt they ran with; native-guard-id is native-guard with the production
+# identity prompt. The prompt only matters in native mode. Arms that synthesise replies
+# (full, full-nolock, native-guard-synth) are NOT strictly comparable with nights 1-2:
+# since 2026-10-23 their synthesis prompt reads the template identity in block framing.
 _ARM_PRESETS: dict[str, tuple[str, frozenset[str], str]] = {
     "full": ("planner", _GUARDED | {"plan_lock"}, "bare"),
     "full-nolock": ("planner", _GUARDED, "bare"),
