@@ -60,6 +60,18 @@ class Tier1Snapshot(BaseModel):
 
 
 _CHAT_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+_HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
+
+
+def strip_editor_notes(text: str) -> str:
+    """`text` without HTML comments, trimmed.
+
+    The workspace files are prompt input; their HTML comments are notes for whoever edits
+    them (the shipped IDENTITY.md promises they never reach the model). Every prompt reads
+    tier1 through `Tier1Loader.load`, so stripping there covers them all. A file that is
+    only a comment comes back empty, so callers use their default instead.
+    """
+    return _HTML_COMMENT.sub("", text).strip()
 
 
 def default_workspace_root() -> Path:
@@ -103,8 +115,8 @@ class Tier1Loader:
             self._root / "chats" / chat_id / "prefs.json"
         )
         return Tier1Snapshot(
-            identity=identity_text,
-            user=user_text,
+            identity=strip_editor_notes(identity_text),
+            user=strip_editor_notes(user_text),
             prefs=prefs,
             bytes_identity=nb_identity,
             bytes_user=nb_user,
@@ -202,4 +214,5 @@ __all__ = [
     "Tier1Loader",
     "Tier1Snapshot",
     "default_workspace_root",
+    "strip_editor_notes",
 ]

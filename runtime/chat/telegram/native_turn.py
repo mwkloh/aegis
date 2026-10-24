@@ -10,7 +10,6 @@ belongs to the dispatcher, which runs it the same way for both modes.
 from __future__ import annotations
 
 import json
-import re
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -38,19 +37,15 @@ def native_system_prompt(identity: str) -> str:
     """The production native-mode system prompt, speaking as the tier1 identity.
 
     Kept apart from NATIVE_SYSTEM_PROMPT, which the eval's bare arm shares: editing
-    this must not move the benchmark baseline. `identity` is the whole IDENTITY.md, a
-    markdown file rather than a noun phrase, so it is framed as a block; HTML comments
-    in it are notes for whoever edits the file and never reach the model.
+    this must not move the benchmark baseline. `identity` is the whole IDENTITY.md as
+    `Tier1Loader` returns it (editor notes already stripped), a markdown file rather
+    than a noun phrase, so it is framed as a block, as the synthesis prompts do.
     """
-    described = _HTML_COMMENT.sub("", identity).strip()
     return (
-        f"You are the assistant described here:\n\n{described}\n\n"
+        f"You are the assistant described here:\n\n{identity}\n\n"
         "Use the provided tools when they help you complete the operator's request, "
         "and answer in plain language when you are done."
     )
-
-
-_HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 
 
 def _recent_message(role: str, text: str, limit: int) -> dict[str, str]:

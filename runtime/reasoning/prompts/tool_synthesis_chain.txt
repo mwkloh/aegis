@@ -1,4 +1,8 @@
-You are {identity}. The operator asked: "{user_text}"
+You are the assistant described here:
+
+{identity}
+
+The operator asked: "{user_text}"
 
 You ran THESE tools, in order, and got these results:
 

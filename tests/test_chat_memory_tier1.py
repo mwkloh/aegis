@@ -110,9 +110,9 @@ def test_load_reads_identity_and_user(tmp_path: Path) -> None:
     (tmp_path / "USER.md").write_text("Operator: mwk\n", encoding="utf-8")
     loader = Tier1Loader(root=tmp_path)
     snap = loader.load("c1")
-    assert snap.identity == "I am AEGIS.\n"
-    assert snap.user == "Operator: mwk\n"
-    assert snap.bytes_identity == len(b"I am AEGIS.\n")
+    assert snap.identity == "I am AEGIS."  # trimmed: prompt text, not file bytes
+    assert snap.user == "Operator: mwk"
+    assert snap.bytes_identity == len(b"I am AEGIS.\n")  # the file's size, untrimmed
     assert snap.bytes_user == len(b"Operator: mwk\n")
     assert snap.bytes_prefs == 0
     assert snap.prefs == {}
@@ -306,3 +306,22 @@ def test_byte_counts_use_utf8(tmp_path: Path) -> None:
     snap = loader.load("c1")
     assert snap.identity == "héllo"
     assert snap.bytes_identity == 6
+
+
+def test_editor_notes_in_html_comments_never_reach_a_prompt(tmp_path: Path) -> None:
+    """The shipped IDENTITY.md promises HTML comments are notes for the operator. Every
+    prompt reads tier1 through this loader, so stripping here keeps that true for the
+    native prompt, reply synthesis and the chat pipeline alike."""
+    (tmp_path / "IDENTITY.md").write_text(
+        "- **Name:** Aegis\n<!-- rename freely;\nnot for the model -->\n", encoding="utf-8"
+    )
+    (tmp_path / "USER.md").write_text("<!-- fill in -->\nOperator: Sam\n", encoding="utf-8")
+    snap = Tier1Loader(root=tmp_path).load("c1")
+    assert snap.identity == "- **Name:** Aegis"
+    assert snap.user == "Operator: Sam"
+
+
+def test_an_identity_that_is_only_a_comment_loads_as_empty(tmp_path: Path) -> None:
+    """Empty, so callers fall back to their default identity instead of a blank block."""
+    (tmp_path / "IDENTITY.md").write_text("<!-- persona TBD -->\n", encoding="utf-8")
+    assert Tier1Loader(root=tmp_path).load("c1").identity == ""

@@ -3320,6 +3320,31 @@ async def test_native_system_prompt_is_the_tier1_identity() -> None:
     assert "tools" in system["content"]
 
 
+async def test_native_identity_that_is_only_a_comment_falls_back_to_the_default(
+    tmp_path: Path,
+) -> None:
+    """Commenting out the whole persona must not leave an empty identity block."""
+    from runtime.chat.memory.tier1 import Tier1Loader
+
+    (tmp_path / "IDENTITY.md").write_text("<!-- persona TBD -->\n", encoding="utf-8")
+    script = _NativeScript({"role": "assistant", "content": "Done."})
+    dispatcher = _native(script, tier1_loader=Tier1Loader(tmp_path))
+
+    await dispatcher.dispatch(chat_id=1, user_text="find md files", message=_FakeMessage())
+
+    content = script.seen[0][0]["content"]
+    assert "AEGIS, an operator-facing assistant" in content
+    assert "\n\n\n\n" not in content
+
+
+@pytest.mark.parametrize("name", ["tool_synthesis.txt", "tool_synthesis_chain.txt"])
+def test_synthesis_prompts_frame_the_identity_like_the_native_prompt(name: str) -> None:
+    """IDENTITY.md is a markdown file; "You are # IDENTITY.md ..." read badly here too."""
+    prompt = (Path(__file__).resolve().parent.parent / "runtime" / "reasoning" / "prompts" / name)
+    first = prompt.read_text(encoding="utf-8").splitlines()[0]
+    assert first == "You are the assistant described here:"
+
+
 async def test_native_bare_prompt_choice_sends_the_benchmark_prompt() -> None:
     """native_prompt="bare" is how the measured eval arms keep their baseline."""
     from runtime.harness.native_loop import NATIVE_SYSTEM_PROMPT

@@ -112,12 +112,11 @@ def test_native_system_prompt_frames_the_identity_file_and_drops_editor_notes() 
     the file) never reach the model."""
     from pathlib import Path
 
+    from runtime.chat.memory.tier1 import Tier1Loader
     from runtime.chat.telegram.native_turn import native_system_prompt
 
-    template = (
-        Path(__file__).resolve().parent.parent / "templates" / "workspace" / "IDENTITY.md"
-    ).read_text(encoding="utf-8")
-    prompt = native_system_prompt(template)
+    template = Path(__file__).resolve().parent.parent / "templates" / "workspace"
+    prompt = native_system_prompt(Tier1Loader(template).load("1").identity)
 
     assert prompt.startswith("You are the assistant described here:\n\n")
     assert "**Name:** Aegis" in prompt
