@@ -17,7 +17,7 @@ import logging
 import os
 import sys
 
-from runtime.config import get_config
+from runtime.config import get_config, model_placeholder_error
 
 # Re-export for test patching — tests patch serve.build_application directly.
 try:
@@ -44,6 +44,11 @@ def main() -> int:
 
     # --- fail-fast config validation ---
     cfg = get_config()
+
+    unset = model_placeholder_error(cfg)
+    if unset:
+        logger.error(unset)
+        return 1
 
     if not cfg.telegram.bot_token:
         logger.error(

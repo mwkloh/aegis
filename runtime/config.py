@@ -23,6 +23,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# What the starter `.env` ships as MODEL_SMART_LOCAL (scripts/bootstrap_aegis_home.py).
+MODEL_PLACEHOLDER = "YOUR_MODEL"
+
 HarnessMode = Literal["planner", "native"]
 NativePrompt = Literal["identity", "bare"]
 GuardrailName = Literal["autofill", "claim_gate", "evidence", "synthesis", "plan_lock"]
@@ -834,6 +837,21 @@ def _coerce_harness(raw: Any, env: dict[str, str]) -> HarnessConfig:
     except Exception:
         logger.warning("config.harness.invalid", exc_info=True)
         return HarnessConfig()
+
+
+def model_placeholder_error(cfg: AegisConfig) -> str | None:
+    """Why the configured models cannot run yet, or None.
+
+    The starter `.env` ships `MODEL_SMART_LOCAL=YOUR_MODEL` on purpose (no unmeasured
+    default). Entry points refuse to start while it is still there, rather than report
+    "wired" and send a model named YOUR_MODEL to Ollama on every turn.
+    """
+    if cfg.models.smart_provider == "ollama" and cfg.models.smart_local == MODEL_PLACEHOLDER:
+        return (
+            f"MODEL_SMART_LOCAL is still the starter placeholder {MODEL_PLACEHOLDER}: set it "
+            "in ~/.aegis/.env to a model the benchmark measured (see `make doctor`)"
+        )
+    return None
 
 
 @lru_cache(maxsize=1)

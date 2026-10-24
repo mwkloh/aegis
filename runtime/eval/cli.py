@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from runtime.chat.memory.tier1 import Tier1Loader
-from runtime.config import AegisConfig, get_config
+from runtime.config import AegisConfig, get_config, model_placeholder_error
 from runtime.eval.bare import run_variant_bare
 from runtime.eval.locality import classify_locality
 from runtime.eval.prewarm import prewarm
@@ -85,6 +85,11 @@ def _tier1_root() -> Path:
     in that one prompt line (decided 2026-10-23).
     """
     return _TEMPLATE_WORKSPACE
+
+
+def _tier1_loader() -> Tier1Loader:
+    """The tier1 loader every eval run uses (see `_tier1_root`)."""
+    return Tier1Loader(_tier1_root())
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -189,6 +194,10 @@ async def _run(args: argparse.Namespace) -> int:
     if unsupported is not None:
         print(f"Cannot run: {unsupported}.", file=sys.stderr)
         return 2
+    unset = model_placeholder_error(cfg)
+    if unset:
+        print(f"Cannot run: {unset}.", file=sys.stderr)
+        return 2
     local_models: set[str] = set()
     if target.provider == "ollama":
         try:
@@ -213,7 +222,7 @@ async def _run(args: argparse.Namespace) -> int:
             return 0
 
     registry = SkillRegistry.from_directory(cfg.skills.catalog_dir)
-    tier1_loader = Tier1Loader(_tier1_root())
+    tier1_loader = _tier1_loader()
 
     if not args.no_prewarm:
         client = (

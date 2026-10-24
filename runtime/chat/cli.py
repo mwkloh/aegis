@@ -12,7 +12,7 @@ import sys
 from collections.abc import Iterator
 from typing import Protocol
 
-from runtime.config import AegisConfig, get_config
+from runtime.config import AegisConfig, get_config, model_placeholder_error
 from runtime.events import EventStream, EventType
 from runtime.harness import HarnessAdapter
 from runtime.intent import (
@@ -206,6 +206,10 @@ def build_pipeline(config: AegisConfig | None = None) -> Pipeline:
 def main(argv: list[str] | None = None) -> int:
     """Read-eval-print loop. Ctrl-D / 'quit' / 'exit' to stop."""
     argv = argv or sys.argv[1:]
+    unset = model_placeholder_error(get_config())
+    if unset:
+        print(unset, file=sys.stderr)
+        return 1
     pipeline = build_pipeline()
     pipeline.events.append(EventType.SESSION_START, {"surface": "cli"})
 

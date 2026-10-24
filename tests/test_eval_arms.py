@@ -56,12 +56,12 @@ def test_every_arm_reads_the_shipped_template_never_the_operator_workspace(
     """The eval measures what a fresh install sends: the repo's Aegis template, pinned by
     the commit. It never reads this machine's IDENTITY.md (a private persona, different
     per machine) -- in the native prompt or in reply synthesis, for any arm."""
-    from runtime.eval.cli import _TEMPLATE_WORKSPACE, _tier1_root
+    from runtime.eval.cli import _TEMPLATE_WORKSPACE, _tier1_loader
 
     cfg = AegisConfig.model_validate({"storage": {"workspace": str(tmp_path / "private")}})
-    assert _tier1_root() == _TEMPLATE_WORKSPACE
-    assert _tier1_root() != cfg.storage.workspace
-    assert "**Name:** Aegis" in (_TEMPLATE_WORKSPACE / "IDENTITY.md").read_text(encoding="utf-8")
+    loader = _tier1_loader()  # the loader the eval run builds
+    assert loader.root == _TEMPLATE_WORKSPACE != cfg.storage.workspace
+    assert "**Name:** Aegis" in loader.load("1").identity
 
 
 def test_production_defaults_to_the_identity_prompt() -> None:
