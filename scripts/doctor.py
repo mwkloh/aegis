@@ -199,34 +199,54 @@ def _check_skill_placeholders() -> Row:
     """
     catalog = _aegis_home() / "skills"
     stale: list[str] = []
-    unreadable: list[str] = []
     for p in sorted(catalog.glob("*/skill.yaml")):
         try:
             text = p.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
-            unreadable.append(p.parent.name)
-            continue
+            continue  # `skills:load` reports it, as the error it is
         if _USERNAME_PLACEHOLDER in text:
             stale.append(p.parent.name)
-    if not stale and not unreadable:
+    if not stale:
         return ("skills:example_paths", True, "ok", "ok")
-    problems: list[str] = []
-    if stale:
-        fix = (
-            f"sed -i '' \"s#{_USERNAME_PLACEHOLDER}#$(id -un)#g\" "
-            f"{shlex.quote(str(catalog))}/*/skill.yaml"
-        )
-        problems.append(
-            f"{len(stale)} skill(s) still show {_USERNAME_PLACEHOLDER} in example paths "
-            f"(Linux: drop the '' after -i). Fix: {fix}"
-        )
-    if unreadable:
-        problems.append(f"unreadable skill.yaml (not UTF-8?): {', '.join(unreadable)}")
+    fix = (
+        f"sed -i '' \"s#{_USERNAME_PLACEHOLDER}#$(id -un)#g\" "
+        f"{shlex.quote(str(catalog))}/*/skill.yaml"
+    )
     return (
         "skills:example_paths",
         False,
-        "; ".join(problems),
+        f"{len(stale)} skill(s) still show {_USERNAME_PLACEHOLDER} in example paths "
+        f"(Linux: drop the '' after -i). Fix: {fix}",
         "warn",
+    )
+
+
+def _check_skills_load() -> Row:
+    """Load every installed skill the way start-up does; any failure is an error.
+
+    The bot, the CLI and the eval build a SkillRegistry at start-up, and one skill.yaml it
+    cannot read or validate stops them. Imported here, not at the top: a broken runtime
+    install fails this row instead of the whole doctor.
+    """
+    catalog = _aegis_home() / "skills"
+    try:
+        from runtime.skills.registry import SkillRegistry  # noqa: PLC0415
+    except Exception as exc:  # report, don't crash the health check
+        return ("skills:load", False, f"cannot import the skill registry: {exc}", "error")
+    failed = []
+    for path in sorted([*catalog.glob("*/skill.yaml"), *catalog.glob("*.yaml")]):
+        try:
+            SkillRegistry._load_one(path)
+        except Exception as exc:  # start-up would raise this
+            label = path.parent.name if path.name == "skill.yaml" else path.name
+            failed.append(f"{label} ({type(exc).__name__})")
+    if not failed:
+        return ("skills:load", True, "ok", "ok")
+    return (
+        "skills:load",
+        False,
+        f"start-up would fail on: {', '.join(failed)} -- fix or remove those skill files",
+        "error",
     )
 
 
@@ -442,7 +462,7 @@ def main(argv: list[str] | None = None) -> int:
     models = _check_models()
     _print(models)
     print("skills:")
-    skills = [_check_skill_placeholders()]
+    skills = [_check_skills_load(), _check_skill_placeholders()]
     _print(skills)
     print("reflection:")
     reflection = [_check_reflection_writable()]

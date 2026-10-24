@@ -110,16 +110,39 @@ def test_no_skills_installed_yet_is_not_a_warning(root: Path) -> None:
     assert (ok, severity) == (True, "ok")
 
 
-def test_an_unreadable_skill_is_reported_not_a_crash(root: Path) -> None:
+def test_an_unreadable_skill_is_left_to_the_load_check(root: Path) -> None:
     _install_skill(root, "read_file", "e.g. /Users/alice/Desktop\n")
     bad = root / "workspace" / "skills" / "binary" / "skill.yaml"
     bad.parent.mkdir(parents=True)
     bad.write_bytes(b"\xff\xfe not utf-8")
 
-    _name, ok, detail, severity = doctor._check_skill_placeholders()
+    assert doctor._check_skill_placeholders()[3] == "ok"  # not a crash, not its job
 
-    assert (ok, severity) == (False, "warn")
-    assert "binary" in detail
+
+_VALID_SKILL = (
+    "id: echo\nversion: '0.1.0'\ndescription: Echo text back.\nintents: [echo]\n"
+    "tool: echo\nargs_schema: {}\n"
+)
+
+
+def test_a_skill_the_registry_cannot_load_is_an_error(root: Path) -> None:
+    """Start-up loads every skill.yaml and crashes on a bad one, so doctor must fail
+    (exit 1) rather than warn and let `make run` die."""
+    _install_skill(root, "echo", _VALID_SKILL)
+    bad = root / "workspace" / "skills" / "binary" / "skill.yaml"
+    bad.parent.mkdir(parents=True)
+    bad.write_bytes(b"\xff\xfe not utf-8")
+    _install_skill(root, "notes", "just a sentence, not a mapping\n")
+
+    name, ok, detail, severity = doctor._check_skills_load()
+
+    assert (name, ok, severity) == ("skills:load", False, "error")
+    assert "binary" in detail and "notes" in detail and "echo" not in detail
+
+
+def test_skills_that_load_pass_the_load_check(root: Path) -> None:
+    _install_skill(root, "echo", _VALID_SKILL)
+    assert doctor._check_skills_load()[1:] == (True, "ok", "ok")
 
 
 def test_placeholder_fix_quotes_a_catalog_path_with_spaces(
