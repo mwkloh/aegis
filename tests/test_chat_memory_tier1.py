@@ -112,8 +112,8 @@ def test_load_reads_identity_and_user(tmp_path: Path) -> None:
     snap = loader.load("c1")
     assert snap.identity == "I am AEGIS."  # trimmed: prompt text, not file bytes
     assert snap.user == "Operator: mwk"
-    assert snap.bytes_identity == len(b"I am AEGIS.\n")  # the file's size, untrimmed
-    assert snap.bytes_user == len(b"Operator: mwk\n")
+    assert snap.bytes_identity == len(b"I am AEGIS.")  # what reaches the prompt
+    assert snap.bytes_user == len(b"Operator: mwk")
     assert snap.bytes_prefs == 0
     assert snap.prefs == {}
 
@@ -319,6 +319,14 @@ def test_editor_notes_in_html_comments_never_reach_a_prompt(tmp_path: Path) -> N
     snap = Tier1Loader(root=tmp_path).load("c1")
     assert snap.identity == "- **Name:** Aegis"
     assert snap.user == "Operator: Sam"
+
+
+def test_comment_bytes_do_not_count_against_the_context_budget(tmp_path: Path) -> None:
+    """The context builder budgets on these sizes; notes the model never sees must not
+    crowd out recall lookups."""
+    (tmp_path / "USER.md").write_text("<!-- " + "x" * 5000 + " -->\nSam\n", encoding="utf-8")
+    snap = Tier1Loader(root=tmp_path).load("c1")
+    assert snap.bytes_user == len(b"Sam")
 
 
 def test_an_identity_that_is_only_a_comment_loads_as_empty(tmp_path: Path) -> None:

@@ -109,17 +109,21 @@ class Tier1Loader:
             raise ValueError(
                 f"chat_id must match [A-Za-z0-9_-]+, got {chat_id!r}"
             )
-        identity_text, nb_identity = self._read_text(self._root / "IDENTITY.md")
-        user_text, nb_user = self._read_text(self._root / "USER.md")
+        identity_raw, _ = self._read_text(self._root / "IDENTITY.md")
+        user_raw, _ = self._read_text(self._root / "USER.md")
         prefs, nb_prefs = self._read_prefs(
             self._root / "chats" / chat_id / "prefs.json"
         )
+        identity = strip_editor_notes(identity_raw)
+        user = strip_editor_notes(user_raw)
+        # Sizes of what reaches a prompt, not of the files: the context builder budgets
+        # on them, and stripped editor notes must not crowd out recall lookups.
         return Tier1Snapshot(
-            identity=strip_editor_notes(identity_text),
-            user=strip_editor_notes(user_text),
+            identity=identity,
+            user=user,
             prefs=prefs,
-            bytes_identity=nb_identity,
-            bytes_user=nb_user,
+            bytes_identity=len(identity.encode("utf-8")),
+            bytes_user=len(user.encode("utf-8")),
             bytes_prefs=nb_prefs,
         )
 
