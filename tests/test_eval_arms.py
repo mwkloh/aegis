@@ -195,7 +195,7 @@ async def test_run_probes_after_the_warm_up_and_records_the_classifier(
     class _Ollama:
         def __init__(self, _cfg: AegisConfig) -> None: ...
 
-        async def list_models(self) -> list[str]:
+        async def list_local_models(self) -> list[str]:
             return [M]
 
     async def _prewarm(_client: object, _model: str) -> None:

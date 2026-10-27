@@ -41,8 +41,37 @@ def test_a_cloud_suffixed_name_is_cloud_even_if_listed() -> None:
     assert classify_locality("ollama", "gemma4:cloud", _PULLED | {"gemma4:cloud"}) == "cloud"
 
 
+@pytest.mark.parametrize("model", ["gpt-oss:120b-cloud", "qwen3-coder:480b-cloud"])
+def test_a_dash_cloud_tag_is_cloud_even_if_listed(model: str) -> None:
+    """Ollama's older cloud tags end in `-cloud`, not `:cloud`."""
+    assert classify_locality("ollama", model, _PULLED | {model}) == "cloud"
+
+
+def test_a_cloud_word_in_the_model_name_is_not_a_cloud_tag() -> None:
+    """Only the tag after the last `:` marks a cloud model."""
+    assert classify_locality("ollama", "cloud-helper:7b", {"cloud-helper:7b"}) == "local"
+
+
 def test_matching_is_exact() -> None:
     assert classify_locality("ollama", "llama3.1", _PULLED) == "cloud"
+
+
+def test_an_untagged_name_is_the_latest_tag() -> None:
+    """Ollama reads `llama3.2` as `llama3.2:latest`, and /api/tags always lists the tag."""
+    assert classify_locality("ollama", "llama3.2", {"llama3.2:latest"}) == "local"
+    assert classify_locality("ollama", "llama3.2:latest", {"llama3.2:latest"}) == "local"
+
+
+@pytest.mark.parametrize("model", ["my-cloud", "cloud"])
+def test_an_untagged_name_has_no_cloud_tag(model: str) -> None:
+    """With no `:` there is no tag, so a name that ends in `cloud` is not a cloud tag."""
+    assert classify_locality("ollama", model, {f"{model}:latest"}) == "local"
+
+
+def test_a_registry_port_is_not_a_tag() -> None:
+    """`host:5000/ns/model` is untagged: the tag is a `:` after the last `/`."""
+    model = "registry.local:5000/team/model"
+    assert classify_locality("ollama", model, {f"{model}:latest"}) == "local"
 
 
 def test_cli_require_local_defaults_off() -> None:
@@ -97,3 +126,27 @@ def test_console_header_names_where_the_model_ran() -> None:
     assert "[local]" in render_console(_report("local"))
     assert "[cloud]" in render_console(_report("cloud"))
     assert "[unknown]" not in render_console(_report(None))
+
+
+async def test_require_local_refuses_a_model_ollama_serves_remotely(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """End to end through `_run`: a pulled cloud model is listed in /api/tags with a
+    `remote_host`. The name carries no cloud tag, so only that field can catch it."""
+    from runtime.config import AegisConfig
+    from runtime.eval import cli
+    from runtime.llm.clients import OllamaClient
+
+    model = "remote-only:7b"
+    cfg = AegisConfig.model_validate({"models": {"smart_provider": "ollama", "smart_local": model}})
+
+    async def _tags(_self: OllamaClient) -> list[dict[str, object]]:
+        return [{"name": model, "remote_host": "https://ollama.com"}]
+
+    monkeypatch.setattr(cli, "get_config", lambda: cfg)
+    monkeypatch.setattr(OllamaClient, "_tags", _tags)
+    repo = Path(__file__).resolve().parent.parent
+    args = _parse_args(["--require-local", "--tasks-dir", str(repo / "eval" / "tasks")])
+
+    assert await cli._run(args) == 2
+    assert "this model is cloud" in capsys.readouterr().err

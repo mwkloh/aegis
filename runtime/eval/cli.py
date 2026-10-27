@@ -247,7 +247,7 @@ async def _run(args: argparse.Namespace) -> int:
     local_models: set[str] = set()
     if target.provider == "ollama":
         try:
-            local_models = set(await OllamaClient(cfg).list_models())
+            local_models = set(await OllamaClient(cfg).list_local_models())
         except Exception:  # daemon down: nothing is provably local, so refuse under --require-local
             local_models = set()
     locality = classify_locality(target.provider, target.model, local_models)

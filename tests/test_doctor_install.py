@@ -3,7 +3,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import httpx
 import pytest
+import respx
 
 from scripts import doctor
 
@@ -176,6 +178,23 @@ def test_a_different_tag_of_the_same_family_is_not_installed() -> None:
     # gemma4:e2b on disk must not make gemma4:e4b look pulled.
     assert not doctor._model_present(["gemma4:e2b"], "gemma4:e4b")
     assert doctor._model_present(["gemma4:e4b"], "gemma4:e4b")
+
+
+def test_installed_models_leave_out_pulled_cloud_models(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A pulled cloud model is listed in /api/tags with a `remote_host` and no weights,
+    so it must not pass a model check as installed."""
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+    tags = {
+        "models": [
+            {"name": "gemma4:e2b"},
+            {"name": "glm-5.3:cloud", "remote_host": "https://ollama.com"},
+        ]
+    }
+    with respx.mock() as mock:
+        mock.get("http://127.0.0.1:11434/api/tags").mock(
+            return_value=httpx.Response(200, json=tags)
+        )
+        assert doctor._list_ollama_models() == ["gemma4:e2b"]
 
 
 def test_an_untagged_model_matches_any_installed_tag() -> None:
