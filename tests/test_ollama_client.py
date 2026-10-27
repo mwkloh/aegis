@@ -447,6 +447,29 @@ async def test_list_models_returns_names() -> None:
     assert names == ["gemma4:e2b", "gemma4:e4b"]
 
 
+@pytest.mark.asyncio
+async def test_list_local_models_leaves_out_pulled_cloud_models() -> None:
+    """A pulled cloud model is listed in /api/tags with a `remote_host` and no weights
+    (seen 2026-10-27: glm-5.3:cloud, 293 bytes, remote_host https://ollama.com)."""
+    cfg = _config_with_base("http://127.0.0.1:11434")
+    client = OllamaClient(cfg)
+    with respx.mock() as mock:
+        mock.get("http://127.0.0.1:11434/api/tags").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "models": [
+                        {"name": "gemma4:e2b"},
+                        {"name": "glm-5.3:cloud", "remote_host": "https://ollama.com"},
+                        {"name": "gpt-oss:120b-cloud", "remote_host": "https://ollama.com"},
+                    ]
+                },
+            )
+        )
+        names = await client.list_local_models()
+    assert names == ["gemma4:e2b"]
+
+
 # --- Per-call telemetry -------------------------------------------------
 # The eval harness needs to tell "model chose wrong" from "harness cut it off".
 # See docs/superpowers/plans/2026-08-24-eval-measurement-confounds.md.

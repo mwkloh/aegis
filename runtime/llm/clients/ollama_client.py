@@ -180,6 +180,16 @@ class OllamaClient:
             return False
 
     async def list_models(self) -> list[str]:
+        """Every model /api/tags lists, pulled cloud models included: their weights are
+        not on this machine. For "installed here", use `list_local_models`."""
+        return [str(m.get("name", "")) for m in await self._tags()]
+
+    async def list_local_models(self) -> list[str]:
+        """Models whose weights are on this machine. A pulled cloud model is listed in
+        /api/tags too, but with a `remote_host` that serves it."""
+        return [str(m.get("name", "")) for m in await self._tags() if not m.get("remote_host")]
+
+    async def _tags(self) -> list[dict[str, object]]:
         async with httpx.AsyncClient(
             base_url=self._base_url, timeout=_timeout_for_call(), follow_redirects=False
         ) as client:
@@ -187,7 +197,7 @@ class OllamaClient:
             resp.raise_for_status()
             data = resp.json()
         models = data.get("models", []) if isinstance(data, dict) else []
-        return [str(m.get("name", "")) for m in models if isinstance(m, dict)]
+        return [m for m in models if isinstance(m, dict)]
 
     async def _post_with_retry(
         self, path: str, payload: dict[str, object], attempts: list[int] | None = None
