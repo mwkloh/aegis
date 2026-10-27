@@ -79,6 +79,180 @@ def test_an_arm_beats_a_models_profile_prompt() -> None:
     assert _apply_arm(cfg, "native-guard").native_prompt_for(M) == "bare"
 
 
+def _local_cfg() -> AegisConfig:
+    return AegisConfig.model_validate({"models": {"smart_provider": "ollama", "smart_local": M}})
+
+
+def _probe(monkeypatch: pytest.MonkeyPatch, *, answers: bool) -> list[str]:
+    """Stub the classifier probe; returns the models it was called with."""
+    from runtime.eval import cli
+
+    probed: list[str] = []
+
+    async def _error(_cfg: AegisConfig, model: str, _intents: list[str]) -> str | None:
+        probed.append(model)
+        return None if answers else "ClassifierUnavailableError: invalid_json"
+
+    monkeypatch.setattr(cli, "_classifier_error", _error)
+    return probed
+
+
+@pytest.mark.parametrize("arm", ARMS)
+def test_no_arm_preset_touches_the_classifier(arm: str) -> None:
+    """Which model classifies is decided in `_run`, once locality is known."""
+    assert _apply_arm(_local_cfg(), arm).models.fast == _local_cfg().models.fast
+
+
+@pytest.mark.parametrize("arm", [a for a in ARMS if a != "bare"])
+async def test_a_local_run_classifies_on_the_model_under_test(
+    arm: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Night 4 (Ollama server.log): the default classifier, gemma4:e2b, evicted the model
+    under test on every variant, so each variant paid two loads inside the timed window."""
+    from runtime.eval.cli import _pin_classifier
+
+    probed = _probe(monkeypatch, answers=True)
+    cfg = await _pin_classifier(_apply_arm(_local_cfg(), arm), arm, "local", ["files"])
+    assert cfg.models.fast == M
+    assert probed == [M]
+
+
+async def test_a_local_model_that_fails_the_probe_keeps_the_default_classifier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Hosted smoke, 2026-10-27: a model that reasons despite think=False overran the
+    classifier's 64-token reply and failed every variant (glm-5.3)."""
+    from runtime.eval.cli import _pin_classifier
+
+    _probe(monkeypatch, answers=False)
+    cfg = await _pin_classifier(_local_cfg(), "native-guard", "local", ["files"])
+    assert cfg.models.fast == _local_cfg().models.fast
+
+
+@pytest.mark.parametrize(
+    ("arm", "provider", "model", "locality"),
+    [
+        ("native-guard", "ollama", "glm-5.3:cloud", "cloud"),  # holds no local memory
+        ("full", "openrouter", M, "hosted"),  # the classifier client is always Ollama
+        ("bare", "ollama", M, "local"),  # bare has no classifier
+    ],
+)
+async def test_runs_that_keep_the_default_classifier_never_probe(
+    arm: str, provider: str, model: str, locality: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from runtime.eval.cli import _pin_classifier
+
+    probed = _probe(monkeypatch, answers=True)
+    cfg = AegisConfig.model_validate({"models": {"smart_provider": provider, "smart_local": model}})
+    assert (await _pin_classifier(cfg, arm, locality, ["files"])).models.fast == cfg.models.fast
+    assert probed == []
+
+
+@pytest.mark.parametrize(
+    ("raised", "expected"),
+    [
+        (None, None),
+        ("unavailable", "ClassifierUnavailableError: invalid_json"),
+        ("unexpected", "KeyError: 'intent'"),  # must not abort the run
+    ],
+)
+async def test_the_probe_says_why_the_classifier_failed(
+    raised: str | None, expected: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from runtime.eval import cli
+    from runtime.intent.classifier import ClassifierUnavailableError, IntentClassification
+
+    class _Classifier:
+        def __init__(self, **kwargs: object) -> None:
+            assert kwargs["model"] == M
+
+        async def classify(self, text: str) -> IntentClassification:
+            assert text == cli._CLASSIFIER_PROBE
+            if raised == "unavailable":
+                raise ClassifierUnavailableError("invalid_json")
+            if raised == "unexpected":
+                raise KeyError("intent")
+            return IntentClassification(intent="files", confidence=0.9)
+
+    monkeypatch.setattr(cli, "OllamaClient", lambda _cfg: object())
+    monkeypatch.setattr(cli, "ModelBackedClassifier", _Classifier)
+    assert await cli._classifier_error(_local_cfg(), M, ["files"]) == expected
+
+
+@pytest.mark.parametrize("no_prewarm", [False, True])
+async def test_run_probes_after_the_warm_up_and_records_the_classifier(
+    no_prewarm: bool, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The probe must not pay the cold load (a 30 s read timeout would fail it), and
+    --no-prewarm leaves that load to the first task, so it skips the probe."""
+    import json
+
+    from runtime.eval import cli
+    from runtime.eval.report import TaskResult
+
+    order: list[str] = []
+
+    class _Ollama:
+        def __init__(self, _cfg: AegisConfig) -> None: ...
+
+        async def list_models(self) -> list[str]:
+            return [M]
+
+    async def _prewarm(_client: object, _model: str) -> None:
+        order.append("prewarm")
+
+    async def _error(_cfg: AegisConfig, _model: str, _intents: list[str]) -> str | None:
+        order.append("probe")
+        return None
+
+    async def _run_task(cfg: AegisConfig, _r: object, _t: object, task: object, **_k: object):
+        order.append(f"task:{cfg.models.fast}")
+        return TaskResult(task_id="t", description="d", variants=())
+
+    class _Registry:
+        @staticmethod
+        def from_directory(_path: object) -> _Registry:
+            return _Registry()
+
+        def all(self) -> list[object]:
+            return []
+
+    monkeypatch.setattr(cli, "get_config", _local_cfg)
+    monkeypatch.setattr(cli, "OllamaClient", _Ollama)
+    monkeypatch.setattr(cli, "prewarm", _prewarm)
+    monkeypatch.setattr(cli, "_classifier_error", _error)
+    monkeypatch.setattr(cli, "run_task", _run_task)
+    monkeypatch.setattr(cli, "SkillRegistry", _Registry)
+    repo = Path(__file__).resolve().parent.parent
+    argv = ["--arm", "native-guard", "--yes", "--tasks-dir", str(repo / "eval" / "tasks")]
+    argv += ["--out-dir", str(tmp_path)] + (["--no-prewarm"] if no_prewarm else [])
+
+    assert await cli._run(cli._parse_args(argv)) == 0
+
+    if no_prewarm:
+        fast = _local_cfg().models.fast
+        assert "prewarm" not in order and "probe" not in order
+        assert order[0] == f"task:{fast}"
+    else:
+        fast = M
+        assert order[:3] == ["prewarm", "probe", f"task:{M}"]
+    (written,) = tmp_path.glob("*.json")
+    assert json.loads(written.read_text())["classifier_model"] == fast
+
+
+def test_the_report_records_the_classifier_and_old_files_still_load(tmp_path: Path) -> None:
+    stamp = datetime(2026, 10, 27, tzinfo=UTC)
+    report = EvalReport(
+        provider="ollama", model=M, started_at=stamp, tasks=(), classifier_model=M
+    )
+    path = write_json(report, tmp_path)
+    assert EvalReport.model_validate_json(path.read_text()).classifier_model == M
+    old = EvalReport(provider="ollama", model=M, started_at=stamp, tasks=())
+    legacy = old.model_dump(mode="json")
+    legacy.pop("classifier_model")
+    assert EvalReport.model_validate(legacy).classifier_model is None
+
+
 def test_bare_stays_the_eval_only_control() -> None:
     from runtime.eval import bare
 

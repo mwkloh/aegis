@@ -22,6 +22,7 @@ from runtime.eval.prewarm import prewarm
 from runtime.eval.report import EvalReport, TaskResult, render_console, write_json
 from runtime.eval.runner import VariantRunner, run_task, run_variant
 from runtime.eval.tasks import load_tasks
+from runtime.intent.classifier import ModelBackedClassifier
 from runtime.llm.clients import OllamaClient, OpenRouterClient
 from runtime.llm.router import ModelRouter, ModelTier
 from runtime.llm.telemetry import PRODUCTION_READ_TIMEOUT_S
@@ -38,6 +39,9 @@ _GUARDED = frozenset({"autofill", "claim_gate", "evidence"})
 # identity prompt. The prompt only matters in native mode. Arms that synthesise replies
 # (full, full-nolock, native-guard-synth) are NOT strictly comparable with nights 1-2:
 # since 2026-10-23 their synthesis prompt reads the template identity in block framing.
+# Local runs of every arm but `bare` are NOT strictly comparable with nights 1-4 either:
+# since 2026-10-27 they classify intent on the model under test (`_pin_classifier`); the
+# report's `classifier_model` says which model classified.
 _ARM_PRESETS: dict[str, tuple[str, frozenset[str], str]] = {
     "full": ("planner", _GUARDED | {"plan_lock"}, "bare"),
     "full-nolock": ("planner", _GUARDED, "bare"),
@@ -59,17 +63,57 @@ def _apply_arm(cfg: AegisConfig, arm: str) -> AegisConfig:
     if preset is None:  # `bare` runs its own eval-only loop
         return cfg
     mode, guardrails, native_prompt = preset
-    return cfg.model_copy(
-        update={
-            "models": cfg.models.model_copy(
-                update={
-                    "harness_mode": mode,
-                    "guardrails": guardrails,
-                    "native_prompt": native_prompt,
-                }
-            )
-        }
-    )
+    update = {"harness_mode": mode, "guardrails": guardrails, "native_prompt": native_prompt}
+    return cfg.model_copy(update={"models": cfg.models.model_copy(update=update)})
+
+
+# Matches no prefix rule, so the classifier has to ask the model.
+_CLASSIFIER_PROBE = "list the files in my downloads folder"
+
+
+async def _classifier_error(
+    cfg: AegisConfig, model: str, known_intents: list[str]
+) -> str | None:
+    """Why `model` cannot classify within the classifier's reply budget, or None if it can.
+
+    Any failure counts: falling back to the default classifier is always safe, and a
+    probe must not abort the run."""
+    try:
+        classifier = ModelBackedClassifier(
+            client=OllamaClient(cfg), model=model, known_intents=known_intents
+        )
+        await classifier.classify(_CLASSIFIER_PROBE)
+    except Exception as exc:  # any failure falls back; see docstring
+        return f"{type(exc).__name__}: {exc}"
+    return None
+
+
+async def _pin_classifier(
+    cfg: AegisConfig, arm: str, locality: str, known_intents: list[str]
+) -> AegisConfig:
+    """Classify intent on the model under test when it runs locally and can do the job.
+
+    Ollama server.log, night 4 (2026-10-26): the default classifier (gemma4:e2b) did not
+    fit in Metal memory beside the model under test, so every variant evicted it and
+    reloaded it inside the timed window. Pinning removes that reload but makes routing
+    depend on the model under test, so the report records which model classified.
+
+    Only a `local` model is pinned: a cloud or hosted model holds no local memory, and the
+    dispatcher's classifier client is always Ollama. A model that reasons despite
+    `think=False` overruns the classifier's 64-token reply and every variant then fails
+    (glm-5.3, hosted smoke 2026-10-27), so one probe call decides; a model that fails it
+    keeps the default classifier. One prompt at temperature 0 is a sample, not a proof:
+    a model can pass it and still overrun on some variants, which `classifier_model` in
+    the report makes traceable. `bare` has no classifier.
+    """
+    model = cfg.models.smart_local
+    if arm == "bare" or locality != "local":
+        return cfg
+    error = await _classifier_error(cfg, model, known_intents)
+    if error is not None:
+        print(f"  {model} failed the classifier probe ({error}); classifying on {cfg.models.fast}")
+        return cfg
+    return cfg.model_copy(update={"models": cfg.models.model_copy(update={"fast": model})})
 
 _DEFAULT_TASKS_DIR = Path(__file__).resolve().parent.parent.parent / "eval" / "tasks"
 _DEFAULT_OUT_DIR = Path(__file__).resolve().parent.parent.parent / "eval" / "results"
@@ -240,6 +284,19 @@ async def _run(args: argparse.Namespace) -> int:
                 f"(load {warmed.load_ms / 1000:.1f}s) -- excluded from results"
             )
 
+    # After the warm-up and under the eval timeout, so the probe measures the model and
+    # not its cold load. --no-prewarm keeps that load for the first task, so no probe.
+    if args.no_prewarm:
+        if args.arm != "bare":
+            print("  --no-prewarm: classifying on the configured fast model, no probe")
+    else:
+        known_intents = [intent for d in registry.all() for intent in d.intents]
+        with read_timeout_override(args.read_timeout):
+            cfg = await _pin_classifier(cfg, args.arm, locality, known_intents)
+    classifier_model = None if args.arm == "bare" else cfg.models.fast
+    if classifier_model is not None:
+        print(f"Classifier: {classifier_model}")
+
     started_at = datetime.now(UTC)
     task_results: list[TaskResult] = []
     # Capability is measured under a generous budget; `tgc_within_budget` in the
@@ -265,6 +322,7 @@ async def _run(args: argparse.Namespace) -> int:
         tasks=tuple(task_results),
         arm=args.arm,
         locality=locality,
+        classifier_model=classifier_model,
     )
     print()
     print(render_console(report))
