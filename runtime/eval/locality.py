@@ -25,10 +25,21 @@ def classify_locality(provider: str, model: str, local_models: Collection[str]) 
     """
     if provider != "ollama":
         return "hosted"
-    tag = model.rpartition(":")[2]
-    if tag == "cloud" or tag.endswith("-cloud") or model not in local_models:
+    name, tag = _split_tag(model)
+    if tag == "cloud" or tag.endswith("-cloud"):
+        return "cloud"
+    if (name, tag) not in {_split_tag(m) for m in local_models}:
         return "cloud"
     return "local"
+
+
+def _split_tag(model: str) -> tuple[str, str]:
+    """(`name`, `tag`) the way Ollama reads a model reference: the tag is a `:` after the
+    last `/` (so a registry port is not one), and an untagged name means `latest`."""
+    name, sep, tag = model.rpartition(":")
+    if not sep or "/" in tag:
+        return model, "latest"
+    return name, tag
 
 
 __all__ = ["Locality", "classify_locality"]

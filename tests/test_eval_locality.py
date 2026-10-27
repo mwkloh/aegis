@@ -56,6 +56,24 @@ def test_matching_is_exact() -> None:
     assert classify_locality("ollama", "llama3.1", _PULLED) == "cloud"
 
 
+def test_an_untagged_name_is_the_latest_tag() -> None:
+    """Ollama reads `llama3.2` as `llama3.2:latest`, and /api/tags always lists the tag."""
+    assert classify_locality("ollama", "llama3.2", {"llama3.2:latest"}) == "local"
+    assert classify_locality("ollama", "llama3.2:latest", {"llama3.2:latest"}) == "local"
+
+
+@pytest.mark.parametrize("model", ["my-cloud", "cloud"])
+def test_an_untagged_name_has_no_cloud_tag(model: str) -> None:
+    """With no `:` there is no tag, so a name that ends in `cloud` is not a cloud tag."""
+    assert classify_locality("ollama", model, {f"{model}:latest"}) == "local"
+
+
+def test_a_registry_port_is_not_a_tag() -> None:
+    """`host:5000/ns/model` is untagged: the tag is a `:` after the last `/`."""
+    model = "registry.local:5000/team/model"
+    assert classify_locality("ollama", model, {f"{model}:latest"}) == "local"
+
+
 def test_cli_require_local_defaults_off() -> None:
     assert _parse_args([]).require_local is False
     assert _parse_args(["--require-local"]).require_local is True

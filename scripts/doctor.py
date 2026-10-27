@@ -120,7 +120,11 @@ def _check_ollama() -> Row:
 
 
 def _list_ollama_models() -> list[str] | None:
-    """Return installed model names, or None if Ollama is unreachable."""
+    """Return installed model names, or None if Ollama is unreachable.
+
+    A pulled cloud model is listed in /api/tags too, but with a `remote_host` that
+    serves it and no weights here, so it is not installed.
+    """
     base = _ollama_base()
     if not base.startswith(("http://", "https://")):
         return None
@@ -130,7 +134,9 @@ def _list_ollama_models() -> list[str] | None:
         data = resp.json()
     except (httpx.HTTPError, ValueError):
         return None
-    return [str(m.get("name", "")) for m in data.get("models", [])]
+    return [
+        str(m.get("name", "")) for m in data.get("models", []) if not m.get("remote_host")
+    ]
 
 
 def _model_present(installed: list[str], wanted: str) -> bool:
