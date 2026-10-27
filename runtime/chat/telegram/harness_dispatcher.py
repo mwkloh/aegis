@@ -14,7 +14,12 @@ from typing import Any
 from runtime.chat.memory.tier1 import Tier1Loader
 from runtime.chat.memory.tier3 import Tier3Store
 from runtime.chat.reply_verdict import annotate_unverified_claim
-from runtime.chat.telegram.native_turn import NativeChat, NativeTurnResult, run_native_turn
+from runtime.chat.telegram.native_turn import (
+    NativeChat,
+    NativeTurnResult,
+    native_system_prompt,
+    run_native_turn,
+)
 from runtime.events import EventStream, EventType
 from runtime.harness.adapter import HarnessAdapter
 from runtime.harness.contract import ToolIntent, ToolResult
@@ -26,6 +31,7 @@ from runtime.harness.limits import (
     DEFAULT_TOOL_RESULT_CHARS,
     DEFAULT_TURN_RESULT_BUDGET_CHARS,
 )
+from runtime.harness.native_loop import NATIVE_SYSTEM_PROMPT
 from runtime.llm.clients.base import ChatMessage, ChatRequest, ModelClient
 from runtime.reasoning.skill_runner import SkillRunner
 from runtime.skills.registry import SkillDescriptor, SkillRegistry
@@ -79,6 +85,7 @@ _SYNTHESIS_CHAIN_PROMPT_PATH = (
 # Deliberately not the per-model planner `think`: qwen3.5:4b-mlx needs it on to plan.
 _SYNTHESIS_THINK = False
 _GUARD_MIN_STEP = 2  # destructive-tool guard applies from step 2 onward
+_DEFAULT_IDENTITY = "AEGIS, an operator-facing assistant"  # no or unreadable IDENTITY.md
 
 # Classification-fallback sentinel (spec: docs/superpowers/specs/2026-08-21-
 # classification-fallback-design.md). Used only as a label when intent
@@ -194,6 +201,7 @@ class HarnessDispatcher:
         guardrails: Guardrails | None = None,
         harness_mode: str = "planner",
         native_chat: NativeChat | None = None,
+        native_prompt: str = "identity",
     ) -> None:
         self._classifier = classifier
         self._registry = registry
@@ -218,6 +226,8 @@ class HarnessDispatcher:
         # No chat function means native mode cannot run, so fall back to the planner.
         self._harness_mode = harness_mode if native_chat is not None else "planner"
         self._native_chat = native_chat
+        # "identity" speaks as IDENTITY.md; "bare" is the eval's baseline prompt.
+        self._native_prompt = native_prompt
         # Evidence ledger (Phase 11 Track B). `None` keeps every existing
         # call site/test working unmodified — recording is opt-in.
         self._events = events
@@ -233,6 +243,26 @@ class HarnessDispatcher:
 
     def _footer(self) -> str:
         return f"\n\n[{self._provider} · {self._synthesis_model}]"
+
+    def _load_identity(self, chat_id: int, *, event: str) -> str:
+        """The tier1 identity (IDENTITY.md) for prompts, or a fixed default.
+
+        A missing or unreadable workspace must never break a chat turn; `event` keeps
+        each caller's own log names (harness_dispatcher.<event>.tier1_load_*).
+        """
+        logger.info(f"harness_dispatcher.{event}.tier1_load_start")
+        try:
+            identity = self._tier1_loader.load(str(chat_id)).identity or _DEFAULT_IDENTITY
+        except Exception:
+            logger.exception(f"harness_dispatcher.{event}.tier1_load_failed")
+            identity = _DEFAULT_IDENTITY
+        logger.info(f"harness_dispatcher.{event}.tier1_load_done")
+        return identity
+
+    def _native_system_prompt(self, chat_id: int) -> str:
+        if self._native_prompt == "bare":
+            return NATIVE_SYSTEM_PROMPT
+        return native_system_prompt(self._load_identity(chat_id, event="native_turn"))
 
     def _with_evidence(
         self, summary: str, history: list[tuple[ToolIntent, ToolResult]]
@@ -718,6 +748,7 @@ class HarnessDispatcher:
                 guard_min_call=guard_min_call,
                 on_executed=_ledger,
                 recent=recent,
+                system_prompt=self._native_system_prompt(chat_id),
             )
         except Exception:
             logger.exception("harness_dispatcher.native_turn_failed")
@@ -994,14 +1025,7 @@ class HarnessDispatcher:
         set. Fallback on synthesizer failure is the LAST tool's payload —
         that's the most-recent state the operator was waiting on.
         """
-        logger.info("harness_dispatcher.chain_synthesis.tier1_load_start")
-        try:
-            snap = self._tier1_loader.load(str(chat_id))
-            identity = snap.identity or "AEGIS, an operator-facing assistant"
-        except Exception:
-            logger.exception("harness_dispatcher.chain_synthesis.tier1_load_failed")
-            identity = "AEGIS, an operator-facing assistant"
-        logger.info("harness_dispatcher.chain_synthesis.tier1_load_done")
+        identity = self._load_identity(chat_id, event="chain_synthesis")
 
         chain_text = _render_chain(
             history,
@@ -1070,14 +1094,7 @@ class HarnessDispatcher:
         *,
         chat_id: int,
     ) -> str:
-        logger.info("harness_dispatcher.synthesis.tier1_load_start")
-        try:
-            snap = self._tier1_loader.load(str(chat_id))
-            identity = snap.identity or "AEGIS, an operator-facing assistant"
-        except Exception:
-            logger.exception("harness_dispatcher.synthesis.tier1_load_failed")
-            identity = "AEGIS, an operator-facing assistant"
-        logger.info("harness_dispatcher.synthesis.tier1_load_done")
+        identity = self._load_identity(chat_id, event="synthesis")
 
         if result.status == "error" and result.error:
             tool_result_text = result.error

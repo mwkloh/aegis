@@ -23,7 +23,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# What the starter `.env` ships as MODEL_SMART_LOCAL (scripts/bootstrap_aegis_home.py).
+MODEL_PLACEHOLDER = "YOUR_MODEL"
+
 HarnessMode = Literal["planner", "native"]
+NativePrompt = Literal["identity", "bare"]
 GuardrailName = Literal["autofill", "claim_gate", "evidence", "synthesis", "plan_lock"]
 _GUARDRAIL_NAMES: frozenset[str] = frozenset(
     {"autofill", "claim_gate", "evidence", "synthesis", "plan_lock"}
@@ -102,6 +106,15 @@ class ModelConfig(BaseModel):
             "the profile, then to the mode's default."
         ),
     )
+    native_prompt: NativePrompt | None = Field(
+        default=None,
+        description=(
+            "Override for native mode's system prompt, beating any per-model profile: "
+            "`identity` speaks as the tier1 IDENTITY.md; `bare` is the eval's two-sentence "
+            "prompt, which the measured native arms pin so their reruns stay comparable. "
+            "None defers to the profile, then to `identity`."
+        ),
+    )
     smart_provider: Literal["ollama", "openrouter"] = Field(
         default="ollama",
         description="Explicit SMART-tier provider pin — no silent fallback between them.",
@@ -177,8 +190,18 @@ class ModelProfile(BaseModel):
     guardrails: frozenset[GuardrailName] | None = Field(
         default=None,
         description=(
-            "Deterministic guardrails to run. None = the mode's default (planner: all "
-            "but synthesis; native: autofill, claim_gate, evidence)."
+            "Deterministic guardrails to run. None = autofill, claim_gate and evidence in "
+            "either mode; `plan_lock` (planner only) and `synthesis` (native only) are "
+            "opt-in and off by default, as the 2026-10 benchmark found."
+        ),
+    )
+    native_prompt: NativePrompt | None = Field(
+        default=None,
+        description=(
+            "Native mode's system prompt for this model. None = `identity`. Night 3 "
+            "(plan doc section 23): the identity prompt held score and honesty on "
+            "qwen3.5:4b, gemma4:e4b and lfm2.5:8b but raised llama3.2:3b's flag rate "
+            "(+9.3 points), so that model keeps `bare`."
         ),
     )
 
@@ -470,12 +493,26 @@ class AegisConfig(BaseModel):
             return profile.harness_mode
         return "planner"
 
+    def native_prompt_for(self, model: str) -> NativePrompt:
+        """The global `models.native_prompt` beats a profile; a profile beats `identity`.
+
+        The eval arms set the global, so a production profile can never leak into a
+        measured rerun. There is no env var for it.
+        """
+        if self.models.native_prompt is not None:
+            return self.models.native_prompt
+        profile = self.model_profiles.get(model)
+        if profile is not None and profile.native_prompt is not None:
+            return profile.native_prompt
+        return "identity"
+
     def guardrails_for(self, model: str) -> Guardrails:
         """Which guardrails run for one model, resolved like `harness_mode_for`.
 
-        Unset means the mode's default: today's planner behaviour, or the
-        `native+guard` preset in native mode. `plan_lock` never applies in native
-        mode (an env override cannot raise at run time, so it is dropped here).
+        Unset means `Guardrails()` in either mode: autofill, claim gate and evidence,
+        with `plan_lock` and `synthesis` off. So a model with no profile runs the
+        planner without plan-lock (2026-10 ablation decision). `plan_lock` never applies
+        in native mode (an env override cannot raise at run time, so it is dropped here).
         """
         from runtime.harness.guardrails import Guardrails  # noqa: PLC0415
 
@@ -485,7 +522,7 @@ class AegisConfig(BaseModel):
             profile = self.model_profiles.get(model)
             names = profile.guardrails if profile is not None else None
         if names is None:
-            return Guardrails() if mode == "planner" else Guardrails(plan_lock=False)
+            return Guardrails()
         return Guardrails(
             autofill="autofill" in names,
             claim_gate="claim_gate" in names,
@@ -800,6 +837,21 @@ def _coerce_harness(raw: Any, env: dict[str, str]) -> HarnessConfig:
     except Exception:
         logger.warning("config.harness.invalid", exc_info=True)
         return HarnessConfig()
+
+
+def model_placeholder_error(cfg: AegisConfig) -> str | None:
+    """Why the configured models cannot run yet, or None.
+
+    The starter `.env` ships `MODEL_SMART_LOCAL=YOUR_MODEL` on purpose (no unmeasured
+    default). Entry points refuse to start while it is still there, rather than report
+    "wired" and send a model named YOUR_MODEL to Ollama on every turn.
+    """
+    if cfg.models.smart_provider == "ollama" and cfg.models.smart_local == MODEL_PLACEHOLDER:
+        return (
+            f"MODEL_SMART_LOCAL is still the starter placeholder {MODEL_PLACEHOLDER}: set it "
+            "in ~/.aegis/.env to a model the benchmark measured (see `make doctor`)"
+        )
+    return None
 
 
 @lru_cache(maxsize=1)

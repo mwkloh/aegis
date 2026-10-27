@@ -12,7 +12,7 @@ import sys
 from collections.abc import Iterator
 from typing import Protocol
 
-from runtime.config import AegisConfig, get_config
+from runtime.config import AegisConfig, get_config, model_placeholder_error
 from runtime.events import EventStream, EventType
 from runtime.harness import HarnessAdapter
 from runtime.intent import (
@@ -29,6 +29,7 @@ from runtime.llm.clients.openrouter_client import (
 from runtime.reasoning import SkillRunner
 from runtime.reasoning.tier1_reasoner import Tier1Reasoner
 from runtime.skills import SkillRegistry
+from runtime.skills.bootstrap import seed_builtin_skills
 
 logger = logging.getLogger(__name__)
 
@@ -148,6 +149,9 @@ def build_pipeline(config: AegisConfig | None = None) -> Pipeline:
     cfg = config or get_config()
     cfg.storage.sessions_dir.mkdir(parents=True, exist_ok=True)
     events = EventStream(cfg.storage.sessions_dir)
+    # Same first-boot seeding the Telegram bot does; without it a fresh install's CLI
+    # has an empty catalog and answers every intent with "I don't know how to handle".
+    seed_builtin_skills(bundle_dir=cfg.skills.bundle_dir, catalog_dir=cfg.skills.catalog_dir)
     registry = SkillRegistry.from_directory(cfg.skills.catalog_dir)
     known_intents = [i for d in registry.all() for i in d.intents]
 
@@ -202,6 +206,10 @@ def build_pipeline(config: AegisConfig | None = None) -> Pipeline:
 def main(argv: list[str] | None = None) -> int:
     """Read-eval-print loop. Ctrl-D / 'quit' / 'exit' to stop."""
     argv = argv or sys.argv[1:]
+    unset = model_placeholder_error(get_config())
+    if unset:
+        print(unset, file=sys.stderr)
+        return 1
     pipeline = build_pipeline()
     pipeline.events.append(EventType.SESSION_START, {"surface": "cli"})
 

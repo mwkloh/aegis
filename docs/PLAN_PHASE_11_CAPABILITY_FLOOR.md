@@ -493,7 +493,7 @@ args_schema:
       minLength: 1
       maxLength: 512
       description: >-
-        Absolute path for the file (e.g. /Users/michaelloh/Desktop/notes.txt).
+        Absolute path for the file (e.g. /Users/alice/Desktop/notes.txt).
         '~' is allowed. Must be inside an allowed folder.
     content:
       type: string
@@ -600,7 +600,7 @@ args_schema:
         type: string
         maxLength: 512
       description: >-
-        Command as an argv list, e.g. ["ls", "-la", "/Users/michaelloh/Desktop"].
+        Command as an argv list, e.g. ["ls", "-la", "/Users/alice/Desktop"].
         The first element must be an allowed binary name.
   required:
     - argv

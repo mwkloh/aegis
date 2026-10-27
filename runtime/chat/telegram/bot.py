@@ -938,6 +938,7 @@ def build_harness_dispatcher(
         guardrails=guardrails,
         harness_mode=harness_mode,
         native_chat=native,
+        native_prompt=cfg.native_prompt_for(target.model),
     )
 
 
@@ -975,7 +976,7 @@ def _resolve_harness(
     """(harness_mode, native_chat, guardrails) for the mode actually used.
 
     When a native profile falls back to the planner (non-Ollama), the guardrails
-    revert to the planner default, so the fallback is today's planner.
+    revert to the default `Guardrails()`: the checks stay on and plan-lock stays off.
     """
     from runtime.harness.guardrails import Guardrails  # noqa: PLC0415
 

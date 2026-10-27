@@ -2,7 +2,7 @@
 
 ## Goal
 
-Wire Eva's existing `HarnessAdapter` (with file tools) into the Telegram free-form chat path so she can autonomously call tools during conversation, using real data in her replies instead of hallucinating.
+Wire Aegis's existing `HarnessAdapter` (with file tools) into the Telegram free-form chat path so it can autonomously call tools during conversation, using real data in its replies instead of hallucinating.
 
 ## Architecture
 
@@ -65,7 +65,7 @@ Only intents that map to a callable registered in `HarnessAdapter` are considere
 | `harness` | `HarnessAdapter` | Execute the tool in-process |
 | `synthesizer` | `ModelClient` | OpenRouter smart model for natural reply |
 | `tier3` | `Tier3Store` | Append user + bot turns after FIRED/CLARIFY |
-| `tier1_loader` | `Tier1Loader` | Eva's identity/persona for the synthesis prompt |
+| `tier1_loader` | `Tier1Loader` | Aegis's identity/persona for the synthesis prompt |
 
 **Public interface:**
 
@@ -152,7 +152,7 @@ Do not fabricate file names, paths, or any data not present in the tool result.
 If the result is empty or indicates an error, say so plainly.
 ```
 
-`{identity}` is filled from the tier1 snapshot so Eva keeps her configured persona. If tier1 has no identity, the slot is filled with `"AEGIS, an operator-facing assistant"`.
+`{identity}` is filled from the tier1 snapshot so Aegis keeps its configured persona. If tier1 has no identity, the slot is filled with `"AEGIS, an operator-facing assistant"`.
 
 The synthesis call uses `model=cfg.models.smart`, `temperature=0.2`, `max_tokens=512`.
 
@@ -216,7 +216,7 @@ Pass to `build_dispatcher(...)`.
 |---|---|
 | Classifier raises | Log, return `PASS` — chat never breaks |
 | Tier1 arg extraction degrades (no path found) | `SkillRunner` returns `tool=respond` → dispatcher returns `PASS` |
-| `HarnessAdapter.execute()` returns `status=error` | Synthesizer receives error text; Eva replies "I tried to list files but got an error: ..." |
+| `HarnessAdapter.execute()` returns `status=error` | Synthesizer receives error text; Aegis replies "I tried to list files but got an error: ..." |
 | Synthesis LLM call fails | Log, reply with raw tool result clipped to 3500 chars |
 | `Tier3Store.append()` raises | Log, swallow — turn history gap is preferable to a crash |
 
@@ -236,7 +236,7 @@ All tests use stub implementations — no real Ollama, no real OpenRouter, no fi
 | `test_pass_on_unknown_intent` | Classifier returns `"unknown"` → `PASS`, nothing sent |
 | `test_pass_when_tool_not_in_harness` | Intent matches catalog but tool absent from harness → `PASS` |
 | `test_pass_on_tier1_degrade` | SkillRunner returns `tool=respond` → `PASS` |
-| `test_error_result_synthesized` | Harness returns `status=error` → Eva replies with soft error, still `FIRED` |
+| `test_error_result_synthesized` | Harness returns `status=error` → Aegis replies with soft error, still `FIRED` |
 | `test_synthesis_failure_falls_back_to_raw` | Synthesizer raises → raw result clipped to 3500 chars, still `FIRED` |
 | `test_classifier_exception_returns_pass` | Classifier raises → `PASS`, chat not broken |
 | `test_tier3_written_on_fired` | After `FIRED`, both user and bot turns appended to `Tier3Store` |

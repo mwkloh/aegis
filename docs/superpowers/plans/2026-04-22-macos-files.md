@@ -1,8 +1,8 @@
-# macos-files: Filesystem Capabilities for Eva — Implementation Plan
+# macos-files: Filesystem Capabilities for Aegis — Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Give Eva sandboxed filesystem access via a `/files` Telegram slash command (all ops) and four read-only harness tools (LLM-callable via CLI pipeline).
+**Goal:** Give Aegis sandboxed filesystem access via a `/files` Telegram slash command (all ops) and four read-only harness tools (LLM-callable via CLI pipeline).
 
 **Architecture:** Python-native `FilesClient` owns path sandboxing (allowed roots from `AegisConfig.files`). Both the `/files` slash handler and the CLI harness tools delegate to it — no cross-process calls to the existing Node.js MCP server. Skill descriptors add intent-routable file queries to the CLI pipeline's `SkillRunner` + `HarnessAdapter` path.
 
@@ -505,7 +505,7 @@ __all__ = ["DirEntry", "FileInfo", "FilesClient", "FileTooBig", "PathDenied"]
 
 ```python
 # runtime/files/client.py
-"""Path-sandboxed filesystem operations for Eva.
+"""Path-sandboxed filesystem operations for Aegis.
 
 Ported from ~/.atamai/mcp-servers/macos-files-mcp (Node.js → Python).
 All paths are validated against `allowed_roots` before any operation.

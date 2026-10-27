@@ -13,7 +13,7 @@ args_schema:
       minLength: 1
       maxLength: 512
       description: >-
-        Absolute path to the directory to search (e.g. /Users/michaelloh/Desktop).
+        Absolute path to the directory to search (e.g. /Users/YOUR_USERNAME/Desktop).
         '~' is allowed. Relative paths and bare names are rejected.
     pattern:
       type: string

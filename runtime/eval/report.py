@@ -182,7 +182,13 @@ class EvalReport(BaseModel):
         ),
     )
     arm: Literal[
-        "full", "full-nolock", "native", "native-guard", "native-guard-synth", "bare"
+        "full",
+        "full-nolock",
+        "native",
+        "native-guard",
+        "native-guard-synth",
+        "native-guard-id",
+        "bare",
     ] = Field(
         default="full",
         description=(
@@ -192,6 +198,16 @@ class EvalReport(BaseModel):
             "without this two files for one model cannot be told apart. Files "
             "written before the field existed are all `full`. Non-bare arms are "
             "presets of the runtime harness config (spec 2026-10-06)."
+        ),
+    )
+    classifier_model: str | None = Field(
+        default=None,
+        description=(
+            "The model that classified intent before the harness ran. Since "
+            "2026-10-27 a local run classifies on the model under test when it "
+            "passes a probe call, so routing quality counts against that model; "
+            "otherwise the configured fast model. None for `bare` (no classifier) "
+            "and for files written before the field existed."
         ),
     )
 

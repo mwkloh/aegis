@@ -65,6 +65,7 @@ from runtime.chat.telegram.long_running import InFlightRegistry, LongRunningRunn
 from runtime.config import (
     AegisConfig,
     ModelConfig,
+    ModelProfile,
     ProviderConfig,
     SkillsConfig,
     StorageConfig,
@@ -1780,6 +1781,40 @@ def test_build_harness_dispatcher_ollama_pin_uses_ollama_for_reasoning(
     assert dispatcher is not None
     assert dispatcher._provider == "ollama"  # type: ignore[attr-defined]
     assert dispatcher._synthesis_model == "llama3.1:8b"  # type: ignore[attr-defined]
+
+
+def test_build_harness_dispatcher_passes_the_native_prompt_choice(tmp_path: Path) -> None:
+    """The eval arms pick the native prompt through config, as they pick the mode."""
+    cfg = _harness_cfg(tmp_path, smart_provider="ollama", api_key=None)
+    cfg = cfg.model_copy(
+        update={"models": cfg.models.model_copy(update={"native_prompt": "bare"})}
+    )
+    with respx.mock() as mock:
+        mock.get(f"{cfg.providers.ollama_base_url}/api/tags").mock(
+            return_value=httpx.Response(200, json={"models": []})
+        )
+        dispatcher = build_harness_dispatcher(cfg, **_harness_deps(tmp_path))
+    assert dispatcher is not None
+    assert dispatcher._native_prompt == "bare"  # type: ignore[attr-defined]
+
+
+def test_build_harness_dispatcher_uses_the_routed_models_profile_prompt(tmp_path: Path) -> None:
+    """A per-model `native_prompt` reaches the dispatcher for the model actually routed."""
+    cfg = _harness_cfg(tmp_path, smart_provider="ollama", api_key=None)
+    cfg = cfg.model_copy(
+        update={
+            "model_profiles": {
+                "llama3.1:8b": ModelProfile(harness_mode="native", native_prompt="bare")
+            }
+        }
+    )
+    with respx.mock() as mock:
+        mock.get(f"{cfg.providers.ollama_base_url}/api/tags").mock(
+            return_value=httpx.Response(200, json={"models": []})
+        )
+        dispatcher = build_harness_dispatcher(cfg, **_harness_deps(tmp_path))
+    assert dispatcher is not None
+    assert dispatcher._native_prompt == "bare"  # type: ignore[attr-defined]
 
 
 def test_build_harness_dispatcher_openrouter_pin_uses_openrouter_for_reasoning(

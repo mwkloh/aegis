@@ -279,6 +279,8 @@ AEGIS uses **tiered agents and model routing**:
 
 Local models must be sufficient for correctness.
 
+> **Amended 2026-10.** How Tier 1 reasons and calls tools changed after the benchmark; see §15. Tier 2 was not part of that benchmark.
+
 ---
 
 ## 12. Safety and Stability Guarantees
@@ -380,5 +382,42 @@ By enforcing trust boundaries structurally, AEGIS guarantees:
 
 These guarantees are enforced by architecture, not by prompt discipline.
 
+
+---
+
+## 15. Amendment (2026-10): the Runtime plane after the benchmarks
+
+This section is additive. Sections 1–14 stand as written; this one records what measurement changed inside **Plane 1 (Runtime)** and what it did not touch.
+
+![AEGIS architecture amended after the benchmarks](images/aegis-architecture-amended.png)
+
+### 15.1 What was tested
+
+Each mechanism of the original runtime design was switched off in turn and measured, on four small local models (Gemma 4 E4B, Qwen 3.5 4B, LFM 2.5 8B, Llama 3.2 3B) on one 16 GB Mac Mini, 75 runs per model per setup. Results and caveats are in the README section "What the benchmarks changed"; the full record is in `docs/superpowers/plans/2026-10-04-mac-mini-rerun-and-bare-arm.md` (sections 18–23).
+
+### 15.2 What changed in Plane 1
+
+| Area | Before | After |
+|---|---|---|
+| Harness mode | One path: the model writes a JSON plan, then steps run | Chosen **per model**: `native` (the model calls tools itself) or `planner`. No profile means `planner` |
+| Step narrowing | Plan-lock restricted each step to the one tool the plan named | Off. Measured against the planner without it: Llama 3.2 3B +8.0 points, Qwen 3.5 4B −22.7, Gemma 4 E4B −2.7, LFM 2.5 8B 0.0 |
+| Reply writing | A model call synthesised the reply | Off by default. It helped Gemma 4 on the hard suite and was inside the noise elsewhere |
+| Checks on results | Completion gate and evidence ledger, tied to the planner | Three **code-only guards** run in `native` mode with no model call: path repair, the reply claim check, and receipts (the real tool output under `Results:`) |
+| Persona prompt | One prompt for all models | Per model: `identity` or `bare`. Llama 3.2 3B keeps `bare` |
+
+The first two rows of results are the strongest: the heavy planner never beat the light harness on any model, and LFM 2.5 scored 0.0% under it.
+
+### 15.3 What did not change
+
+- **Plane isolation and trust boundaries (§3, §14).** The harness is still the only component that touches the outside world, and the destructive-action guard and exact-match confirmation still apply in both modes.
+- **Planes 2 and 3 (§3.2, §3.3).** Reflection stays read-only and Improvement stays human-governed. Neither was part of the benchmark.
+- **Tier 0 and Tier 3 (§11).** Intent classification still runs on a small local model, and execution is still the harness with no model.
+- **Tier 2.** Complex planning on a frontier model is untested: every benchmark run used local models only. Nothing here is evidence for or against it.
+
+### 15.4 Principle, restated
+
+§2 says language models do not self-report success and that structure belongs in the harness. The benchmarks refine that: put structure where a model measurably fails, write it as ordinary code rather than another model call, and decide it per model rather than by parameter count. Every result is one machine, four models and 75 runs per setup, so differences under about 13 points cannot be told apart.
+
+---
 
 This document is the **canonical architectural reference**.

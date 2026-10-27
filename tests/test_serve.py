@@ -83,6 +83,22 @@ class TestServeValidation:
             result = serve.main()
         assert result == 1
 
+    def test_returns_1_while_the_model_is_the_starter_placeholder(self, tmp_path: Path) -> None:
+        """Refuse to start rather than report "wired" and send YOUR_MODEL to Ollama."""
+        cfg = _cfg(tmp_path)
+        cfg = cfg.model_copy(
+            update={"models": ModelConfig(smart_provider="ollama", smart_local="YOUR_MODEL")}
+        )
+        mock_build = MagicMock()
+        import runtime.serve as serve
+        with (
+            patch.object(serve, "get_config", return_value=cfg),
+            patch.object(serve, "build_application", mock_build),
+        ):
+            result = serve.main()
+        assert result == 1
+        mock_build.assert_not_called()  # stopped by the check, not by a later failure
+
     def test_returns_1_when_allowlist_empty(self, tmp_path: Path) -> None:
         """main() should fail-fast with exit 1 when user_allowlist is empty."""
         cfg = _cfg(tmp_path, allowlist=())

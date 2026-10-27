@@ -1,8 +1,8 @@
-# macos-files: Filesystem Capabilities for Eva
+# macos-files: Filesystem Capabilities for Aegis
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Give Eva (AEGIS Telegram bot) sandboxed filesystem access via two surfaces: a `/files` operator slash command (read + destructive ops) and four read-only LLM skill descriptors (intent-routed for autonomous reasoning).
+**Goal:** Give the AEGIS Telegram bot sandboxed filesystem access via two surfaces: a `/files` operator slash command (read + destructive ops) and four read-only LLM skill descriptors (intent-routed for autonomous reasoning).
 
 **Source reference:** `~/.atamai/mcp-servers/macos-files-mcp/src/index.ts` — Node.js MCP server with 10 filesystem tools. AEGIS reimplements the same operations Python-native; the Node.js server remains Kai-only.
 

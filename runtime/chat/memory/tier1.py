@@ -60,6 +60,18 @@ class Tier1Snapshot(BaseModel):
 
 
 _CHAT_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+_HTML_COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
+
+
+def strip_editor_notes(text: str) -> str:
+    """`text` without HTML comments, trimmed.
+
+    The workspace files are prompt input; their HTML comments are notes for whoever edits
+    them (the shipped IDENTITY.md promises they never reach the model). Every prompt reads
+    tier1 through `Tier1Loader.load`, so stripping there covers them all. A file that is
+    only a comment comes back empty, so callers use their default instead.
+    """
+    return _HTML_COMMENT.sub("", text).strip()
 
 
 def default_workspace_root() -> Path:
@@ -97,17 +109,21 @@ class Tier1Loader:
             raise ValueError(
                 f"chat_id must match [A-Za-z0-9_-]+, got {chat_id!r}"
             )
-        identity_text, nb_identity = self._read_text(self._root / "IDENTITY.md")
-        user_text, nb_user = self._read_text(self._root / "USER.md")
+        identity_raw, _ = self._read_text(self._root / "IDENTITY.md")
+        user_raw, _ = self._read_text(self._root / "USER.md")
         prefs, nb_prefs = self._read_prefs(
             self._root / "chats" / chat_id / "prefs.json"
         )
+        identity = strip_editor_notes(identity_raw)
+        user = strip_editor_notes(user_raw)
+        # Sizes of what reaches a prompt, not of the files: the context builder budgets
+        # on them, and stripped editor notes must not crowd out recall lookups.
         return Tier1Snapshot(
-            identity=identity_text,
-            user=user_text,
+            identity=identity,
+            user=user,
             prefs=prefs,
-            bytes_identity=nb_identity,
-            bytes_user=nb_user,
+            bytes_identity=len(identity.encode("utf-8")),
+            bytes_user=len(user.encode("utf-8")),
             bytes_prefs=nb_prefs,
         )
 
@@ -202,4 +218,5 @@ __all__ = [
     "Tier1Loader",
     "Tier1Snapshot",
     "default_workspace_root",
+    "strip_editor_notes",
 ]

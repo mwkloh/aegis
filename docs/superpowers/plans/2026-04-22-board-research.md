@@ -75,7 +75,7 @@ def test_board_config_accepts_research_block() -> None:
 - [ ] **Step 2: Run test to confirm it fails**
 
 ```bash
-cd /Users/michaelloh/projects/aegis
+cd /Users/alice/projects/aegis
 .venv/bin/pytest tests/test_board_research_config.py -v
 ```
 

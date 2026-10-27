@@ -146,7 +146,7 @@ class _StubTier3:
 class _StubTier1Loader:
     def load(self, chat_id: str) -> Tier1Snapshot:
         return Tier1Snapshot(
-            identity="Eva, your personal assistant",
+            identity="Aegis, your personal assistant",
             user="",
             bytes_identity=30,
             bytes_user=0,
@@ -470,7 +470,7 @@ async def test_recent_turns_threaded_to_runner() -> None:
     )
     runner_intent = ToolIntent(
         tool="files_read",
-        args={"path": "~/Desktop/ava-selfie.png"},
+        args={"path": "~/Desktop/photo.png"},
         skill_id="read_file",
     )
     descriptor = _stub_descriptor("read_file", "files_read", ["read_file"])
@@ -491,7 +491,7 @@ async def test_recent_turns_threaded_to_runner() -> None:
 
     outcome = await dispatcher.dispatch(
         chat_id=777,
-        user_text="open ava-selfie.png in the same folder",
+        user_text="open photo.png in the same folder",
         message=_FakeMessage(),
     )
     assert outcome == DispatchOutcome.FIRED
@@ -980,6 +980,8 @@ def _make_loop_dispatcher(
     guardrails: Any = None,
     harness_mode: str = "planner",
     native_chat: Any = None,
+    tier1_loader: Any = None,
+    native_prompt: str = "identity",
 ) -> HarnessDispatcher:
     if registry is None or harness is None:
         registry, harness = _two_skill_setup()
@@ -990,7 +992,7 @@ def _make_loop_dispatcher(
         harness=harness,
         synthesizer=synthesizer or _StubSynthesizer(reply="chain reply"),
         tier3=tier3 or _StubTier3(),
-        tier1_loader=_StubTier1Loader(),
+        tier1_loader=tier1_loader or _StubTier1Loader(),
         synthesis_model="stub-model",
         multi_step=True,
         max_steps=max_steps,
@@ -999,6 +1001,7 @@ def _make_loop_dispatcher(
         guardrails=guardrails,
         harness_mode=harness_mode,
         native_chat=native_chat,
+        native_prompt=native_prompt,
     )
 
 
@@ -1158,7 +1161,9 @@ async def test_multi_step_restricts_tool_choices_to_plan_cursor() -> None:
             PlanStep(kind="respond"),
         ],
     )
-    dispatcher = _make_loop_dispatcher(runner=runner, registry=registry, harness=harness)
+    dispatcher = _make_loop_dispatcher(
+        runner=runner, registry=registry, harness=harness, guardrails=Guardrails(plan_lock=True)
+    )
 
     await dispatcher.dispatch(chat_id=1, user_text="find and read", message=_FakeMessage())
 
@@ -1190,7 +1195,9 @@ async def test_multi_step_restriction_persists_after_step_failure() -> None:
             PlanStep(kind="tool_call", tool="files_read", args={"path": "/tmp/a.md"}),
         ],
     )
-    dispatcher = _make_loop_dispatcher(runner=runner, registry=registry, harness=harness)
+    dispatcher = _make_loop_dispatcher(
+        runner=runner, registry=registry, harness=harness, guardrails=Guardrails(plan_lock=True)
+    )
 
     await dispatcher.dispatch(chat_id=1, user_text="find and read", message=_FakeMessage())
 
@@ -1222,7 +1229,9 @@ async def test_multi_step_plan_leads_with_actual_tool_called() -> None:
             PlanStep(kind="respond"),
         ],
     )
-    dispatcher = _make_loop_dispatcher(runner=runner, registry=registry, harness=harness)
+    dispatcher = _make_loop_dispatcher(
+        runner=runner, registry=registry, harness=harness, guardrails=Guardrails(plan_lock=True)
+    )
 
     await dispatcher.dispatch(chat_id=1, user_text="find and read", message=_FakeMessage())
 
@@ -3009,10 +3018,18 @@ def _search_then_read_runner(read_path: str = "/tmp/a.md") -> _StubPlanRunner:
 
 async def test_plan_lock_narrows_step_two_to_the_planned_tool() -> None:
     runner = _search_then_read_runner()
-    dispatcher = _make_loop_dispatcher(runner=runner)
+    dispatcher = _make_loop_dispatcher(runner=runner, guardrails=Guardrails(plan_lock=True))
     await dispatcher.dispatch(chat_id=1, user_text="find and read", message=_FakeMessage())
     second = runner.plan_next_calls[1]
     assert {d.tool for d in second["available_skills"]} == {"files_read"}
+
+
+async def test_plan_lock_is_off_by_default() -> None:
+    runner = _search_then_read_runner()
+    dispatcher = _make_loop_dispatcher(runner=runner)
+    await dispatcher.dispatch(chat_id=1, user_text="find and read", message=_FakeMessage())
+    second = runner.plan_next_calls[1]
+    assert {d.tool for d in second["available_skills"]} == {"files_search", "files_read"}
 
 
 async def test_plan_lock_off_offers_the_full_catalogue_at_step_two() -> None:
@@ -3288,6 +3305,73 @@ async def test_native_turn_sees_the_recent_conversation() -> None:
     assert sent[3]["content"] == "the md files"
 
 
+async def test_native_system_prompt_is_the_tier1_identity() -> None:
+    """Production native mode speaks as the operator's assistant (IDENTITY.md), as
+    reply synthesis does, not as the eval's bare "helpful assistant"."""
+    script = _NativeScript({"role": "assistant", "content": "Done."})
+    dispatcher = _native(script)
+
+    await dispatcher.dispatch(chat_id=1, user_text="find md files", message=_FakeMessage())
+
+    system = script.seen[0][0]
+    assert system["role"] == "system"
+    assert system["content"].startswith("You are the assistant described here:")
+    assert "Aegis, your personal assistant" in system["content"]
+    assert "tools" in system["content"]
+
+
+async def test_native_identity_that_is_only_a_comment_falls_back_to_the_default(
+    tmp_path: Path,
+) -> None:
+    """Commenting out the whole persona must not leave an empty identity block."""
+    from runtime.chat.memory.tier1 import Tier1Loader
+
+    (tmp_path / "IDENTITY.md").write_text("<!-- persona TBD -->\n", encoding="utf-8")
+    script = _NativeScript({"role": "assistant", "content": "Done."})
+    dispatcher = _native(script, tier1_loader=Tier1Loader(tmp_path))
+
+    await dispatcher.dispatch(chat_id=1, user_text="find md files", message=_FakeMessage())
+
+    content = script.seen[0][0]["content"]
+    assert "AEGIS, an operator-facing assistant" in content
+    assert "\n\n\n\n" not in content
+
+
+@pytest.mark.parametrize("name", ["tool_synthesis.txt", "tool_synthesis_chain.txt"])
+def test_synthesis_prompts_frame_the_identity_like_the_native_prompt(name: str) -> None:
+    """IDENTITY.md is a markdown file; "You are # IDENTITY.md ..." read badly here too."""
+    prompt = (Path(__file__).resolve().parent.parent / "runtime" / "reasoning" / "prompts" / name)
+    first = prompt.read_text(encoding="utf-8").splitlines()[0]
+    assert first == "You are the assistant described here:"
+
+
+async def test_native_bare_prompt_choice_sends_the_benchmark_prompt() -> None:
+    """native_prompt="bare" is how the measured eval arms keep their baseline."""
+    from runtime.harness.native_loop import NATIVE_SYSTEM_PROMPT
+
+    script = _NativeScript({"role": "assistant", "content": "Done."})
+    dispatcher = _native(script, native_prompt="bare")
+
+    await dispatcher.dispatch(chat_id=1, user_text="find md files", message=_FakeMessage())
+
+    assert script.seen[0][0] == {"role": "system", "content": NATIVE_SYSTEM_PROMPT}
+
+
+async def test_native_system_prompt_falls_back_when_tier1_fails() -> None:
+    class _BrokenLoader:
+        def load(self, chat_id: str) -> Tier1Snapshot:
+            raise OSError("workspace unreadable")
+
+    script = _NativeScript({"role": "assistant", "content": "Done."})
+    dispatcher = _native(script, tier1_loader=_BrokenLoader())
+    message = _FakeMessage()
+
+    outcome = await dispatcher.dispatch(chat_id=1, user_text="find md files", message=message)
+
+    assert outcome == DispatchOutcome.FIRED
+    assert "AEGIS, an operator-facing assistant" in script.seen[0][0]["content"]
+
+
 async def test_native_replayed_bot_turn_drops_the_tool_evidence() -> None:
     """A stored reply's appended tool output is untrusted data; replayed as an
     "assistant" turn the model would take it for its own words. Only the reply's
@@ -3407,9 +3491,10 @@ def test_resolve_harness_native_on_ollama_keeps_the_profile_guardrails() -> None
     assert guardrails == cfg.guardrails_for("g:4b") == Guardrails(plan_lock=False)
 
 
-def test_resolve_harness_unset_profile_is_todays_planner() -> None:
+def test_resolve_harness_unset_profile_is_the_planner_without_plan_lock() -> None:
     from runtime.chat.telegram.bot import _resolve_harness
     from runtime.config import AegisConfig
 
     result = _resolve_harness(AegisConfig(), _resolve_target("ollama", "g:4b"), object())
     assert result == ("planner", None, Guardrails())
+    assert result[2].plan_lock is False
